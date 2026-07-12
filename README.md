@@ -2,7 +2,8 @@
 
 ComfyColab starts a temporary GPU-backed Google Colab session from the command
 line, installs ComfyUI and its GGUF loader, exposes the ComfyUI interface through
-a Cloudflare quick tunnel, and adds a curated Z-Image Turbo bundle-loader node.
+a Cloudflare quick tunnel, and adds curated bundle-loader nodes for Z-Image
+Turbo, Qwen Image Edit 2511, and Krea 2.
 
 There is no Google Drive integration. Models are downloaded inside Colab and
 disappear when the runtime is released.
@@ -112,7 +113,12 @@ ComfyUI and ComfyUI-GGUF are pinned to revisions tested with this release. A
 ComfyColab release advances those pins intentionally instead of silently taking
 breaking upstream changes.
 
-## Z-Image Turbo node
+## Bundle-loader nodes
+
+All three nodes live under `ComfyColab/loaders`, download only when executed,
+and return standard `MODEL`, `CLIP`, and `VAE` outputs.
+
+### Z-Image Turbo
 
 Add **Z-Image Turbo Bundle Loader** under `ComfyColab/loaders`.
 
@@ -132,19 +138,54 @@ Colab session reuse the verified files. Downloads use partial files, resume when
 the server supports byte ranges, and are promoted into the model folders only
 after their SHA-256 checksum matches the catalog.
 
+### Qwen Image Edit 2511
+
+Add **Qwen Image Edit 2511 Bundle Loader** and choose `Q4_K_M`, `Q3_K_M`,
+`Q5_K_M`, or `Q8_0`.
+
+- `MODEL`: selected Qwen Image Edit 2511 GGUF, loaded by ComfyUI-GGUF
+- `CLIP`: official Qwen 2.5 VL 7B FP8 text/vision encoder, loaded as `qwen_image`
+- `VAE`: official Qwen Image VAE
+
+The Q4 bundle downloads roughly 22.9 GB. Connect its outputs to ComfyUI's
+native Qwen Image Edit conditioning nodes. The model weights are Apache-2.0.
+
+### Krea 2
+
+Add **Krea 2 Bundle Loader** and choose `Turbo FP8` (default) or
+`Raw FP8 (training/base)`. Krea does not recommend the Raw checkpoint for
+normal inference.
+
+- `MODEL`: official Krea 2 FP8 diffusion model, loaded by ComfyUI's native loader
+- `CLIP`: official Qwen3-VL 4B FP8 encoder, loaded as `krea2`
+- `VAE`: official Qwen Image VAE
+
+Each Krea 2 bundle downloads roughly 18.6 GB. Krea 2 uses its own community
+license; review the license in the
+[`Comfy-Org/Krea-2`](https://huggingface.co/Comfy-Org/Krea-2) repository before
+using the weights. Downloading or using the weights constitutes acceptance of
+that license. Its terms include commercial-use and deployment obligations.
+
+For generation, Krea recommends 8 steps with no CFG for Turbo. Qwen Image Edit
+2511 workflows typically use ComfyUI's `TextEncodeQwenImageEditPlus` node and
+the model's `index_timestep_zero` reference method.
+
 ## Catalog
 
-The initial catalog is
-[`custom_nodes/ComfyColab-ZImage/catalog/z_image_turbo.json`](custom_nodes/ComfyColab-ZImage/catalog/z_image_turbo.json).
-It is deliberately curated rather than accepting arbitrary user URLs. Each
-entry records the filename, Hugging Face download URL, checksum, and display
-size.
+The catalogs are under
+[`custom_nodes/ComfyColab-ZImage/catalog`](custom_nodes/ComfyColab-ZImage/catalog).
+They are deliberately curated rather than accepting arbitrary user URLs. Each
+entry records a revision-pinned Hugging Face URL, filename, checksum, and
+display size.
 
 The initial sources are:
 
 - Z-Image Turbo GGUF models: `jayn7/Z-Image-Turbo-GGUF`
 - Qwen3-4B GGUF text encoder: `unsloth/Qwen3-4B-GGUF`
 - VAE: `Comfy-Org/z_image_turbo`
+- Qwen Image Edit GGUF: `unsloth/Qwen-Image-Edit-2511-GGUF`
+- Qwen encoder and VAE: `Comfy-Org/Qwen-Image_ComfyUI`
+- Krea 2 bundle: `Comfy-Org/Krea-2`
 
 Model files retain their upstream licenses. This repository does not redistribute
 the weights.
@@ -159,3 +200,10 @@ bash scripts/check.sh
 
 They validate CLI command construction, bootstrap rendering, catalog integrity,
 atomic downloads, and delegation to the existing ComfyUI loaders.
+
+Before publishing catalog changes, verify the pinned remote metadata without
+downloading the model payloads:
+
+```bash
+python scripts/verify_catalogs.py
+```

@@ -36,7 +36,12 @@ class NodeLoadingTests(unittest.TestCase):
 
         class Unet:
             def load_unet(self, filename):
-                calls.append(("model", filename))
+                calls.append(("gguf_model", filename))
+                return ("MODEL_OBJECT",)
+
+        class NativeUnet:
+            def load_unet(self, filename, weight_dtype):
+                calls.append(("native_model", filename, weight_dtype))
                 return ("MODEL_OBJECT",)
 
         class Clip:
@@ -53,13 +58,17 @@ class NodeLoadingTests(unittest.TestCase):
             roots = {
                 "unet_gguf": [str(Path(directory) / "diffusion_models")],
                 "clip_gguf": [str(Path(directory) / "text_encoders")],
+                "diffusion_models": [str(Path(directory) / "diffusion_models")],
+                "text_encoders": [str(Path(directory) / "text_encoders")],
                 "vae": [str(Path(directory) / "vae")],
             }
             folder_paths = types.SimpleNamespace(get_folder_paths=lambda key: roots[key])
             comfy_nodes = types.SimpleNamespace(
                 NODE_CLASS_MAPPINGS={
                     "UnetLoaderGGUF": Unet,
+                    "UNETLoader": NativeUnet,
                     "CLIPLoaderGGUF": Clip,
+                    "CLIPLoader": Clip,
                     "VAELoader": Vae,
                 }
             )
@@ -80,10 +89,37 @@ class NodeLoadingTests(unittest.TestCase):
                 node_module, "download_file", side_effect=fake_download
             ):
                 loader = package.NODE_CLASS_MAPPINGS["ComfyColabZImageTurboBundleLoader"]()
-                outputs = loader.load_bundle("Q4_K_M")
+                z_outputs = loader.load_bundle("Q4_K_M")
+                qwen_loader = package.NODE_CLASS_MAPPINGS[
+                    "ComfyColabQwenImageEdit2511BundleLoader"
+                ]()
+                qwen_outputs = qwen_loader.load_bundle("Q4_K_M")
+                krea_loader = package.NODE_CLASS_MAPPINGS[
+                    "ComfyColabKrea2BundleLoader"
+                ]()
+                krea_outputs = krea_loader.load_bundle("Turbo FP8")
 
-        self.assertEqual(outputs, ("MODEL_OBJECT", "CLIP_OBJECT", "VAE_OBJECT"))
+        expected = ("MODEL_OBJECT", "CLIP_OBJECT", "VAE_OBJECT")
+        self.assertEqual(z_outputs, expected)
+        self.assertEqual(qwen_outputs, expected)
+        self.assertEqual(krea_outputs, expected)
         self.assertIn(("clip", "Qwen3-4B-Q4_K_M.gguf", "lumina2"), calls)
+        self.assertIn(
+            ("gguf_model", "qwen-image-edit-2511-Q4_K_M.gguf"),
+            calls,
+        )
+        self.assertIn(
+            ("clip", "qwen_2.5_vl_7b_fp8_scaled.safetensors", "qwen_image"),
+            calls,
+        )
+        self.assertIn(
+            ("native_model", "krea2_turbo_fp8_scaled.safetensors", "default"),
+            calls,
+        )
+        self.assertIn(
+            ("clip", "qwen3vl_4b_fp8_scaled.safetensors", "krea2"),
+            calls,
+        )
 
 
 if __name__ == "__main__":

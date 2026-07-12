@@ -18,7 +18,7 @@ find_colab() {
 
 usage() {
   cat <<'EOF'
-Usage: comfycolab <start|status|url|stop>
+Usage: comfycolab <start|status|url|stop> [--refresh]
 
 Environment overrides:
   COMFYCOLAB_COLAB_BIN  Path to the existing colab CLI
@@ -40,6 +40,26 @@ case "$COMMAND" in
     exit 2
     ;;
 esac
+shift
+
+REFRESH=0
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --refresh)
+      if [[ "$COMMAND" != "start" ]]; then
+        echo "[comfycolab] --refresh is only valid with start." >&2
+        exit 2
+      fi
+      REFRESH=1
+      ;;
+    *)
+      echo "[comfycolab] Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 COLAB_BIN="$(find_colab)"
 if [[ -z "$COLAB_BIN" ]]; then
@@ -62,6 +82,17 @@ case "$COMMAND" in
 
     echo "[comfycolab] Fetching the public Colab bootstrap..."
     curl -fsSL "$BOOTSTRAP_URL" -o "$bootstrap_file"
+    if [[ "$REFRESH" -eq 1 ]]; then
+      bootstrap_config='{"repository_url":"https://github.com/DragonLord1998/ComfyColab.git","repository_ref":"main","port":8188,"refresh":true}'
+      bootstrap_config_b64="$(printf '%s' "$bootstrap_config" | base64 | tr -d '\n')"
+      sed "s|^CONFIG_B64 = \"__COMFYCOLAB_CONFIG_B64__\"$|CONFIG_B64 = \"$bootstrap_config_b64\"|" \
+        "$bootstrap_file" > "$bootstrap_file.refresh"
+      mv "$bootstrap_file.refresh" "$bootstrap_file"
+      if grep -Fq '__COMFYCOLAB_CONFIG_B64__' "$bootstrap_file"; then
+        echo "[comfycolab] The downloaded bootstrap does not support refresh configuration." >&2
+        exit 1
+      fi
+    fi
 
     created=0
     status_output="$("${BASE[@]}" status --session "$SESSION" 2>&1)" || {

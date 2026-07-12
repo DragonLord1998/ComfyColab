@@ -4,7 +4,14 @@ import importlib
 from pathlib import Path
 from typing import Any
 
-from .catalog import bundle_for, quantization_names
+from .catalog import (
+    bundle_for,
+    krea_2_bundle_for,
+    krea_2_variants,
+    quantization_names,
+    qwen_edit_bundle_for,
+    qwen_edit_quantization_names,
+)
 from .download import download_file
 
 
@@ -39,10 +46,34 @@ def _loader(comfy_nodes: Any, name: str) -> Any:
     loader_class = comfy_nodes.NODE_CLASS_MAPPINGS.get(name)
     if loader_class is None:
         raise RuntimeError(
-            f"Required loader '{name}' is unavailable. Ensure ComfyUI-GGUF was installed "
-            "before starting ComfyUI."
+            f"Required loader '{name}' is unavailable. Start ComfyUI through the latest "
+            "ComfyColab bootstrap so its pinned core and GGUF loaders are installed."
         )
     return loader_class()
+
+
+def _download_bundle(
+    folder_paths: Any,
+    bundle: dict[str, dict[str, Any]],
+    folder_keys: dict[str, str],
+    force_redownload: bool,
+) -> None:
+    destinations = {
+        component: _first_model_path(folder_paths, folder_key)
+        for component, folder_key in folder_keys.items()
+    }
+    for component, specification in bundle.items():
+        download_file(
+            url=specification["url"],
+            destination=destinations[component] / specification["filename"],
+            expected_sha256=specification["sha256"],
+            force=force_redownload,
+            progress=_ComfyProgress(),
+        )
+
+
+def _load_vae(comfy_nodes: Any, filename: str) -> Any:
+    return _loader(comfy_nodes, "VAELoader").load_vae(filename)[0]
 
 
 class ZImageTurboBundleLoader:
@@ -73,21 +104,12 @@ class ZImageTurboBundleLoader:
         comfy_nodes = importlib.import_module("nodes")
         bundle = bundle_for(quantization)
 
-        destinations = {
-            "model": _first_model_path(folder_paths, "unet_gguf"),
-            "text_encoder": _first_model_path(folder_paths, "clip_gguf"),
-            "vae": _first_model_path(folder_paths, "vae"),
-        }
-
-        for component, specification in bundle.items():
-            destination = destinations[component] / specification["filename"]
-            download_file(
-                url=specification["url"],
-                destination=destination,
-                expected_sha256=specification["sha256"],
-                force=force_redownload,
-                progress=_ComfyProgress(),
-            )
+        _download_bundle(
+            folder_paths,
+            bundle,
+            {"model": "unet_gguf", "text_encoder": "clip_gguf", "vae": "vae"},
+            force_redownload,
+        )
 
         model = _loader(comfy_nodes, "UnetLoaderGGUF").load_unet(
             bundle["model"]["filename"]
@@ -96,5 +118,109 @@ class ZImageTurboBundleLoader:
             bundle["text_encoder"]["filename"],
             type="lumina2",
         )[0]
-        vae = _loader(comfy_nodes, "VAELoader").load_vae(bundle["vae"]["filename"])[0]
+        vae = _load_vae(comfy_nodes, bundle["vae"]["filename"])
+        return model, text_encoder, vae
+
+
+class QwenImageEdit2511BundleLoader:
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, dict[str, tuple[Any, ...]]]:
+        return {
+            "required": {
+                "quantization": (
+                    qwen_edit_quantization_names(),
+                    {"default": "Q4_K_M"},
+                ),
+                "force_redownload": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    RETURN_NAMES = ("model", "text_encoder", "vae")
+    FUNCTION = "load_bundle"
+    CATEGORY = "ComfyColab/loaders"
+    DESCRIPTION = (
+        "Downloads a verified Qwen Image Edit 2511 GGUF bundle and returns the "
+        "model, Qwen 2.5 VL text encoder, and Qwen Image VAE."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, quantization: str, force_redownload: bool = False):
+        return float("nan") if force_redownload else quantization
+
+    def load_bundle(self, quantization: str, force_redownload: bool = False):
+        folder_paths = importlib.import_module("folder_paths")
+        comfy_nodes = importlib.import_module("nodes")
+        bundle = qwen_edit_bundle_for(quantization)
+
+        _download_bundle(
+            folder_paths,
+            bundle,
+            {
+                "model": "unet_gguf",
+                "text_encoder": "text_encoders",
+                "vae": "vae",
+            },
+            force_redownload,
+        )
+
+        model = _loader(comfy_nodes, "UnetLoaderGGUF").load_unet(
+            bundle["model"]["filename"]
+        )[0]
+        text_encoder = _loader(comfy_nodes, "CLIPLoader").load_clip(
+            bundle["text_encoder"]["filename"],
+            type="qwen_image",
+        )[0]
+        vae = _load_vae(comfy_nodes, bundle["vae"]["filename"])
+        return model, text_encoder, vae
+
+
+class Krea2BundleLoader:
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, dict[str, tuple[Any, ...]]]:
+        return {
+            "required": {
+                "variant": (krea_2_variants(), {"default": "Turbo FP8"}),
+                "force_redownload": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    RETURN_NAMES = ("model", "text_encoder", "vae")
+    FUNCTION = "load_bundle"
+    CATEGORY = "ComfyColab/loaders"
+    DESCRIPTION = (
+        "Downloads a verified official Krea 2 FP8 bundle and returns the model, "
+        "Qwen3-VL text encoder, and Qwen Image VAE."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, variant: str, force_redownload: bool = False):
+        return float("nan") if force_redownload else variant
+
+    def load_bundle(self, variant: str, force_redownload: bool = False):
+        folder_paths = importlib.import_module("folder_paths")
+        comfy_nodes = importlib.import_module("nodes")
+        bundle = krea_2_bundle_for(variant)
+
+        _download_bundle(
+            folder_paths,
+            bundle,
+            {
+                "model": "diffusion_models",
+                "text_encoder": "text_encoders",
+                "vae": "vae",
+            },
+            force_redownload,
+        )
+
+        model = _loader(comfy_nodes, "UNETLoader").load_unet(
+            bundle["model"]["filename"],
+            weight_dtype="default",
+        )[0]
+        text_encoder = _loader(comfy_nodes, "CLIPLoader").load_clip(
+            bundle["text_encoder"]["filename"],
+            type="krea2",
+        )[0]
+        vae = _load_vae(comfy_nodes, bundle["vae"]["filename"])
         return model, text_encoder, vae

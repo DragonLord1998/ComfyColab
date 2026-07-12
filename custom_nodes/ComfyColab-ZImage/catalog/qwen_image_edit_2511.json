@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "family": "Qwen Image Edit 2511",
+  "default_selection": "Q4_K_M",
+  "selections": {
+    "Q4_K_M": {
+      "filename": "qwen-image-edit-2511-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q4_K_M.gguf?download=true",
+      "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723",
+      "size_bytes": 13244758624,
+      "display_size": "13.2 GB"
+    },
+    "Q3_K_M": {
+      "filename": "qwen-image-edit-2511-Q3_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q3_K_M.gguf?download=true",
+      "sha256": "5631fd3a407880e1fb541dc47696628633c898565136c128d5a2741d4b84e9e9",
+      "size_bytes": 9920805472,
+      "display_size": "9.92 GB"
+    },
+    "Q5_K_M": {
+      "filename": "qwen-image-edit-2511-Q5_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q5_K_M.gguf?download=true",
+      "sha256": "c257def934d25562e1dcb7e8710eb5457a23c1ae7218f7a5ea3174e773421d29",
+      "size_bytes": 15027501664,
+      "display_size": "15.0 GB"
+    },
+    "Q8_0": {
+      "filename": "qwen-image-edit-2511-Q8_0.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q8_0.gguf?download=true",
+      "sha256": "ab4f0622fb002fccaaa679a2ecce6fd1b3190d8ea28a5b7b2b17b8669bc24afa",
+      "size_bytes": 21761817184,
+      "display_size": "21.8 GB"
+    }
+  },
+  "text_encoder": {
+    "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/46839d338df81ce625d5fae27d7e370314c0fbc9/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors?download=true",
+    "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+    "size_bytes": 9384670680,
+    "display_size": "9.38 GB",
+    "comfy_type": "qwen_image"
+  },
+  "vae": {
+    "filename": "qwen_image_vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/46839d338df81ce625d5fae27d7e370314c0fbc9/split_files/vae/qwen_image_vae.safetensors?download=true",
+    "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+    "size_bytes": 253806246,
+    "display_size": "254 MB"
+  }
+}

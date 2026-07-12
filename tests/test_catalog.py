@@ -38,21 +38,55 @@ class CatalogTests(unittest.TestCase):
             ["Q4_K_M", "Q3_K_M", "Q5_K_M", "Q8_0"],
         )
 
+        self.assertEqual(
+            self.catalog.qwen_edit_quantization_names(),
+            ["Q4_K_M", "Q3_K_M", "Q5_K_M", "Q8_0"],
+        )
+        self.assertEqual(
+            self.catalog.krea_2_variants(),
+            ["Turbo FP8", "Raw FP8 (training/base)"],
+        )
+
     def test_every_component_has_https_url_and_checksum(self) -> None:
-        for quantization in self.catalog.quantization_names():
-            bundle = self.catalog.bundle_for(quantization)
-            self.assertEqual(set(bundle), {"model", "text_encoder", "vae"})
-            for specification in bundle.values():
-                self.assertTrue(specification["url"].startswith("https://huggingface.co/"))
-                self.assertEqual(len(specification["sha256"]), 64)
+        selections = (
+            (self.catalog.quantization_names(), self.catalog.bundle_for),
+            (
+                self.catalog.qwen_edit_quantization_names(),
+                self.catalog.qwen_edit_bundle_for,
+            ),
+            (self.catalog.krea_2_variants(), self.catalog.krea_2_bundle_for),
+        )
+        for names, bundle_for in selections:
+            for name in names:
+                bundle = bundle_for(name)
+                self.assertEqual(set(bundle), {"model", "text_encoder", "vae"})
+                for specification in bundle.values():
+                    self.assertTrue(
+                        specification["url"].startswith("https://huggingface.co/")
+                    )
+                    self.assertEqual(len(specification["sha256"]), 64)
+                    self.assertGreater(specification["size_bytes"], 0)
 
     def test_node_contract_has_three_comfy_outputs(self) -> None:
-        loader = self.package.NODE_CLASS_MAPPINGS["ComfyColabZImageTurboBundleLoader"]
-        self.assertEqual(loader.RETURN_TYPES, ("MODEL", "CLIP", "VAE"))
-        self.assertEqual(loader.RETURN_NAMES, ("model", "text_encoder", "vae"))
-        self.assertEqual(loader.IS_CHANGED("Q4_K_M", False), "Q4_K_M")
-        forced = loader.IS_CHANGED("Q4_K_M", True)
+        loader_names = (
+            "ComfyColabZImageTurboBundleLoader",
+            "ComfyColabQwenImageEdit2511BundleLoader",
+            "ComfyColabKrea2BundleLoader",
+        )
+        for loader_name in loader_names:
+            loader = self.package.NODE_CLASS_MAPPINGS[loader_name]
+            self.assertEqual(loader.RETURN_TYPES, ("MODEL", "CLIP", "VAE"))
+            self.assertEqual(loader.RETURN_NAMES, ("model", "text_encoder", "vae"))
+
+        qwen = self.package.NODE_CLASS_MAPPINGS[
+            "ComfyColabQwenImageEdit2511BundleLoader"
+        ]
+        self.assertEqual(qwen.IS_CHANGED("Q4_K_M", False), "Q4_K_M")
+        forced = qwen.IS_CHANGED("Q4_K_M", True)
         self.assertNotEqual(forced, forced)
+
+        krea = self.package.NODE_CLASS_MAPPINGS["ComfyColabKrea2BundleLoader"]
+        self.assertEqual(krea.IS_CHANGED("Turbo FP8", False), "Turbo FP8")
 
 
 if __name__ == "__main__":

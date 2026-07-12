@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "comfycolab"
 version = "0.1.0"
-description = "Start ComfyUI on a temporary Google Colab runtime and load curated Z-Image Turbo GGUF bundles."
+description = "Start ComfyUI on temporary Colab and load curated Z-Image, Qwen Edit, and Krea 2 bundles."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
