@@ -175,7 +175,11 @@ class BootstrapRenderingTests(unittest.TestCase):
             return_value=True,
         ) as probe:
             self.assertEqual(remote_bootstrap.request_colab_proxy_url(8188), url)
-        eval_js.assert_called_once_with("google.colab.kernel.proxyPort(8188)", 15)
+        expression, timeout = eval_js.call_args.args
+        self.assertIn("google.colab.kernel.accessAllowed", expression)
+        self.assertIn("google.colab.kernel.proxyPort(8188)", expression)
+        self.assertIn('new URL("/", proxy).toString()', expression)
+        self.assertEqual(timeout, 15)
         probe.assert_called_once_with(url)
 
     def test_colab_proxy_rejects_untrusted_url_and_falls_back(self) -> None:
@@ -229,6 +233,25 @@ class BootstrapRenderingTests(unittest.TestCase):
             remote_bootstrap,
             "eval_colab_js",
             side_effect=[TimeoutError("frontend loading"), url],
+        ) as eval_js, mock.patch.object(
+            remote_bootstrap,
+            "probe_colab_proxy_url",
+            return_value=True,
+        ), mock.patch.object(remote_bootstrap.time, "sleep") as sleep:
+            self.assertEqual(remote_bootstrap.request_colab_proxy_url(8188), url)
+        self.assertEqual(eval_js.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    def test_colab_proxy_retries_none_frontend_reply(self) -> None:
+        url = "https://abc-8188.colab.googleusercontent.com/"
+        with mock.patch.object(
+            remote_bootstrap,
+            "CONFIG",
+            {"colab_proxy": True},
+        ), mock.patch.object(
+            remote_bootstrap,
+            "eval_colab_js",
+            side_effect=[None, url],
         ) as eval_js, mock.patch.object(
             remote_bootstrap,
             "probe_colab_proxy_url",

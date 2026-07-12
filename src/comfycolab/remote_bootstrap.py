@@ -277,7 +277,18 @@ def request_colab_proxy_url(
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            value = eval_colab_js(f"google.colab.kernel.proxyPort({port})", timeout)
+            expression = f"""
+(async () => {{
+  if (!google.colab.kernel.accessAllowed) {{
+    throw new Error("Colab kernel proxy access is not allowed");
+  }}
+  const proxy = await google.colab.kernel.proxyPort({port});
+  return new URL("/", proxy).toString();
+}})()
+""".strip()
+            value = eval_colab_js(expression, timeout)
+            if value is None:
+                raise TimeoutError("The attached Colab page did not return a proxy URL.")
             if not isinstance(value, str):
                 raise ValueError("Colab returned a non-string proxy value.")
             parsed = urlparse(value)
