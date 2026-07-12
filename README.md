@@ -7,6 +7,25 @@ a Cloudflare quick tunnel, and adds a curated Z-Image Turbo bundle-loader node.
 There is no Google Drive integration. Models are downloaded inside Colab and
 disappear when the runtime is released.
 
+## Mac quick start
+
+ComfyColab uses an already-working `colab` CLI. Install the lightweight shell
+command once—no additional local Python environment is required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DragonLord1998/ComfyColab/main/install.sh | sh
+```
+
+After that, the complete startup flow is one command:
+
+```bash
+comfycolab start
+```
+
+It requests a G4 runtime, runs the public bootstrap inside Colab, and prints the
+Cloudflare URL for ComfyUI. The existing Colab CLI remains responsible for Google
+authentication and runtime allocation.
+
 ## What `comfycolab start` does
 
 1. Creates or reuses a named Colab session through `google-colab-cli`.

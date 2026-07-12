@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION="${COMFYCOLAB_SESSION:-comfycolab}"
+GPU="${COMFYCOLAB_GPU:-G4}"
+AUTH="${COMFYCOLAB_AUTH:-adc}"
+CONFIG="${COMFYCOLAB_CONFIG:-$HOME/.config/comfycolab/colab-sessions.json}"
+STATE_DIR="${COMFYCOLAB_STATE_DIR:-$HOME/.config/comfycolab}"
+BOOTSTRAP_URL="${COMFYCOLAB_BOOTSTRAP_URL:-https://raw.githubusercontent.com/DragonLord1998/ComfyColab/main/src/comfycolab/remote_bootstrap.py}"
+
+find_colab() {
+  if [[ -n "${COMFYCOLAB_COLAB_BIN:-}" ]]; then
+    printf '%s\n' "$COMFYCOLAB_COLAB_BIN"
+    return
+  fi
+  command -v colab 2>/dev/null || true
+}
+
+usage() {
+  cat <<'EOF'
+Usage: comfycolab <start|status|url|stop>
+
+Environment overrides:
+  COMFYCOLAB_COLAB_BIN  Path to the existing colab CLI
+  COMFYCOLAB_AUTH       adc (default) or oauth2
+  COMFYCOLAB_GPU        G4 (default), T4, L4, A100, or H100
+  COMFYCOLAB_SESSION    Session name (default: comfycolab)
+EOF
+}
+
+COMMAND="${1:-}"
+case "$COMMAND" in
+  start|status|url|stop) ;;
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+COLAB_BIN="$(find_colab)"
+if [[ -z "$COLAB_BIN" ]]; then
+  echo "[comfycolab] The existing 'colab' CLI was not found on PATH." >&2
+  echo "[comfycolab] Set COMFYCOLAB_COLAB_BIN to its full path." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$CONFIG")" "$STATE_DIR"
+BASE=("$COLAB_BIN" --config "$CONFIG" --auth "$AUTH")
+
+case "$COMMAND" in
+  start)
+    bootstrap_file="$(mktemp -t comfycolab-bootstrap.XXXXXX.py)"
+    output_file="$(mktemp -t comfycolab-output.XXXXXX)"
+    cleanup() {
+      rm -f "$bootstrap_file" "$output_file"
+    }
+    trap cleanup EXIT
+
+    echo "[comfycolab] Fetching the public Colab bootstrap..."
+    curl -fsSL "$BOOTSTRAP_URL" -o "$bootstrap_file"
+
+    created=0
+    status_output="$("${BASE[@]}" status --session "$SESSION" 2>&1)" || {
+      printf '%s\n' "$status_output" >&2
+      exit 1
+    }
+    if grep -Fq "[$SESSION]" <<<"$status_output"; then
+      echo "[comfycolab] Reusing active Colab session '$SESSION'."
+    else
+      "${BASE[@]}" new --session "$SESSION" --gpu "$GPU"
+      created=1
+    fi
+
+    set +e
+    "${BASE[@]}" exec \
+      --session "$SESSION" \
+      --file "$bootstrap_file" \
+      --timeout 1800 | tee "$output_file"
+    exec_status="${PIPESTATUS[0]}"
+    set -e
+
+    if [[ "$exec_status" -ne 0 ]]; then
+      if [[ "$created" -eq 1 ]]; then
+        "${BASE[@]}" stop --session "$SESSION" || true
+      fi
+      exit "$exec_status"
+    fi
+
+    comfy_url="$(sed -n 's/^COMFYCOLAB_READY=.*"comfyUrl":"\([^"]*\)".*/\1/p' "$output_file" | tail -n 1)"
+    if [[ -z "$comfy_url" ]]; then
+      echo "[comfycolab] Bootstrap finished without returning a Cloudflare URL." >&2
+      exit 1
+    fi
+    printf '%s\n' "$comfy_url" > "$STATE_DIR/comfy-url"
+    printf '\nComfyUI: %s\nSession: %s\n' "$comfy_url" "$SESSION"
+    ;;
+  status)
+    "${BASE[@]}" status --session "$SESSION"
+    ;;
+  url)
+    if [[ ! -s "$STATE_DIR/comfy-url" ]]; then
+      echo "[comfycolab] No saved ComfyUI URL." >&2
+      exit 1
+    fi
+    cat "$STATE_DIR/comfy-url"
+    ;;
+  stop)
+    "${BASE[@]}" stop --session "$SESSION"
+    rm -f "$STATE_DIR/comfy-url"
+    ;;
+esac

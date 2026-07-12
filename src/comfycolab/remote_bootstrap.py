@@ -17,8 +17,14 @@ from pathlib import Path
 
 
 CONFIG_B64 = "__COMFYCOLAB_CONFIG_B64__"
+DEFAULT_CONFIG = {
+    "repository_url": "https://github.com/DragonLord1998/ComfyColab.git",
+    "repository_ref": "main",
+    "port": 8188,
+    "refresh": False,
+}
 CONFIG = (
-    {}
+    DEFAULT_CONFIG
     if CONFIG_B64.startswith("__COMFYCOLAB_CONFIG_")
     else json.loads(base64.b64decode(CONFIG_B64).decode("utf-8"))
 )

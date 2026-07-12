@@ -65,7 +65,15 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertFalse((state_dir / "runtime.json").exists())
 
     def test_template_module_is_safe_to_import_locally(self) -> None:
-        self.assertEqual(remote_bootstrap.CONFIG, {})
+        self.assertEqual(
+            remote_bootstrap.CONFIG,
+            {
+                "repository_url": "https://github.com/DragonLord1998/ComfyColab.git",
+                "repository_ref": "main",
+                "port": 8188,
+                "refresh": False,
+            },
+        )
 
     def test_configuration_is_embedded_without_raw_interpolation(self) -> None:
         source = render_bootstrap(
