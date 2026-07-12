@@ -27,6 +27,18 @@ It requests a G4 runtime, runs the public bootstrap inside Colab, and prints the
 Cloudflare URL for ComfyUI. The existing Colab CLI remains responsible for Google
 authentication and runtime allocation.
 
+For a private Google Colab proxy URL, use:
+
+```bash
+comfycolab start --colab-proxy
+```
+
+This opens the attached Colab page, runs
+`google.colab.kernel.proxyPort(8188)` through the remote kernel, and prints the
+Google URL as the primary ComfyUI address. The URL is private to your signed-in
+Google account, and the attached Colab page must remain open. ComfyColab still
+starts Cloudflare and prints it as a fallback if the proxy handshake fails.
+
 ## What `comfycolab start` does
 
 1. Creates or reuses a named Colab session through `google-colab-cli`.
@@ -34,7 +46,8 @@ authentication and runtime allocation.
 3. Installs `city96/ComfyUI-GGUF`.
 4. Clones this repository and links its node pack into ComfyUI.
 5. Starts ComfyUI and `cloudflared` as detached Colab processes.
-6. Prints the public URL for the ComfyUI interface.
+6. Prints the public URL for the ComfyUI interface, or the private Google proxy
+   URL when `--colab-proxy` is requested.
 
 Cloudflare only exposes the ComfyUI interface. Model downloads run directly
 inside the Colab VM.
@@ -93,6 +106,19 @@ The final output includes the URL to open:
 ComfyUI: https://example.trycloudflare.com
 Session: comfycolab
 ```
+
+With `--colab-proxy`, the output also retains the public fallback:
+
+```text
+ComfyUI: https://example-8188.colab.googleusercontent.com/
+Session: comfycolab
+Cloudflare fallback: https://example.trycloudflare.com
+```
+
+The Google proxy provides a second path that may improve generated-image
+downloads by avoiding the Cloudflare quick tunnel. Treat it as experimental:
+actual throughput and WebSocket behavior depend on the Colab frontend, browser,
+and network, so the Cloudflare fallback remains available.
 
 Lifecycle commands:
 

@@ -177,6 +177,9 @@ class ColabClient:
     def status(self, session: str) -> subprocess.CompletedProcess[str]:
         return self.run("status", "--session", session, check=False, timeout=60)
 
+    def open_url(self, session: str) -> subprocess.CompletedProcess[str]:
+        return self.run("url", "--session", session, "--open", timeout=60)
+
     def stop(self, session: str) -> subprocess.CompletedProcess[str]:
         return self.run("stop", "--session", session, check=False, timeout=120)
 

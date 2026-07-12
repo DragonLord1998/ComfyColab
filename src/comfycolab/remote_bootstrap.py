@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 
 
@@ -22,6 +23,7 @@ DEFAULT_CONFIG = {
     "repository_ref": "main",
     "port": 8188,
     "refresh": False,
+    "colab_proxy": False,
 }
 CONFIG = (
     DEFAULT_CONFIG
@@ -220,6 +222,93 @@ def wait_for_tunnel(process: subprocess.Popen[bytes], timeout: int = 60) -> str:
     raise TimeoutError("cloudflared did not publish a trycloudflare.com URL.")
 
 
+def eval_colab_js(expression: str, timeout: int) -> object:
+    from google.colab.output import eval_js
+
+    return eval_js(expression, timeout_sec=timeout)
+
+
+def probe_colab_proxy_url(url: str, timeout: int = 15) -> bool:
+    base_url = json.dumps(url)
+    expression = f"""
+(async () => {{
+  const baseUrl = {base_url};
+  await fetch(new URL("system_stats", baseUrl), {{
+    mode: "no-cors",
+    credentials: "include",
+    cache: "no-store",
+  }});
+  const socketUrl = new URL("ws", baseUrl);
+  socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+  socketUrl.searchParams.set("clientId", crypto.randomUUID());
+  return await new Promise((resolve) => {{
+    const socket = new WebSocket(socketUrl);
+    const timer = setTimeout(() => {{
+      socket.close();
+      resolve(false);
+    }}, 10000);
+    socket.onopen = () => {{
+      clearTimeout(timer);
+      socket.close();
+      resolve(true);
+    }};
+    socket.onerror = () => {{
+      clearTimeout(timer);
+      resolve(false);
+    }};
+  }});
+}})()
+""".strip()
+    return eval_colab_js(expression, timeout) is True
+
+
+def request_colab_proxy_url(
+    port: int,
+    timeout: int = 15,
+    attempts: int = 3,
+) -> str | None:
+    if not bool(CONFIG.get("colab_proxy", False)):
+        return None
+
+    print(
+        "[comfycolab] Requesting a private Google Colab proxy URL...",
+        flush=True,
+    )
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            value = eval_colab_js(f"google.colab.kernel.proxyPort({port})", timeout)
+            if not isinstance(value, str):
+                raise ValueError("Colab returned a non-string proxy value.")
+            parsed = urlparse(value)
+            hostname = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not (
+                hostname == "googleusercontent.com"
+                or hostname.endswith(".googleusercontent.com")
+            ):
+                raise ValueError("Colab returned an untrusted proxy URL.")
+            if not probe_colab_proxy_url(value):
+                raise RuntimeError("ComfyUI did not pass the proxy HTTP/WebSocket probe.")
+            return value
+        except ValueError as error:
+            last_error = error
+            break
+        except Exception as error:
+            last_error = error
+            if attempt < attempts:
+                print(
+                    f"[comfycolab] Proxy handshake attempt {attempt} failed; retrying...",
+                    flush=True,
+                )
+                time.sleep(2)
+
+    print(
+        f"[comfycolab] Colab proxy unavailable ({last_error}); using Cloudflare fallback.",
+        flush=True,
+    )
+    return None
+
+
 def load_state() -> dict[str, object]:
     try:
         value = json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -242,17 +331,35 @@ def main() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     port = int(CONFIG["port"])
     refresh = bool(CONFIG.get("refresh", False))
+    colab_proxy = bool(CONFIG.get("colab_proxy", False))
     previous = load_state()
 
-    if (
+    reusable_comfy = (
         not refresh
         and http_ready(port)
         and pid_alive(previous.get("comfyPid"))
-        and pid_alive(previous.get("tunnelPid"))
-        and previous.get("comfyUrl")
-    ):
-        emit_ready(previous)
-        return
+        and bool(previous.get("comfyUrl"))
+    )
+    reusable_tunnel = reusable_comfy and pid_alive(previous.get("tunnelPid"))
+    if reusable_comfy:
+        proxy_url = request_colab_proxy_url(port) if colab_proxy else None
+        if reusable_tunnel or proxy_url:
+            cloudflare_url = None
+            if reusable_tunnel:
+                cloudflare_url = str(
+                    previous.get("cloudflareUrl") or previous["comfyUrl"]
+                )
+            previous.update(
+                {
+                    "comfyUrl": proxy_url or cloudflare_url,
+                    "cloudflareUrl": cloudflare_url,
+                    "colabProxyUrl": proxy_url,
+                    "tunnelPid": previous.get("tunnelPid") if reusable_tunnel else None,
+                }
+            )
+            save_state(previous)
+            emit_ready(previous)
+            return
 
     stop_managed_process(previous.get("tunnelPid"))
     stop_managed_process(previous.get("comfyPid"))
@@ -297,35 +404,51 @@ def main() -> None:
         save_state({"status": "starting_comfy", "comfyPid": comfy.pid, "port": port})
         wait_for_comfy(port, comfy)
 
-        cloudflared = cloudflared_path()
-        with TUNNEL_LOG.open("wb") as tunnel_log:
-            tunnel = subprocess.Popen(
-                [
-                    str(cloudflared),
-                    "tunnel",
-                    "--url",
-                    f"http://127.0.0.1:{port}",
-                    "--no-autoupdate",
-                ],
-                stdout=tunnel_log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+        proxy_url = request_colab_proxy_url(port) if colab_proxy else None
+        cloudflare_url: str | None = None
+        try:
+            cloudflared = cloudflared_path()
+            with TUNNEL_LOG.open("wb") as tunnel_log:
+                tunnel = subprocess.Popen(
+                    [
+                        str(cloudflared),
+                        "tunnel",
+                        "--url",
+                        f"http://127.0.0.1:{port}",
+                        "--no-autoupdate",
+                    ],
+                    stdout=tunnel_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            save_state(
+                {
+                    "status": "starting_tunnel",
+                    "comfyPid": comfy.pid,
+                    "tunnelPid": tunnel.pid,
+                    "port": port,
+                }
             )
-        save_state(
-            {
-                "status": "starting_tunnel",
-                "comfyPid": comfy.pid,
-                "tunnelPid": tunnel.pid,
-                "port": port,
-            }
-        )
-        url = wait_for_tunnel(tunnel)
+            cloudflare_url = wait_for_tunnel(tunnel)
+        except Exception as error:
+            if tunnel is not None:
+                stop_started_process(tunnel)
+                tunnel = None
+            if not proxy_url:
+                raise
+            print(
+                f"[comfycolab] Cloudflare fallback unavailable ({error}); "
+                "continuing with the Colab proxy.",
+                flush=True,
+            )
 
         payload: dict[str, object] = {
             "status": "ready",
-            "comfyUrl": url,
+            "comfyUrl": proxy_url or cloudflare_url,
+            "cloudflareUrl": cloudflare_url,
+            "colabProxyUrl": proxy_url,
             "comfyPid": comfy.pid,
-            "tunnelPid": tunnel.pid,
+            "tunnelPid": tunnel.pid if tunnel is not None else None,
             "port": port,
             "storage": "temporary",
             "repositoryUrl": CONFIG["repository_url"],

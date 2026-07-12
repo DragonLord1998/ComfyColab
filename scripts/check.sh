@@ -27,4 +27,14 @@ COMFYCOLAB_STATE_DIR="$launcher_tmp/state" \
 COMFYCOLAB_BOOTSTRAP_URL="file://$ROOT/src/comfycolab/remote_bootstrap.py" \
   "$ROOT/bin/comfycolab" start --refresh > "$launcher_tmp/refresh-output.txt"
 grep -Fq "ComfyUI: https://fake.trycloudflare.com" "$launcher_tmp/refresh-output.txt"
+EXPECT_COLAB_PROXY=1 \
+COMFYCOLAB_COLAB_BIN="$ROOT/tests/fixtures/fake_colab.sh" \
+COMFYCOLAB_CONFIG="$launcher_tmp/sessions.json" \
+COMFYCOLAB_STATE_DIR="$launcher_tmp/state" \
+COMFYCOLAB_BOOTSTRAP_URL="file://$ROOT/src/comfycolab/remote_bootstrap.py" \
+  "$ROOT/bin/comfycolab" start --colab-proxy > "$launcher_tmp/proxy-output.txt"
+grep -Fq "ComfyUI: https://fake-8188.colab.googleusercontent.com/" "$launcher_tmp/proxy-output.txt"
+grep -Fq "Cloudflare fallback: https://fake.trycloudflare.com" "$launcher_tmp/proxy-output.txt"
+grep -Fq "https://fake-8188.colab.googleusercontent.com/" "$launcher_tmp/state/comfy-url"
+grep -Fq "https://fake.trycloudflare.com" "$launcher_tmp/state/cloudflare-url"
 git diff --check

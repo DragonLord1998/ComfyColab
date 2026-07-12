@@ -73,6 +73,17 @@ class ColabClientTests(unittest.TestCase):
         client = ColabClient("colab", "oauth2", Path("/tmp/sessions.json"), runner)
         self.assertFalse(client.session_exists("missing"))
 
+    def test_open_url_uses_colab_browser_flag(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "https://colab.example/notebook\n", "")
+
+        client = ColabClient("colab", "adc", Path("/tmp/sessions.json"), runner)
+        client.open_url("demo")
+        self.assertEqual(calls[0][-4:], ["url", "--session", "demo", "--open"])
+
     def test_parse_ready_payload_uses_last_sentinel(self) -> None:
         output = (
             "setup log\n"

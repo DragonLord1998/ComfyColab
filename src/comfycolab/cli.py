@@ -86,11 +86,25 @@ def _start(args: argparse.Namespace) -> int:
         else:
             print(f"[comfycolab] Reusing active Colab session '{args.session}'.")
 
+        if args.colab_proxy:
+            print("[comfycolab] Opening the attached Colab page for the private proxy handshake...")
+            try:
+                result = client.open_url(args.session)
+                if result.stdout:
+                    print(result.stdout, end="")
+            except Exception as error:
+                print(
+                    f"[comfycolab] Could not open the Colab page ({error}); "
+                    "Cloudflare fallback will still be used.",
+                    file=sys.stderr,
+                )
+
         source = render_bootstrap(
             repository_url=repository_url,
             repository_ref=args.repo_ref,
             port=args.port,
             refresh=args.refresh,
+            colab_proxy=args.colab_proxy,
         )
         result = client.exec_bootstrap(
             session=args.session,
@@ -108,6 +122,8 @@ def _start(args: argparse.Namespace) -> int:
 
     print(f"\nComfyUI: {payload['comfyUrl']}")
     print(f"Session: {args.session}")
+    if payload.get("colabProxyUrl") and payload.get("cloudflareUrl"):
+        print(f"Cloudflare fallback: {payload['cloudflareUrl']}")
     return 0
 
 
@@ -186,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--refresh",
         action="store_true",
         help="Update the remote repositories and restart managed UI processes.",
+    )
+    start.add_argument(
+        "--colab-proxy",
+        action="store_true",
+        help="Prefer a private Google Colab proxy URL and retain Cloudflare as fallback.",
     )
     start.set_defaults(handler=_start)
 

@@ -22,6 +22,7 @@ def arguments(state: Path):
         port=8188,
         bootstrap_timeout=1800,
         refresh=False,
+        colab_proxy=False,
         state=str(state),
         auth="adc",
         config="/tmp/sessions.json",
@@ -33,6 +34,7 @@ class FakeClient:
     def __init__(self, *, bootstrap_error: Exception | None = None):
         self.bootstrap_error = bootstrap_error
         self.stopped: list[str] = []
+        self.opened: list[str] = []
 
     def session_exists(self, session):
         return False
@@ -49,6 +51,10 @@ class FakeClient:
             'COMFYCOLAB_READY={"comfyUrl":"https://demo.trycloudflare.com"}\n',
             "",
         )
+
+    def open_url(self, session):
+        self.opened.append(session)
+        return subprocess.CompletedProcess([], 0, "https://colab.example/notebook\n", "")
 
     def stop(self, session):
         self.stopped.append(session)
@@ -67,6 +73,22 @@ class CliLifecycleTests(unittest.TestCase):
     def test_start_defaults_to_g4(self) -> None:
         args = cli.build_parser().parse_args(["start"])
         self.assertEqual(args.gpu, "G4")
+        self.assertFalse(args.colab_proxy)
+
+    def test_colab_proxy_opens_attached_page_and_embeds_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "runtime.json"
+            args = arguments(state)
+            args.colab_proxy = True
+            client = FakeClient()
+            with mock.patch.object(cli, "_client", return_value=client), mock.patch.object(
+                cli, "render_bootstrap", return_value="bootstrap"
+            ) as render, contextlib.redirect_stdout(io.StringIO()):
+                result = cli._start(args)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(client.opened, ["comfycolab"])
+            self.assertTrue(render.call_args.kwargs["colab_proxy"])
 
     def test_status_transport_error_preserves_saved_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
