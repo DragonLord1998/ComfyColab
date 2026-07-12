@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "family": "Z-Image Turbo",
+  "default_quantization": "Q4_K_M",
+  "quantizations": {
+    "Q4_K_M": {
+      "filename": "z_image_turbo-Q4_K_M.gguf",
+      "url": "https://huggingface.co/jayn7/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_K_M.gguf?download=true",
+      "sha256": "745ec270db042409fde084d6b5cfccabf214a7fe5a494edf994a391125656afd",
+      "display_size": "4.98 GB"
+    },
+    "Q3_K_M": {
+      "filename": "z_image_turbo-Q3_K_M.gguf",
+      "url": "https://huggingface.co/jayn7/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q3_K_M.gguf?download=true",
+      "sha256": "0d01263fcc74b9813d03e62d122461ad759f2837ffeecefc0ef00451244b89e6",
+      "display_size": "4.12 GB"
+    },
+    "Q5_K_M": {
+      "filename": "z_image_turbo-Q5_K_M.gguf",
+      "url": "https://huggingface.co/jayn7/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q5_K_M.gguf?download=true",
+      "sha256": "cd2abb4bc76dbecc8c1d14658342c37db12d5b09874f96fa9adc8a28e62b2056",
+      "display_size": "5.52 GB"
+    },
+    "Q8_0": {
+      "filename": "z_image_turbo-Q8_0.gguf",
+      "url": "https://huggingface.co/jayn7/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q8_0.gguf?download=true",
+      "sha256": "f163d60b0eb427469510b8226243d196574a18139a2e40c017409cfbda95ecfe",
+      "display_size": "7.22 GB"
+    }
+  },
+  "text_encoder": {
+    "filename": "Qwen3-4B-Q4_K_M.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true",
+    "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+    "display_size": "2.50 GB",
+    "comfy_type": "lumina2"
+  },
+  "vae": {
+    "filename": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors?download=true",
+    "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+    "display_size": "335 MB"
+  }
+}
