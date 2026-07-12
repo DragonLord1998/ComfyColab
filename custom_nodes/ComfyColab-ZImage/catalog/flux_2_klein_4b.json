@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "family": "FLUX.2 Klein 4B",
+  "default_selection": "Q4_K_M",
+  "license": "Apache-2.0",
+  "selections": {
+    "Q4_K_M": {
+      "filename": "flux-2-klein-4b-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/0084d1df98e2e2137fe776d55170bc4792ec1d66/flux-2-klein-4b-Q4_K_M.gguf?download=true",
+      "sha256": "0b25d143c8469b342bc5af3bce92b783bf6b0636d285f7b2f75e38af63af9a15",
+      "size_bytes": 2604311104,
+      "display_size": "2.60 GB"
+    },
+    "Q3_K_M": {
+      "filename": "flux-2-klein-4b-Q3_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/0084d1df98e2e2137fe776d55170bc4792ec1d66/flux-2-klein-4b-Q3_K_M.gguf?download=true",
+      "sha256": "0f27104f7b5842b7bfd5909645c60208cbb6b8d43f5d65f58b085f45ed18c9e1",
+      "size_bytes": 2124489280,
+      "display_size": "2.12 GB"
+    },
+    "Q5_K_M": {
+      "filename": "flux-2-klein-4b-Q5_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/0084d1df98e2e2137fe776d55170bc4792ec1d66/flux-2-klein-4b-Q5_K_M.gguf?download=true",
+      "sha256": "58c01c75fee2272eadb127f53e26dd05a5a8e7f812e37c36fa44603301f91e54",
+      "size_bytes": 3073368640,
+      "display_size": "3.07 GB"
+    },
+    "Q8_0": {
+      "filename": "flux-2-klein-4b-Q8_0.gguf",
+      "url": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/0084d1df98e2e2137fe776d55170bc4792ec1d66/flux-2-klein-4b-Q8_0.gguf?download=true",
+      "sha256": "24a812e8f9b640e21c784164ea48571d8017ca22873696f4badeeabb006d509c",
+      "size_bytes": 4300644928,
+      "display_size": "4.30 GB"
+    }
+  },
+  "text_encoder": {
+    "filename": "qwen_3_4b.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/a9e4ca87c16db4c4e1a16406a9ddb300ab0ae246/split_files/text_encoders/qwen_3_4b.safetensors?download=true",
+    "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a",
+    "size_bytes": 8044982048,
+    "display_size": "8.04 GB",
+    "comfy_type": "flux2"
+  },
+  "vae": {
+    "filename": "flux2-vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/a9e4ca87c16db4c4e1a16406a9ddb300ab0ae246/split_files/vae/flux2-vae.safetensors?download=true",
+    "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+    "size_bytes": 336211292,
+    "display_size": "336 MB"
+  }
+}

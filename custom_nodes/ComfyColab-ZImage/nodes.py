@@ -6,6 +6,12 @@ from typing import Any
 
 from .catalog import (
     bundle_for,
+    flux_2_dev_bundle_for,
+    flux_2_dev_variants,
+    flux_2_klein_4b_bundle_for,
+    flux_2_klein_4b_variants,
+    flux_2_klein_9b_bundle_for,
+    flux_2_klein_9b_variants,
     krea_2_bundle_for,
     krea_2_variants,
     quantization_names,
@@ -224,3 +230,86 @@ class Krea2BundleLoader:
         )[0]
         vae = _load_vae(comfy_nodes, bundle["vae"]["filename"])
         return model, text_encoder, vae
+
+
+def _load_flux_2_bundle(
+    bundle: dict[str, dict[str, Any]],
+    force_redownload: bool,
+):
+    folder_paths = importlib.import_module("folder_paths")
+    comfy_nodes = importlib.import_module("nodes")
+    _download_bundle(
+        folder_paths,
+        bundle,
+        {
+            "model": "unet_gguf",
+            "text_encoder": "text_encoders",
+            "vae": "vae",
+        },
+        force_redownload,
+    )
+    model = _loader(comfy_nodes, "UnetLoaderGGUF").load_unet(
+        bundle["model"]["filename"]
+    )[0]
+    text_encoder = _loader(comfy_nodes, "CLIPLoader").load_clip(
+        bundle["text_encoder"]["filename"],
+        type="flux2",
+    )[0]
+    vae = _load_vae(comfy_nodes, bundle["vae"]["filename"])
+    return model, text_encoder, vae
+
+
+class _Flux2GGUFBundleLoader:
+    QUANTIZATIONS: Any
+    BUNDLE_FOR: Any
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, dict[str, tuple[Any, ...]]]:
+        return {
+            "required": {
+                "quantization": (cls.QUANTIZATIONS(), {"default": "Q4_K_M"}),
+                "force_redownload": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    RETURN_NAMES = ("model", "text_encoder", "vae")
+    FUNCTION = "load_bundle"
+    CATEGORY = "ComfyColab/loaders"
+
+    @classmethod
+    def IS_CHANGED(cls, quantization: str, force_redownload: bool = False):
+        return float("nan") if force_redownload else quantization
+
+    def load_bundle(self, quantization: str, force_redownload: bool = False):
+        return _load_flux_2_bundle(
+            self.BUNDLE_FOR(quantization),
+            force_redownload,
+        )
+
+
+class Flux2Klein4BBundleLoader(_Flux2GGUFBundleLoader):
+    QUANTIZATIONS = staticmethod(flux_2_klein_4b_variants)
+    BUNDLE_FOR = staticmethod(flux_2_klein_4b_bundle_for)
+    DESCRIPTION = (
+        "Downloads a verified FLUX.2 Klein 4B GGUF bundle and returns the model, "
+        "Qwen3-4B text encoder, and FLUX.2 VAE. Distilled model: 4 steps, CFG 1."
+    )
+
+
+class Flux2Klein9BBundleLoader(_Flux2GGUFBundleLoader):
+    QUANTIZATIONS = staticmethod(flux_2_klein_9b_variants)
+    BUNDLE_FOR = staticmethod(flux_2_klein_9b_bundle_for)
+    DESCRIPTION = (
+        "Downloads a verified FLUX.2 Klein 9B GGUF bundle and returns the model, "
+        "Qwen3-8B text encoder, and FLUX.2 VAE. Non-commercial license."
+    )
+
+
+class Flux2DevBundleLoader(_Flux2GGUFBundleLoader):
+    QUANTIZATIONS = staticmethod(flux_2_dev_variants)
+    BUNDLE_FOR = staticmethod(flux_2_dev_bundle_for)
+    DESCRIPTION = (
+        "Downloads a verified FLUX.2 Dev GGUF bundle and returns the model, "
+        "Mistral Small text encoder, and FLUX.2 VAE. Non-commercial license."
+    )

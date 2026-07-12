@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "family": "FLUX.2 Dev",
+  "default_selection": "Q4_K_M",
+  "license": "FLUX Non-Commercial License",
+  "selections": {
+    "Q4_K_M": {
+      "filename": "flux2-dev-Q4_K_M.gguf",
+      "url": "https://huggingface.co/city96/FLUX.2-dev-gguf/resolve/ade5d688ddab0d9cf4a5b01bf4321e01c115020d/flux2-dev-Q4_K_M.gguf?download=true",
+      "sha256": "fca680c7b221a713b5cf7db6cf6b33474875320ee61f4c585bc33fe391dab9a6",
+      "size_bytes": 20082414560,
+      "display_size": "20.1 GB"
+    },
+    "Q3_K_M": {
+      "filename": "flux2-dev-Q3_K_M.gguf",
+      "url": "https://huggingface.co/city96/FLUX.2-dev-gguf/resolve/ade5d688ddab0d9cf4a5b01bf4321e01c115020d/flux2-dev-Q3_K_M.gguf?download=true",
+      "sha256": "3b89f770a43ab091e6c2a33186d87b4a059d8f74d00db239834ecc27ed368fb8",
+      "size_bytes": 15960134624,
+      "display_size": "16.0 GB"
+    },
+    "Q5_K_M": {
+      "filename": "flux2-dev-Q5_K_M.gguf",
+      "url": "https://huggingface.co/city96/FLUX.2-dev-gguf/resolve/ade5d688ddab0d9cf4a5b01bf4321e01c115020d/flux2-dev-Q5_K_M.gguf?download=true",
+      "sha256": "041abd6a1dc300224a2479a26e722129337368a70ffdc027be8ddab5c90c5e69",
+      "size_bytes": 24057238496,
+      "display_size": "24.1 GB"
+    },
+    "Q8_0": {
+      "filename": "flux2-dev-Q8_0.gguf",
+      "url": "https://huggingface.co/city96/FLUX.2-dev-gguf/resolve/ade5d688ddab0d9cf4a5b01bf4321e01c115020d/flux2-dev-Q8_0.gguf?download=true",
+      "sha256": "09d005300dd8dcbbd489bb75ada6254145c84c2c9c3d7cc1829e3c5dedcb42ce",
+      "size_bytes": 35002602464,
+      "display_size": "35.0 GB"
+    }
+  },
+  "text_encoder": {
+    "filename": "mistral_3_small_flux2_fp8.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/03d6521e6f6a47396b3f951cbea50f7e6c2f482e/split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors?download=true",
+    "sha256": "e3467b7d912a234fb929cdf215dc08efdb011810b44bc21081c4234cc75b370e",
+    "size_bytes": 18034640095,
+    "display_size": "18.0 GB",
+    "comfy_type": "flux2"
+  },
+  "vae": {
+    "filename": "flux2-dev-vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/03d6521e6f6a47396b3f951cbea50f7e6c2f482e/split_files/vae/flux2-vae.safetensors?download=true",
+    "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+    "size_bytes": 336213556,
+    "display_size": "336 MB"
+  }
+}

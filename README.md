@@ -2,8 +2,8 @@
 
 ComfyColab starts a temporary GPU-backed Google Colab session from the command
 line, installs ComfyUI and its GGUF loader, exposes the ComfyUI interface through
-a Cloudflare quick tunnel, and adds curated bundle-loader nodes for Z-Image
-Turbo, Qwen Image Edit 2511, and Krea 2.
+a Cloudflare quick tunnel, and adds curated bundle-loader nodes for Z-Image,
+Qwen Image Edit, Krea 2, and the FLUX.2 family.
 
 There is no Google Drive integration. Models are downloaded inside Colab and
 disappear when the runtime is released.
@@ -115,8 +115,8 @@ breaking upstream changes.
 
 ## Bundle-loader nodes
 
-All three nodes live under `ComfyColab/loaders`, download only when executed,
-and return standard `MODEL`, `CLIP`, and `VAE` outputs.
+All nodes live under `ComfyColab/loaders`, download only when executed, and
+return standard `MODEL`, `CLIP`, and `VAE` outputs.
 
 ### Z-Image Turbo
 
@@ -170,6 +170,45 @@ For generation, Krea recommends 8 steps with no CFG for Turbo. Qwen Image Edit
 2511 workflows typically use ComfyUI's `TextEncodeQwenImageEditPlus` node and
 the model's `index_timestep_zero` reference method.
 
+### FLUX.2 Klein 4B
+
+The official small model is **FLUX.2 Klein 4B**—there is no released Klein 3B.
+Add **FLUX.2 Klein 4B Bundle Loader** and choose `Q4_K_M`, `Q3_K_M`, `Q5_K_M`,
+or `Q8_0`.
+
+- `MODEL`: selected FLUX.2 Klein 4B distilled GGUF
+- `CLIP`: official Qwen3-4B encoder loaded as `flux2`
+- `VAE`: FLUX.2 Klein VAE
+
+The Q4 bundle downloads roughly 11.0 GB. The distilled model is designed for
+4 steps with CFG/guidance 1. The 4B weights are Apache-2.0.
+
+### FLUX.2 Klein 9B
+
+Add **FLUX.2 Klein 9B Bundle Loader** and choose `Q4_K_M`, `Q3_K_M`, `Q5_K_M`,
+or `Q8_0`.
+
+- `MODEL`: selected FLUX.2 Klein 9B distilled GGUF
+- `CLIP`: official Qwen3-8B FP8-mixed encoder loaded as `flux2`
+- `VAE`: FLUX.2 Klein VAE
+
+The Q4 bundle downloads roughly 14.9 GB. Use 4 steps with CFG/guidance 1.
+FLUX.2 Klein 9B remains subject to the BFL FLUX Non-Commercial License and
+acceptable-use requirements.
+
+### FLUX.2 Dev
+
+Add **FLUX.2 Dev Bundle Loader** and choose `Q4_K_M`, `Q3_K_M`, `Q5_K_M`, or
+`Q8_0`.
+
+- `MODEL`: selected FLUX.2 Dev GGUF
+- `CLIP`: official Mistral Small FLUX.2 FP8 encoder loaded as `flux2`
+- `VAE`: official FLUX.2 Dev VAE
+
+The Q4 bundle downloads roughly 38.5 GB. BFL recommends guidance 4 and 50
+steps, with 28 steps as a practical speed/quality compromise. FLUX.2 Dev uses
+the BFL FLUX Non-Commercial License.
+
 ## Catalog
 
 The catalogs are under
@@ -186,6 +225,11 @@ The initial sources are:
 - Qwen Image Edit GGUF: `unsloth/Qwen-Image-Edit-2511-GGUF`
 - Qwen encoder and VAE: `Comfy-Org/Qwen-Image_ComfyUI`
 - Krea 2 bundle: `Comfy-Org/Krea-2`
+- FLUX.2 Klein GGUF models: `unsloth/FLUX.2-klein-4B-GGUF` and
+  `unsloth/FLUX.2-klein-9B-GGUF`
+- FLUX.2 Klein encoders and VAE: `Comfy-Org/vae-text-encorder-for-flux-klein-*`
+- FLUX.2 Dev GGUF: `city96/FLUX.2-dev-gguf`
+- FLUX.2 Dev encoder and VAE: `Comfy-Org/flux2-dev`
 
 Model files retain their upstream licenses. This repository does not redistribute
 the weights.

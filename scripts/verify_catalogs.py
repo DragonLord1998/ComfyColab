@@ -25,12 +25,30 @@ def specifications(catalog: dict[str, object]):
 
 def main() -> None:
     trees: dict[tuple[str, str], dict[str, dict[str, object]]] = {}
+    destinations: dict[tuple[str, str], tuple[str, str]] = {}
     checked = 0
     for catalog_path in sorted(CATALOG_DIR.glob("*.json")):
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        selections = catalog["selections"]
+        assert isinstance(selections, dict)
+        component_by_name = {
+            **{name: "model" for name in selections},
+            "text_encoder": "text_encoder",
+            "vae": "vae",
+        }
         for name, raw_specification in specifications(catalog):
             assert isinstance(raw_specification, dict)
             specification = raw_specification
+            component = component_by_name[name]
+            destination_key = (component, str(specification["filename"]))
+            destination_value = (str(specification["sha256"]), catalog_path.name)
+            previous = destinations.get(destination_key)
+            if previous is not None and previous[0] != destination_value[0]:
+                raise RuntimeError(
+                    f"{catalog_path.name}:{name} collides with {previous[1]} using "
+                    f"different weights at {destination_key[1]}"
+                )
+            destinations[destination_key] = destination_value
             parsed = urllib.parse.urlsplit(str(specification["url"]))
             match = RESOLVE_PATTERN.match(parsed.path)
             if match is None:

@@ -46,6 +46,19 @@ class CatalogTests(unittest.TestCase):
             self.catalog.krea_2_variants(),
             ["Turbo FP8", "Raw FP8 (training/base)"],
         )
+        expected_flux_quantizations = ["Q4_K_M", "Q3_K_M", "Q5_K_M", "Q8_0"]
+        self.assertEqual(
+            self.catalog.flux_2_klein_4b_variants(),
+            expected_flux_quantizations,
+        )
+        self.assertEqual(
+            self.catalog.flux_2_klein_9b_variants(),
+            expected_flux_quantizations,
+        )
+        self.assertEqual(
+            self.catalog.flux_2_dev_variants(),
+            expected_flux_quantizations,
+        )
 
     def test_every_component_has_https_url_and_checksum(self) -> None:
         selections = (
@@ -55,6 +68,18 @@ class CatalogTests(unittest.TestCase):
                 self.catalog.qwen_edit_bundle_for,
             ),
             (self.catalog.krea_2_variants(), self.catalog.krea_2_bundle_for),
+            (
+                self.catalog.flux_2_klein_4b_variants(),
+                self.catalog.flux_2_klein_4b_bundle_for,
+            ),
+            (
+                self.catalog.flux_2_klein_9b_variants(),
+                self.catalog.flux_2_klein_9b_bundle_for,
+            ),
+            (
+                self.catalog.flux_2_dev_variants(),
+                self.catalog.flux_2_dev_bundle_for,
+            ),
         )
         for names, bundle_for in selections:
             for name in names:
@@ -72,6 +97,9 @@ class CatalogTests(unittest.TestCase):
             "ComfyColabZImageTurboBundleLoader",
             "ComfyColabQwenImageEdit2511BundleLoader",
             "ComfyColabKrea2BundleLoader",
+            "ComfyColabFlux2Klein4BBundleLoader",
+            "ComfyColabFlux2Klein9BBundleLoader",
+            "ComfyColabFlux2DevBundleLoader",
         )
         for loader_name in loader_names:
             loader = self.package.NODE_CLASS_MAPPINGS[loader_name]
@@ -87,6 +115,14 @@ class CatalogTests(unittest.TestCase):
 
         krea = self.package.NODE_CLASS_MAPPINGS["ComfyColabKrea2BundleLoader"]
         self.assertEqual(krea.IS_CHANGED("Turbo FP8", False), "Turbo FP8")
+
+        flux = self.package.NODE_CLASS_MAPPINGS[
+            "ComfyColabFlux2Klein4BBundleLoader"
+        ]
+        self.assertEqual(flux.IS_CHANGED("Q4_K_M", False), "Q4_K_M")
+
+    def test_catalog_filenames_do_not_collide_with_different_weights(self) -> None:
+        self.catalog.validate_catalog_collisions()
 
 
 if __name__ == "__main__":

@@ -98,11 +98,26 @@ class NodeLoadingTests(unittest.TestCase):
                     "ComfyColabKrea2BundleLoader"
                 ]()
                 krea_outputs = krea_loader.load_bundle("Turbo FP8")
+                flux_4b_loader = package.NODE_CLASS_MAPPINGS[
+                    "ComfyColabFlux2Klein4BBundleLoader"
+                ]()
+                flux_4b_outputs = flux_4b_loader.load_bundle("Q4_K_M")
+                flux_9b_loader = package.NODE_CLASS_MAPPINGS[
+                    "ComfyColabFlux2Klein9BBundleLoader"
+                ]()
+                flux_9b_outputs = flux_9b_loader.load_bundle("Q4_K_M")
+                flux_dev_loader = package.NODE_CLASS_MAPPINGS[
+                    "ComfyColabFlux2DevBundleLoader"
+                ]()
+                flux_dev_outputs = flux_dev_loader.load_bundle("Q4_K_M")
 
         expected = ("MODEL_OBJECT", "CLIP_OBJECT", "VAE_OBJECT")
         self.assertEqual(z_outputs, expected)
         self.assertEqual(qwen_outputs, expected)
         self.assertEqual(krea_outputs, expected)
+        self.assertEqual(flux_4b_outputs, expected)
+        self.assertEqual(flux_9b_outputs, expected)
+        self.assertEqual(flux_dev_outputs, expected)
         self.assertIn(("clip", "Qwen3-4B-Q4_K_M.gguf", "lumina2"), calls)
         self.assertIn(
             ("gguf_model", "qwen-image-edit-2511-Q4_K_M.gguf"),
@@ -120,6 +135,28 @@ class NodeLoadingTests(unittest.TestCase):
             ("clip", "qwen3vl_4b_fp8_scaled.safetensors", "krea2"),
             calls,
         )
+        self.assertIn(
+            ("gguf_model", "flux-2-klein-4b-Q4_K_M.gguf"),
+            calls,
+        )
+        self.assertIn(
+            ("clip", "qwen_3_4b.safetensors", "flux2"),
+            calls,
+        )
+        self.assertIn(
+            ("gguf_model", "flux-2-klein-9b-Q4_K_M.gguf"),
+            calls,
+        )
+        self.assertIn(
+            ("clip", "qwen_3_8b_fp8mixed.safetensors", "flux2"),
+            calls,
+        )
+        self.assertIn(("gguf_model", "flux2-dev-Q4_K_M.gguf"), calls)
+        self.assertIn(
+            ("clip", "mistral_3_small_flux2_fp8.safetensors", "flux2"),
+            calls,
+        )
+        self.assertIn(("vae", "flux2-dev-vae.safetensors"), calls)
 
 
 if __name__ == "__main__":
