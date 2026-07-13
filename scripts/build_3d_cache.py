@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
@@ -24,6 +25,35 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 DEFAULT_MANIFEST = ROOT / "cache" / "3d-g4-v2.json"
 DEFAULT_PART_BYTES = 1_900_000_000
+LIVE_VALIDATION_SCHEMA = "comfycolab-3d-live-validation-v1"
+REQUIRED_LIVE_GATES = (
+    "trellis_512_textured_glb",
+    "trellis_1024_cascade_textured_glb",
+    "trellis_1536_cascade_genuine",
+    "combined_environment_cuda_probes",
+    "ultrashape_384_refinement",
+    "ultrashape_512_refinement",
+    "ultrashape_1024_run_1",
+    "ultrashape_1024_run_2",
+    "full_workflow_hard_surface",
+    "full_workflow_organic",
+    "full_workflow_thin",
+    "full_workflow_holed",
+    "full_workflow_transparent_background",
+    "cache_hit_no_inference",
+    "cancellation_cleanup",
+    "advanced_trellis_workflow",
+    "preview_and_save_native_file3d",
+)
+REQUIRED_LIVE_BENCHMARKS = {
+    "trellis_512": 512,
+    "trellis_1024_cascade": 1024,
+    "trellis_1536_cascade": 1536,
+    "ultrashape_384": 384,
+    "ultrashape_512": 512,
+    "ultrashape_1024_run_1": 1024,
+    "ultrashape_1024_run_2": 1024,
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -32,6 +62,139 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
+    return {
+        "comfy": remote_bootstrap.COMFY_REF,
+        "trellis": remote_bootstrap.TRELLIS_REF,
+        "geometry": remote_bootstrap.GEOMETRY_REF,
+        "ultrashape": remote_bootstrap.ULTRASHAPE_REF,
+        "cubvh": remote_bootstrap.ULTRASHAPE_CUBVH_REF,
+        "birefnet": remote_bootstrap.BIREFNET_MODEL_REF,
+        "comfyEnv": remote_bootstrap.COMFY_ENV_VERSION,
+    }
+
+
+def expected_validation_patches(remote_bootstrap) -> dict[str, str]:
+    return {
+        "trellis": remote_bootstrap.TRELLIS_PATCH_ID,
+        "ultrashape": remote_bootstrap.ULTRASHAPE_PATCH_ID,
+    }
+
+
+def _positive_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def load_live_validation_record(
+    path: Path,
+    *,
+    expected_profile: str,
+    remote_bootstrap,
+) -> dict[str, object]:
+    """Load and strictly validate the live G4 release gate."""
+
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise RuntimeError(f"Live validation record is missing: {path}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Live validation record is not valid JSON: {path}") from error
+    if not isinstance(record, dict):
+        raise RuntimeError("Live validation record must be a JSON object.")
+    if record.get("schema") != LIVE_VALIDATION_SCHEMA:
+        raise RuntimeError(
+            f"Live validation record must use schema {LIVE_VALIDATION_SCHEMA}."
+        )
+    if record.get("status") != "passed":
+        raise RuntimeError(
+            "Live validation is not passed; the combined cache cannot be marked ready."
+        )
+    if record.get("profile") != expected_profile:
+        raise RuntimeError("Live validation profile does not match the cache profile.")
+    for field in ("runId", "completedAt"):
+        if not isinstance(record.get(field), str) or not str(record[field]).strip():
+            raise RuntimeError(f"Live validation record requires a non-empty {field}.")
+    if record.get("sources") != expected_validation_sources(remote_bootstrap):
+        raise RuntimeError("Live validation sources do not match the pinned cache sources.")
+    if record.get("patches") != expected_validation_patches(remote_bootstrap):
+        raise RuntimeError("Live validation patches do not match the pinned cache patches.")
+
+    gates = record.get("gates")
+    if not isinstance(gates, dict):
+        raise RuntimeError("Live validation record has no gate evidence.")
+    failed_gates: list[str] = []
+    for name in REQUIRED_LIVE_GATES:
+        gate = gates.get(name)
+        if (
+            not isinstance(gate, dict)
+            or gate.get("status") != "passed"
+            or not isinstance(gate.get("evidence"), str)
+            or not gate["evidence"].strip()
+        ):
+            failed_gates.append(name)
+    if failed_gates:
+        raise RuntimeError(
+            "Live validation gates are incomplete: " + ", ".join(failed_gates)
+        )
+
+    benchmarks = record.get("benchmarks")
+    if not isinstance(benchmarks, dict):
+        raise RuntimeError("Live validation record has no benchmark evidence.")
+    invalid_benchmarks: list[str] = []
+    for name, expected_resolution in REQUIRED_LIVE_BENCHMARKS.items():
+        benchmark = benchmarks.get(name)
+        common_metrics = (
+            "runtimeSeconds",
+            "peakVramBytes",
+            "glbBytes",
+            "faces",
+        )
+        valid = (
+            isinstance(benchmark, dict)
+            and benchmark.get("status") == "passed"
+            and benchmark.get("actualResolution") == expected_resolution
+            and benchmark.get("glbValidated") is True
+            and all(_positive_number(benchmark.get(metric)) for metric in common_metrics)
+        )
+        if valid and name.startswith("trellis_"):
+            valid = _positive_number(benchmark.get("tokens")) and _positive_number(
+                benchmark.get("textureSize")
+            )
+        if not valid:
+            invalid_benchmarks.append(name)
+    if invalid_benchmarks:
+        raise RuntimeError(
+            "Live validation benchmarks are incomplete: "
+            + ", ".join(invalid_benchmarks)
+        )
+    return record
+
+
+def live_validation_provenance(path: Path, record: dict[str, object]) -> dict[str, object]:
+    payload = path.read_bytes()
+    try:
+        current_record = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Live validation record changed after validation.") from error
+    if current_record != record:
+        raise RuntimeError("Live validation record changed after validation.")
+    return {
+        "schema": LIVE_VALIDATION_SCHEMA,
+        "recordFile": path.name,
+        "recordBytes": len(payload),
+        "recordSha256": hashlib.sha256(payload).hexdigest(),
+        "runId": record["runId"],
+        "completedAt": record["completedAt"],
+        "profile": record["profile"],
+        "passedGates": list(REQUIRED_LIVE_GATES),
+    }
 
 
 def run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -119,6 +282,7 @@ def build_manifest(
     archive: Path,
     parts: list[dict[str, object]],
     unpacked_bytes: int,
+    live_validation: dict[str, object],
     remote_bootstrap,
 ) -> dict[str, object]:
     env_python = workspace / ".pixi" / "envs" / "trellis2-nodes" / "bin" / "python"
@@ -173,6 +337,7 @@ def build_manifest(
             ],
             "cudaTensorProbe": True,
         },
+        "liveValidation": live_validation,
     }
 
 
@@ -181,14 +346,22 @@ def build(args: argparse.Namespace) -> None:
         sys.path.insert(0, str(SRC))
     from comfycolab import remote_bootstrap
 
+    template = json.loads(args.manifest.read_text(encoding="utf-8"))
+    if template.get("status") not in {"awaiting-build", "ready"}:
+        raise RuntimeError("Combined cache manifest has an unsupported status.")
     ensure_g4_runtime(remote_bootstrap)
+    validation_record = load_live_validation_record(
+        args.validation_record.resolve(),
+        expected_profile=str(template["profile"]),
+        remote_bootstrap=remote_bootstrap,
+    )
+    validation_provenance = live_validation_provenance(
+        args.validation_record.resolve(), validation_record
+    )
     if shutil.which("zstd") is None:
         run(["apt-get", "update", "-qq"])
         run(["apt-get", "install", "-y", "-qq", "zstd"])
 
-    template = json.loads(args.manifest.read_text(encoding="utf-8"))
-    if template.get("status") not in {"awaiting-build", "ready"}:
-        raise RuntimeError("Combined cache manifest has an unsupported status.")
     workspace = args.workspace.expanduser().resolve()
     if args.install_overlay:
         remote_bootstrap.install_ultrashape_overlay()
@@ -226,6 +399,7 @@ def build(args: argparse.Namespace) -> None:
         archive=archive,
         parts=parts,
         unpacked_bytes=unpacked_bytes,
+        live_validation=validation_provenance,
         remote_bootstrap=remote_bootstrap,
     )
     args.manifest.write_text(
@@ -238,6 +412,12 @@ def build(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    result.add_argument(
+        "--validation-record",
+        type=Path,
+        required=True,
+        help="Passed machine-readable G4 validation record to bind into the ready manifest.",
+    )
     result.add_argument("--workspace", type=Path, default=Path.home() / ".ce")
     result.add_argument("--output-dir", type=Path, default=Path("/content/.comfycolab/cache-build"))
     result.add_argument("--part-bytes", type=int, default=DEFAULT_PART_BYTES)

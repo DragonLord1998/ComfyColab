@@ -1,0 +1,48 @@
+{
+  "schema": "comfycolab-3d-live-validation-v1",
+  "status": "pending",
+  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-3d-v2",
+  "runId": null,
+  "completedAt": null,
+  "sources": {
+    "comfy": "8b099de36acd81acd1afa3b5442951dc847e0a52",
+    "trellis": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+    "geometry": "c67199de05705642258e727fa118f412877b4ebf",
+    "ultrashape": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
+    "cubvh": "757b913bfbf19ed65e3a379d159391a8e29efa0f",
+    "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
+    "comfyEnv": "0.3.89"
+  },
+  "patches": {
+    "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v3",
+    "ultrashape": "ultrashape-inference-compat-v2"
+  },
+  "gates": {
+    "trellis_512_textured_glb": {"status": "pending", "evidence": null},
+    "trellis_1024_cascade_textured_glb": {"status": "pending", "evidence": null},
+    "trellis_1536_cascade_genuine": {"status": "pending", "evidence": null},
+    "combined_environment_cuda_probes": {"status": "pending", "evidence": null},
+    "ultrashape_384_refinement": {"status": "pending", "evidence": null},
+    "ultrashape_512_refinement": {"status": "pending", "evidence": null},
+    "ultrashape_1024_run_1": {"status": "pending", "evidence": null},
+    "ultrashape_1024_run_2": {"status": "pending", "evidence": null},
+    "full_workflow_hard_surface": {"status": "pending", "evidence": null},
+    "full_workflow_organic": {"status": "pending", "evidence": null},
+    "full_workflow_thin": {"status": "pending", "evidence": null},
+    "full_workflow_holed": {"status": "pending", "evidence": null},
+    "full_workflow_transparent_background": {"status": "pending", "evidence": null},
+    "cache_hit_no_inference": {"status": "pending", "evidence": null},
+    "cancellation_cleanup": {"status": "pending", "evidence": null},
+    "advanced_trellis_workflow": {"status": "pending", "evidence": null},
+    "preview_and_save_native_file3d": {"status": "pending", "evidence": null}
+  },
+  "benchmarks": {
+    "trellis_512": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "trellis_1024_cascade": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "trellis_1536_cascade": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "ultrashape_384": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
+    "ultrashape_512": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
+    "ultrashape_1024_run_1": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
+    "ultrashape_1024_run_2": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false}
+  }
+}

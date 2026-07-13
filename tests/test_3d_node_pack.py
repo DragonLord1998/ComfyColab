@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import io as stdio
 import json
+import math
 import struct
 import sys
 import tempfile
@@ -508,6 +509,163 @@ class ThreeDNodePackTests(unittest.TestCase):
         baked = file3d.bake_scene_mesh(Scene(), fake_trimesh)
         self.assertEqual([mesh.transforms for mesh in baked], [["transform-instance-a"], ["transform-instance-b"]])
 
+    def test_labeled_glb_full_transform_pipeline_preserves_geometry_contract(self):
+        """Regression for scene -> TRELLIS -> UltraShape -> glTF materialization."""
+        load_package()
+        file3d = importlib.import_module("comfycolab_3d_test.file3d")
+        transforms = importlib.import_module("comfycolab_3d_test.transforms")
+        transform_path = ROOT / "worker" / "ultrashape" / "transform_contract.py"
+        transform_spec = importlib.util.spec_from_file_location("cc3d_ultra_transform_regression", transform_path)
+        ultra = importlib.util.module_from_spec(transform_spec)
+        assert transform_spec.loader
+        transform_spec.loader.exec_module(ultra)
+
+        def apply_matrix(matrix, point):
+            return ultra.apply_matrix_to_point(matrix, point)
+
+        def subtract(left, right):
+            return tuple(left[index] - right[index] for index in range(3))
+
+        def cross(left, right):
+            return (
+                left[1] * right[2] - left[2] * right[1],
+                left[2] * right[0] - left[0] * right[2],
+                left[0] * right[1] - left[1] * right[0],
+            )
+
+        def normalized(vector):
+            length = math.sqrt(sum(value * value for value in vector))
+            return tuple(value / length for value in vector)
+
+        def face_normals(vertices, faces):
+            return [
+                normalized(cross(subtract(vertices[b], vertices[a]), subtract(vertices[c], vertices[a])))
+                for a, b, c in faces
+            ]
+
+        def distance(left, right):
+            return math.sqrt(sum((left[index] - right[index]) ** 2 for index in range(3)))
+
+        labels = ["nose", "right-fin", "crown", "lower-keel"]
+        source_vertices = [
+            (-2.0, 1.0, 0.5),
+            (3.0, 1.25, -0.25),
+            (-1.0, 4.0, 2.0),
+            (0.5, -2.0, 1.0),
+        ]
+        source_faces = [(0, 1, 2), (0, 3, 1)]
+        scene_matrix = [
+            [0.0, 0.0, 1.0, 4.0],
+            [0.0, 1.0, 0.0, -3.0],
+            [-1.0, 0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+
+        class NumericMesh:
+            def __init__(self, vertices, faces, vertex_labels):
+                self.vertices = [tuple(map(float, row)) for row in vertices]
+                self.faces = [tuple(face) for face in faces]
+                self.labels = list(vertex_labels)
+
+            def copy(self):
+                return NumericMesh(self.vertices, self.faces, self.labels)
+
+            def apply_transform(self, matrix):
+                self.vertices = [apply_matrix(matrix, vertex) for vertex in self.vertices]
+
+            @property
+            def normals(self):
+                return face_normals(self.vertices, self.faces)
+
+            def export(self, path, file_type):
+                self.assert_export_type = file_type
+                position_bytes = b"".join(struct.pack("<fff", *vertex) for vertex in self.vertices)
+                index_bytes = b"".join(struct.pack("<H", index) for face in self.faces for index in face)
+                index_offset = len(position_bytes)
+                binary = position_bytes + index_bytes
+                binary += b"\x00" * ((4 - len(binary) % 4) % 4)
+                document = {
+                    "asset": {"version": "2.0"},
+                    "buffers": [{"byteLength": len(binary)}],
+                    "bufferViews": [
+                        {"buffer": 0, "byteOffset": 0, "byteLength": len(position_bytes)},
+                        {"buffer": 0, "byteOffset": index_offset, "byteLength": len(index_bytes)},
+                    ],
+                    "accessors": [
+                        {"bufferView": 0, "componentType": 5126, "count": len(self.vertices), "type": "VEC3"},
+                        {"bufferView": 1, "componentType": 5123, "count": len(self.faces) * 3, "type": "SCALAR"},
+                    ],
+                    "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}]}],
+                    "extras": {
+                        "labels": self.labels,
+                        "positions": self.vertices,
+                        "indices": self.faces,
+                        "normals": self.normals,
+                    },
+                }
+                chunk = json.dumps(document, separators=(",", ":")).encode()
+                chunk += b" " * ((4 - len(chunk) % 4) % 4)
+                body = (
+                    struct.pack("<I4s", len(chunk), b"JSON")
+                    + chunk
+                    + struct.pack("<I4s", len(binary), b"BIN\x00")
+                    + binary
+                )
+                Path(path).write_bytes(struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body)
+
+        class Scene:
+            def __init__(self, mesh):
+                self.geometry = {"labeled": mesh}
+                self.graph = types.SimpleNamespace(
+                    nodes_geometry=["labeled-instance"],
+                    get=lambda _node: (scene_matrix, "labeled"),
+                )
+
+        fake_trimesh = types.SimpleNamespace(
+            Scene=Scene,
+            util=types.SimpleNamespace(concatenate=lambda meshes: list(meshes)[0]),
+        )
+        baked = file3d.bake_scene_mesh(
+            Scene(NumericMesh(source_vertices, source_faces, labels)), fake_trimesh,
+        )
+        expected_baked = [apply_matrix(scene_matrix, vertex) for vertex in source_vertices]
+        self.assertEqual(baked.vertices, expected_baked)
+
+        z_up = transforms.y_up_to_z_up(baked.vertices)
+        minimum = tuple(min(vertex[axis] for vertex in z_up) for axis in range(3))
+        maximum = tuple(max(vertex[axis] for vertex in z_up) for axis in range(3))
+        normalization = ultra.normalization_from_bounds(minimum, maximum, normalize_scale=0.99)
+        normalized_vertices = [apply_matrix(normalization["forward"], vertex) for vertex in z_up]
+        restored_z_up = [apply_matrix(normalization["inverse"], vertex) for vertex in normalized_vertices]
+        restored_y_up = transforms.z_up_to_y_up(restored_z_up)
+
+        self.assertTrue(all(math.isfinite(value) for vertex in restored_y_up for value in vertex))
+        for actual, expected in zip(restored_y_up, expected_baked):
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value, places=10)
+        self.assertAlmostEqual(
+            distance(restored_y_up[0], restored_y_up[2]),
+            distance(expected_baked[0], expected_baked[2]),
+            places=10,
+        )
+
+        final_mesh = NumericMesh(restored_y_up, source_faces, labels)
+        expected_normals = face_normals(expected_baked, source_faces)
+        for actual, expected in zip(final_mesh.normals, expected_normals):
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value, places=10)
+
+        with tempfile.TemporaryDirectory() as directory:
+            exported = Path(directory) / "labeled.glb"
+            file3d.export_trimesh_atomic(final_mesh, exported)
+            document = file3d.validate_glb(exported)
+        self.assertEqual(document["extras"]["labels"], labels)
+        self.assertEqual([tuple(face) for face in document["extras"]["indices"]], source_faces)
+        self.assertEqual(document["meshes"][0]["primitives"][0]["indices"], 1)
+        for actual, expected in zip(document["extras"]["normals"], expected_normals):
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value, places=10)
+
     def test_pinned_ultrashape_defaults_and_cache_root(self):
         load_package()
         nodes = importlib.import_module("comfycolab_3d_test.nodes")
@@ -546,7 +704,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             remove_background="Auto",
             comfyui_ref="8b099de36acd81acd1afa3b5442951dc847e0a52",
             trellis_ref="9b878516f2dc2fd873f4f6cceadba403dd12d83e",
-            trellis_patch_id="trellis2-strict-1536-birefnet-pin-v2",
+            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v3",
             birefnet_ref="e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
         )
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -581,7 +739,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             remove_background="Auto",
             comfyui_ref="8b099de36acd81acd1afa3b5442951dc847e0a52",
             trellis_ref="9b878516f2dc2fd873f4f6cceadba403dd12d83e",
-            trellis_patch_id="trellis2-strict-1536-birefnet-pin-v2",
+            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v3",
             birefnet_ref="e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
         )
         sentinel = object()

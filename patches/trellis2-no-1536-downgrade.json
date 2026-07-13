@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "patch_id": "trellis2-strict-1536-birefnet-pin-v2",
+  "patch_id": "trellis2-strict-1536-birefnet-pin-metrics-v3",
   "revision": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
   "files": [
     {
@@ -77,6 +77,63 @@
             "            \"1024_cascade. ComfyColab did not downgrade this request.\"",
             "        )",
             "    log.info(f\"Strict cascade: {num_tokens} tokens at resolution {hr_resolution}\")"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/nodes_inference.py",
+      "before_sha256": "a9e4fc7d70f6e773b7a30bf0d82452df2f5428ef525ede5f292442a18d1a8f9f",
+      "after_sha256": "e7b9c7c704d557dcfa3f95a82d77a10801ebc81f33c81f9d4d1d12e8f1bbce4f",
+      "replacements": [
+        {
+          "before_lines": [
+            "            mesh_verts, mesh_faces, shape_slat_data, subs_data = run_shape_generation(",
+            "                model_config=model_config,",
+            "                conditioning=conditioning,",
+            "                seed=seed,",
+            "                ss_guidance_strength=ss_guidance_strength,",
+            "                ss_guidance_rescale=ss_guidance_rescale,",
+            "                ss_sampling_steps=ss_sampling_steps,",
+            "                shape_guidance_strength=shape_guidance_strength,",
+            "                shape_guidance_rescale=shape_guidance_rescale,",
+            "                shape_sampling_steps=shape_sampling_steps,",
+            "                max_num_tokens=max_tokens,",
+            "            )",
+            "",
+            "        # TRIMESH stays in internal Z-up (conversion to Y-up happens only at export)",
+            "        vertices = mesh_verts.numpy().astype(np.float32)",
+            "        faces = mesh_faces.numpy()",
+            "        mesh = Trimesh.Trimesh(vertices=vertices, faces=faces, process=False)",
+            "",
+            "        return io.NodeOutput(mesh, shape_slat_data, subs_data)"
+          ],
+          "after_lines": [
+            "            mesh_verts, mesh_faces, shape_slat_data, subs_data = run_shape_generation(",
+            "                model_config=model_config,",
+            "                conditioning=conditioning,",
+            "                seed=seed,",
+            "                ss_guidance_strength=ss_guidance_strength,",
+            "                ss_guidance_rescale=ss_guidance_rescale,",
+            "                ss_sampling_steps=ss_sampling_steps,",
+            "                shape_guidance_strength=shape_guidance_strength,",
+            "                shape_guidance_rescale=shape_guidance_rescale,",
+            "                shape_sampling_steps=shape_sampling_steps,",
+            "                max_num_tokens=max_tokens,",
+            "            )",
+            "",
+            "        actual_resolution = int(shape_slat_data['_resolution'])",
+            "        token_count = int(shape_slat_data['feats'].shape[0])",
+            "        log.info(",
+            "            f\"ComfyColab shape metrics: {token_count} tokens at resolution {actual_resolution}\"",
+            "        )",
+            "",
+            "        # TRIMESH stays in internal Z-up (conversion to Y-up happens only at export)",
+            "        vertices = mesh_verts.numpy().astype(np.float32)",
+            "        faces = mesh_faces.numpy()",
+            "        mesh = Trimesh.Trimesh(vertices=vertices, faces=faces, process=False)",
+            "",
+            "        return io.NodeOutput(mesh, shape_slat_data, subs_data)"
           ]
         }
       ]

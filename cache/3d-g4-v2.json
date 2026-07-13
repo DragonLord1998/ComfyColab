@@ -23,9 +23,10 @@
     "comfyEnv": "0.3.89"
   },
   "patches": {
-    "trellis": "trellis2-strict-1536-birefnet-pin-v2",
+    "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v3",
     "ultrashape": "ultrashape-inference-compat-v2"
   },
+  "liveValidation": null,
   "validation": {
     "baseProfile": "trellis2-g4-v1",
     "ultrashapeImports": [

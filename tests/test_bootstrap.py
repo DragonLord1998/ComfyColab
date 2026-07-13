@@ -42,6 +42,17 @@ class BootstrapRenderingTests(unittest.TestCase):
         )
         self.assertIn(remote_bootstrap.BIREFNET_MODEL_REF, birefnet_patch)
         self.assertIn("code_revision=BIREFNET_MODEL_REVISION", birefnet_patch)
+        inference = next(
+            item for item in trellis["files"] if item["path"] == "nodes/nodes_inference.py"
+        )
+        inference_patch = "\n".join(
+            line
+            for replacement in inference["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn("ComfyColab shape metrics", inference_patch)
+        self.assertIn("shape_slat_data['_resolution']", inference_patch)
+        self.assertIn("shape_slat_data['feats'].shape[0]", inference_patch)
         self.assertEqual(ultrashape["patch_id"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
         self.assertEqual(ultrashape["revision"], remote_bootstrap.ULTRASHAPE_REF)
         surface = next(

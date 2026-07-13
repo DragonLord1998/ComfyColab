@@ -3,6 +3,14 @@
 This record separates local contract tests from live G4 evidence. A local green
 suite does not prove model inference, peak VRAM, or output quality.
 
+The machine-readable release gate is [`3d-validation.json`](3d-validation.json).
+It deliberately remains `pending` until every gate below has live evidence and
+all benchmark metrics are recorded. `scripts/build_3d_cache.py` refuses to mark
+the combined environment manifest `ready` unless that JSON record is `passed`,
+matches the exact cache profile, sources, and patches, and contains evidence for
+every required gate. The ready manifest embeds the record's SHA-256, size, run
+ID, completion time, and passed-gate list for auditability.
+
 ## Pinned runtime
 
 | Component | Revision/profile |
@@ -52,6 +60,23 @@ and retain only the metrics/JSON record—not benchmark GLBs—in Git.
 `Detailed` and `Ultra` may remain wired to provisional 1024 settings only after
 the two 1024 rows pass without OOM. Until then the UI must identify them as
 experimental or use a proven lower octree setting.
+
+## Publishing the combined environment cache
+
+After the live table and workflow gates pass, update `3d-validation.json` with
+the actual metrics, one non-empty evidence reference per gate, the Colab run ID,
+completion timestamp, and `status: passed`. Then build with:
+
+```bash
+python scripts/build_3d_cache.py \
+  --validation-record docs/3d-validation.json \
+  --install-overlay
+```
+
+The builder validates the record before installing packages, creating an
+archive, or changing the cache manifest. Do not hand-edit the combined manifest
+to `ready`; the builder-generated live-validation digest is part of its release
+provenance.
 
 ## Full workflow gates
 
