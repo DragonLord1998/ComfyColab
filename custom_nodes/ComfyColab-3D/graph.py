@@ -10,7 +10,7 @@ from .presets import TrellisSettings
 FORBIDDEN_TRELLIS_NODE = "Trellis2ExportGLB"
 COMFYUI_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 TRELLIS_WRAPPER_REF = "9b878516f2dc2fd873f4f6cceadba403dd12d83e"
-TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v3"
+TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 
 

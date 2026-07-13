@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "patch_id": "trellis2-strict-1536-birefnet-pin-metrics-v3",
+  "patch_id": "trellis2-strict-1536-birefnet-pin-metrics-v4",
   "revision": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
   "files": [
     {
@@ -84,7 +84,7 @@
     {
       "path": "nodes/nodes_inference.py",
       "before_sha256": "a9e4fc7d70f6e773b7a30bf0d82452df2f5428ef525ede5f292442a18d1a8f9f",
-      "after_sha256": "e7b9c7c704d557dcfa3f95a82d77a10801ebc81f33c81f9d4d1d12e8f1bbce4f",
+      "after_sha256": "d7edd9cf23aac3a5132d89de2c1178d22ac68a4913e3607d9e45ab562e296cb5",
       "replacements": [
         {
           "before_lines": [
@@ -124,8 +124,9 @@
             "",
             "        actual_resolution = int(shape_slat_data['_resolution'])",
             "        token_count = int(shape_slat_data['feats'].shape[0])",
-            "        log.info(",
-            "            f\"ComfyColab shape metrics: {token_count} tokens at resolution {actual_resolution}\"",
+            "        print(",
+            "            f\"ComfyColab shape metrics: {token_count} tokens at resolution {actual_resolution}\",",
+            "            flush=True,",
             "        )",
             "",
             "        # TRIMESH stays in internal Z-up (conversion to Y-up happens only at export)",

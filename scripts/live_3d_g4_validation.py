@@ -404,7 +404,7 @@ def build_advanced_nodes(args: argparse.Namespace) -> dict[str, Any]:
         }},
         "9": {"class_type": "ComfyColab3DTrimeshToFile3D", "inputs": {
             "trimesh": ["8", 0], "cache_stage": "trellis",
-            "cache_key": f"live-advanced-{uuid.uuid4().hex}", "cache_mode": "Disable cache",
+            "cache_key": uuid.uuid4().hex, "cache_mode": "Disable cache",
         }},
     }
 

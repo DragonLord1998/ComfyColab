@@ -704,7 +704,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             remove_background="Auto",
             comfyui_ref="8b099de36acd81acd1afa3b5442951dc847e0a52",
             trellis_ref="9b878516f2dc2fd873f4f6cceadba403dd12d83e",
-            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v3",
+            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v4",
             birefnet_ref="e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
         )
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -739,7 +739,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             remove_background="Auto",
             comfyui_ref="8b099de36acd81acd1afa3b5442951dc847e0a52",
             trellis_ref="9b878516f2dc2fd873f4f6cceadba403dd12d83e",
-            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v3",
+            trellis_patch_id="trellis2-strict-1536-birefnet-pin-metrics-v4",
             birefnet_ref="e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
         )
         sentinel = object()

@@ -121,6 +121,13 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["3"]["inputs"]["octree_resolution"], 512)
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["3", 0])
 
+    def test_advanced_prompt_uses_hexadecimal_adapter_cache_key(self) -> None:
+        spec = self.module.CASES["advanced_trellis_workflow"]
+        prompt = self.module.build_prompt(spec, options(), "input.png", "advanced-run")
+        cache_key = prompt["9"]["inputs"]["cache_key"]
+        self.assertRegex(cache_key, r"^[0-9a-f]+$")
+        self.assertEqual(prompt["9"]["inputs"]["cache_mode"], "Disable cache")
+
     def test_object_info_proves_native_preview_and_save_compatibility(self) -> None:
         spec = self.module.CASES["trellis_512"]
         prompt = self.module.build_prompt(spec, options(), "input.png", "run-3")

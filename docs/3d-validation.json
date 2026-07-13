@@ -14,7 +14,7 @@
     "comfyEnv": "0.3.89"
   },
   "patches": {
-    "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v3",
+    "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
     "ultrashape": "ultrashape-inference-compat-v2"
   },
   "gates": {
