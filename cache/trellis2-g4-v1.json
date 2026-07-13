@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1",
+  "releaseTag": "trellis2-cache-v1",
+  "createdAt": "2026-07-13T02:48:40.338629+00:00",
+  "archive": {
+    "name": "trellis2-cache-g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1.tar.zst",
+    "bytes": 5021447444,
+    "sha256": "ce618e97c9326910490124eae19b8ce6958317726476757a71a368834be886d6",
+    "unpackedBytes": 14549442632,
+    "parts": [
+      {
+        "name": "trellis2-cache-g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1.tar.zst.part-000",
+        "bytes": 1992294400,
+        "sha256": "f47f75c2bb480daa1a36f928a7f574f31e4c8948b221f06d06446a0005e03e14"
+      },
+      {
+        "name": "trellis2-cache-g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1.tar.zst.part-001",
+        "bytes": 1992294400,
+        "sha256": "9a43b3cba2dbe1bd8c412145c5a4773aab6f353c7bd123b25a13ba168d07bd1e"
+      },
+      {
+        "name": "trellis2-cache-g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1.tar.zst.part-002",
+        "bytes": 1036858644,
+        "sha256": "aaf7979b3f85e0e30c00ee12dd6db10978e8bd13e764077e130df21fd6bbd96b"
+      }
+    ]
+  },
+  "runtime": {
+    "platform": "linux-64",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu128",
+    "torchCuda": "12.8",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "computeCapability": [12, 0],
+    "driver": "580.82.07",
+    "glibc": ["glibc", "2.35"],
+    "pixi": "pixi 0.72.2"
+  },
+  "sources": {
+    "comfy": "8b099de36acd81acd1afa3b5442951dc847e0a52",
+    "trellis": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+    "geometry": "c67199de05705642258e727fa118f412877b4ebf",
+    "comfyEnv": "0.3.89"
+  },
+  "inputs": {
+    "pixiTomlSha256": "4977680375788c2a3fda6f8b0db9ee6037c73099e2af1b87b7b59bf4514c3432",
+    "pixiLockSha256": "d7012b83f004007abc5fd75891304daa1a6a4fdd242376f705700a221554cf27",
+    "trellisConfigSha256": "969d40a5154ba4dae4ff9734e0b12922fa608c242242bb4e8a9d43af0f75a674",
+    "geometryConfigSha256": "2fb5f3f649d46da7fa2c7a5e0f9a7a74570cae120a4f8e9466c8c38b225c4a8d",
+    "installHash": "ee16059316dd3f784413fd5d5682d8723918f70de4c053501d7426cf1c25917b"
+  },
+  "validation": {
+    "trellisImports": [
+      "cumesh_vb",
+      "drtk",
+      "flash_attn",
+      "flex_gemm_ap",
+      "o_voxel_vb_ap",
+      "sageattention"
+    ],
+    "geometryImports": ["cumesh"],
+    "cudaTensorProbe": true
+  }
+}

@@ -12,6 +12,7 @@ terminal.
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
+- Experimental single-image TRELLIS.2 generation with PBR mesh and GLB export
 - On-demand model downloads with checksums and resume support
 - A public Cloudflare URL for the ComfyUI interface
 - No Google Drive and no permanent cloud storage
@@ -37,8 +38,10 @@ Start ComfyUI:
 comfycolab start
 ```
 
-The first launch takes a few minutes because ComfyUI and its Python dependencies
-are installed inside the new runtime. When it is ready, the terminal prints:
+The first launch downloads ComfyUI, its Python dependencies, and a prebuilt
+TRELLIS.2 environment into the new runtime. On the default G4, the reusable
+TRELLIS cache avoids resolving and rebuilding that environment from scratch.
+When everything is ready, the terminal prints:
 
 ```text
 ComfyUI: https://example.trycloudflare.com
@@ -74,9 +77,11 @@ left consuming compute units.
 1. The launcher creates or reuses a named Colab session.
 2. It requests the `G4` accelerator unless you configured another one.
 3. It clones tested versions of ComfyUI and ComfyUI-GGUF into `/content`.
-4. It clones this repository and links the custom node pack into ComfyUI.
-5. It starts ComfyUI and a Cloudflare quick tunnel.
-6. It prints the browser URL in your Mac terminal.
+4. On a matching G4 runtime, it restores the checksum-verified TRELLIS.2 cache;
+   otherwise it uses the normal isolated installer.
+5. It clones this repository and links the custom node pack into ComfyUI.
+6. It starts ComfyUI and a Cloudflare quick tunnel.
+7. It prints the browser URL in your Mac terminal.
 
 Cloudflare only carries the browser traffic. Model files are downloaded directly
 from Hugging Face to the Colab VM.
@@ -148,6 +153,60 @@ use the BFL FLUX Non-Commercial License and its acceptable-use requirements.
 This is the largest bundle. BFL recommends guidance 4 and 50 steps; 28 steps is
 a practical speed/quality compromise. FLUX.2 Dev uses the BFL FLUX
 Non-Commercial License.
+
+## TRELLIS.2 image-to-3D
+
+ComfyColab installs the pinned
+[`PozzettiAndrea/ComfyUI-TRELLIS2`](https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2)
+node suite in an isolated `comfy-env` environment. TRELLIS.2 is a separate 3D
+pipeline, so it does not appear under `ComfyColab / loaders` and does not return
+the usual `MODEL`, `CLIP`, and `VAE` outputs.
+
+After updating an existing runtime, start with:
+
+```bash
+comfycolab start --refresh
+```
+
+In ComfyUI, search for the `TRELLIS2` category and add **(Down)Load TRELLIS.2
+Models**. The upstream `geometry_texture.json` workflow included with the node
+shows the full path from a single input image to a PBR-textured mesh and GLB
+export.
+
+Important notes:
+
+- The first model-node execution downloads roughly 17–18 GB into temporary
+  Colab storage. Later runs in the same session reuse those files.
+- The default G4 bootstrap downloads a separate 5.02 GB prebuilt environment
+  cache in three parallel parts. This replaces the much slower dependency
+  resolution step; it does not contain model weights.
+- Start at `512` resolution. Test `1024_cascade` only after the 512 workflow is
+  stable.
+- Microsoft officially requires Linux, CUDA, and at least 24 GB VRAM. The G4's
+  96 GB is sufficient, but its Blackwell CUDA architecture is outside
+  Microsoft's officially tested A100/H100 set. All cached native extensions and
+  the ComfyUI nodes pass a live G4 import/CUDA smoke test; full model generation
+  remains experimental until the 512-to-GLB workflow is exercised end to end.
+- Microsoft's official pipeline is single-image. The selected wrapper also
+  provides an experimental `TRELLIS.2 Multi-View Image to Shape` node for up to
+  six views; that spatial-blending implementation is a wrapper extension, not an
+  official Microsoft capability claim.
+- TRELLIS.2-4B is MIT-licensed. DINOv3 conditioning has a separate upstream
+  license; the selected wrapper currently uses a public compatible mirror for
+  that encoder.
+
+Generated `.glb` files are written under `/content/ComfyUI/output` and disappear
+with the rest of the runtime unless you download them.
+
+### TRELLIS.2 environment cache
+
+The exact G4 cache profile is recorded in
+[`cache/trellis2-g4-v1.json`](cache/trellis2-g4-v1.json). It is pinned to Linux
+x86-64, Python 3.12.13, PyTorch 2.11.0 + CUDA 12.8, Blackwell compute capability
+12.0, TRELLIS.2, GeometryPack, and ComfyUI revisions. Bootstrap verifies every
+part and the combined archive before extraction, then imports all native CUDA
+modules and runs a CUDA tensor probe. Any mismatch removes the cache and falls
+back to the normal upstream installer.
 
 ## Temporary storage
 
