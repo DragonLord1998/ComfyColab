@@ -687,6 +687,35 @@ def read_log_since(path: Path, offset: int) -> tuple[str, int]:
         return "", offset
 
 
+def read_settled_log_since(
+    path: Path,
+    offset: int,
+    *,
+    require_shape_marker: bool = False,
+    timeout: float = 10.0,
+    settle_seconds: float = 1.5,
+) -> tuple[str, int]:
+    """Wait briefly for asynchronously forwarded isolated-node output."""
+
+    deadline = time.monotonic() + timeout
+    last_end = offset
+    last_change = time.monotonic()
+    text = ""
+    while True:
+        text, end = read_log_since(path, offset)
+        now = time.monotonic()
+        if end != last_end:
+            last_end = end
+            last_change = now
+        if require_shape_marker and SHAPE_METRICS.search(text):
+            return text, end
+        if now - last_change >= settle_seconds:
+            return text, end
+        if now >= deadline:
+            return text, end
+        time.sleep(0.25)
+
+
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
@@ -774,7 +803,11 @@ def run_prompt_once(
         recorder.event("queued", promptId=prompt_id)
         history = wait_prompt(api, prompt_id, args.timeout, recorder)
     runtime = time.monotonic() - started
-    log_text, _ = read_log_since(Path(args.comfy_log), log_offset)
+    log_text, _ = read_settled_log_since(
+        Path(args.comfy_log),
+        log_offset,
+        require_shape_marker=spec.kind == "trellis",
+    )
     files = changed_glbs(before, output_root)
     if not files:
         raise RuntimeError("ComfyUI completed but produced no new or changed GLB")
@@ -843,7 +876,7 @@ def run_strict_1536_default_case(
             time.sleep(1)
         else:
             raise TimeoutError(f"Strict 1536 prompt {prompt_id} did not finish within {args.timeout:.0f}s")
-    log_text, _ = read_log_since(Path(args.comfy_log), log_offset)
+    log_text, _ = read_settled_log_since(Path(args.comfy_log), log_offset)
     markers = [
         {"tokens": int(match.group("tokens")), "resolution": int(match.group("resolution"))}
         for match in SHAPE_METRICS.finditer(log_text)

@@ -6,6 +6,8 @@ import json
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -166,6 +168,24 @@ class Live3DG4ValidationTests(unittest.TestCase):
                 spec, 1.5, 2048, glb,
                 "ComfyColab shape metrics: 48000 tokens at resolution 1408",
             )
+
+    def test_log_reader_waits_for_late_isolated_node_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "comfy.log"
+            log.write_text("prompt complete\n", encoding="utf-8")
+
+            def append_marker() -> None:
+                time.sleep(0.05)
+                with log.open("a", encoding="utf-8") as stream:
+                    stream.write("[worker] ComfyColab shape metrics: 3964 tokens at resolution 512\n")
+
+            writer = threading.Thread(target=append_marker)
+            writer.start()
+            text, _ = self.module.read_settled_log_since(
+                log, 0, require_shape_marker=True, timeout=1.0, settle_seconds=0.1
+            )
+            writer.join()
+        self.assertIn("3964 tokens at resolution 512", text)
 
     def test_ultrashape_benchmark_rejects_resolution_override(self) -> None:
         spec = self.module.CASES["ultrashape_1024_run_1"]
