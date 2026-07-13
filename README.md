@@ -179,7 +179,10 @@ Important notes:
   Colab storage. Later runs in the same session reuse those files.
 - The default G4 bootstrap downloads a separate 5.02 GB prebuilt environment
   cache in three parallel parts. This replaces the much slower dependency
-  resolution step; it does not contain model weights.
+  resolution step; it does not contain model weights. Bootstrap prints the
+  aggregate percentage, rolling download speed, and ETA every five seconds.
+  A part that receives no data for 30 seconds is retried automatically up to
+  five times, resuming the verified partial download when GitHub supports it.
 - Start at `512` resolution. Test `1024_cascade` only after the 512 workflow is
   stable.
 - Microsoft officially requires Linux, CUDA, and at least 24 GB VRAM. The G4's

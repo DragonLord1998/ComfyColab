@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import errno
+import http.client
 import hashlib
 import json
 import os
@@ -11,10 +13,14 @@ import posixpath
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.error
 import urllib.request
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 from pathlib import Path, PurePosixPath
@@ -66,6 +72,7 @@ TRELLIS_CACHE = {
                 "trellis2-cache-g4-linux64-py31213-torch2110-cu128-"
                 "sm120-glibc235-v1.tar.zst.part-000"
             ),
+            "bytes": 1992294400,
             "sha256": "f47f75c2bb480daa1a36f928a7f574f31e4c8948b221f06d06446a0005e03e14",
         },
         {
@@ -73,6 +80,7 @@ TRELLIS_CACHE = {
                 "trellis2-cache-g4-linux64-py31213-torch2110-cu128-"
                 "sm120-glibc235-v1.tar.zst.part-001"
             ),
+            "bytes": 1992294400,
             "sha256": "9a43b3cba2dbe1bd8c412145c5a4773aab6f353c7bd123b25a13ba168d07bd1e",
         },
         {
@@ -80,6 +88,7 @@ TRELLIS_CACHE = {
                 "trellis2-cache-g4-linux64-py31213-torch2110-cu128-"
                 "sm120-glibc235-v1.tar.zst.part-002"
             ),
+            "bytes": 1036858644,
             "sha256": "aaf7979b3f85e0e30c00ee12dd6db10978e8bd13e764077e130df21fd6bbd96b",
         },
     ],
@@ -153,26 +162,269 @@ def trellis_cache_compatible() -> bool:
     )
 
 
-def download_cache_part(part: dict[str, str], destination: Path) -> None:
+class CacheDownloadRetryableError(RuntimeError):
+    """A cache transfer failure that is safe to retry."""
+
+
+class CacheDownloadProgress:
+    def __init__(self, parts: list[dict[str, object]], *, report_interval: float = 5.0):
+        self.totals = {str(part["name"]): int(part["bytes"]) for part in parts}
+        self.downloaded = dict.fromkeys(self.totals, 0)
+        self.report_interval = report_interval
+        self.started_at = time.monotonic()
+        self.last_report_at = self.started_at - report_interval
+        self.network_bytes = 0
+        self.samples: deque[tuple[float, int]] = deque([(self.started_at, 0)])
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.reporter: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self.reporter is not None:
+            return
+        self.report(force=True)
+        self.reporter = threading.Thread(
+            target=self._report_loop,
+            name="trellis-cache-progress",
+            daemon=True,
+        )
+        self.reporter.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.reporter is not None:
+            self.reporter.join(timeout=self.report_interval + 1)
+        self.report(force=True)
+
+    def report(self, *, force: bool = False) -> None:
+        with self.lock:
+            now = time.monotonic()
+            self._record_sample_locked(now)
+            self._report_locked(now=now, force=force)
+
+    def _report_loop(self) -> None:
+        while not self.stop_event.wait(self.report_interval):
+            self.report(force=True)
+
+    def set_downloaded(self, name: str, byte_count: int, *, force: bool = False) -> None:
+        with self.lock:
+            self.downloaded[name] = max(0, min(byte_count, self.totals[name]))
+            self._report_locked(force=force)
+
+    def advance(self, name: str, byte_count: int) -> None:
+        with self.lock:
+            self.downloaded[name] = min(
+                self.downloaded[name] + byte_count,
+                self.totals[name],
+            )
+            self.network_bytes += byte_count
+            now = time.monotonic()
+            self._record_sample_locked(now)
+            self._report_locked(now=now)
+
+    def _record_sample_locked(self, now: float) -> None:
+        self.samples.append((now, self.network_bytes))
+        while len(self.samples) > 1 and now - self.samples[0][0] > 15:
+            self.samples.popleft()
+
+    def _report_locked(self, *, now: float | None = None, force: bool = False) -> None:
+        now = time.monotonic() if now is None else now
+        if not force and now - self.last_report_at < self.report_interval:
+            return
+        total = sum(self.totals.values())
+        downloaded = sum(self.downloaded.values())
+        oldest_time, oldest_bytes = self.samples[0]
+        elapsed = now - oldest_time
+        speed = (self.network_bytes - oldest_bytes) / elapsed if elapsed > 0 else 0.0
+        remaining = max(0, total - downloaded)
+        eta = remaining / speed if speed > 0 else None
+        print(
+            "[comfycolab] TRELLIS cache download: "
+            f"{_format_bytes(downloaded)}/{_format_bytes(total)} "
+            f"({downloaded / total * 100:.1f}%) | {_format_speed(speed)} | "
+            f"ETA {_format_duration(eta)}",
+            flush=True,
+        )
+        self.last_report_at = now
+
+
+def _format_bytes(byte_count: int) -> str:
+    return f"{byte_count / 1_000_000_000:.2f} GB"
+
+
+def _format_speed(bytes_per_second: float) -> str:
+    return f"{bytes_per_second / 1_000_000:.1f} MB/s"
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "--"
+    rounded = max(0, int(seconds + 0.5))
+    minutes, seconds = divmod(rounded, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    return f"{minutes}m {seconds:02d}s"
+
+
+def _response_header(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    return headers.get(name) if headers is not None else None
+
+
+def _response_status(response: object) -> int | None:
+    status = getattr(response, "status", None)
+    if status is not None:
+        return int(status)
+    getcode = getattr(response, "getcode", None)
+    value = getcode() if callable(getcode) else None
+    return int(value) if value is not None else None
+
+
+def _retryable_http_error(error: urllib.error.HTTPError) -> bool:
+    return error.code in {408, 409, 425, 429} or 500 <= error.code <= 599
+
+
+def _retryable_os_error(error: OSError) -> bool:
+    return error.errno in {
+        errno.ECONNABORTED,
+        errno.ECONNRESET,
+        errno.EHOSTUNREACH,
+        errno.ENETDOWN,
+        errno.ENETRESET,
+        errno.ENETUNREACH,
+        errno.EPIPE,
+        errno.ETIMEDOUT,
+    }
+
+
+def download_cache_part(
+    part: dict[str, object],
+    destination: Path,
+    progress: CacheDownloadProgress | None = None,
+    *,
+    max_attempts: int = 5,
+    stall_timeout: float = 30,
+) -> None:
     expected = part["sha256"]
+    expected_size = int(part.get("bytes", 0))
+    name = str(part.get("name", destination.name))
     if destination.is_file() and sha256_file(destination) == expected:
+        if progress is not None:
+            progress.set_downloaded(name, expected_size, force=True)
         return
     partial = destination.with_suffix(destination.suffix + ".partial")
-    partial.unlink(missing_ok=True)
-    request = urllib.request.Request(
-        part["url"],
-        headers={"User-Agent": "ComfyColab-TRELLIS-cache/1"},
-    )
-    with urllib.request.urlopen(request, timeout=600) as response, partial.open("wb") as output:
-        shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
-    actual = sha256_file(partial)
-    if actual != expected:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"TRELLIS cache part checksum mismatch for {destination.name}: "
-            f"expected {expected}, got {actual}"
+    if expected_size and partial.is_file() and partial.stat().st_size > expected_size:
+        partial.unlink()
+    if progress is not None:
+        progress.set_downloaded(name, partial.stat().st_size if partial.is_file() else 0)
+
+    for attempt in range(1, max_attempts + 1):
+        offset = partial.stat().st_size if partial.is_file() else 0
+        if expected_size and offset > expected_size:
+            partial.unlink()
+            offset = 0
+            if progress is not None:
+                progress.set_downloaded(name, 0, force=True)
+        if expected_size and offset == expected_size:
+            if sha256_file(partial) == expected:
+                partial.replace(destination)
+                if progress is not None:
+                    progress.set_downloaded(name, expected_size, force=True)
+                return
+            partial.unlink()
+            offset = 0
+            if progress is not None:
+                progress.set_downloaded(name, 0, force=True)
+        headers = {
+            "Accept-Encoding": "identity",
+            "User-Agent": "ComfyColab-TRELLIS-cache/1",
+        }
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        request = urllib.request.Request(str(part["url"]), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=stall_timeout) as response:
+                status = _response_status(response)
+                mode = "ab"
+                if offset:
+                    content_range = _response_header(response, "Content-Range")
+                    if status == 206 and content_range and content_range.startswith(
+                        f"bytes {offset}-"
+                    ):
+                        pass
+                    elif status in {None, 200}:
+                        offset = 0
+                        mode = "wb"
+                        if progress is not None:
+                            progress.set_downloaded(name, 0, force=True)
+                    else:
+                        partial.unlink(missing_ok=True)
+                        if progress is not None:
+                            progress.set_downloaded(name, 0, force=True)
+                        raise CacheDownloadRetryableError(
+                            f"server rejected resume with HTTP {status}"
+                        )
+                with partial.open(mode) as output:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        if progress is not None:
+                            progress.advance(name, len(chunk))
+
+            actual_size = partial.stat().st_size
+            if expected_size and actual_size != expected_size:
+                raise CacheDownloadRetryableError(
+                    f"size mismatch: expected {expected_size}, got {actual_size}"
+                )
+            actual = sha256_file(partial)
+            if actual != expected:
+                partial.unlink(missing_ok=True)
+                if progress is not None:
+                    progress.set_downloaded(name, 0, force=True)
+                raise CacheDownloadRetryableError(
+                    f"checksum mismatch: expected {expected}, got {actual}"
+                )
+            partial.replace(destination)
+            if progress is not None:
+                progress.set_downloaded(name, expected_size or actual_size, force=True)
+            return
+        except urllib.error.HTTPError as error:
+            if not _retryable_http_error(error):
+                raise RuntimeError(
+                    f"TRELLIS cache download failed for {name}: HTTP {error.code}"
+                ) from error
+            failure: Exception = error
+        except (
+            CacheDownloadRetryableError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            socket.timeout,
+            TimeoutError,
+            ConnectionError,
+        ) as error:
+            failure = error
+        except OSError as error:
+            if not _retryable_os_error(error):
+                raise
+            failure = error
+
+        if attempt == max_attempts:
+            raise RuntimeError(
+                f"TRELLIS cache download failed for {name} after {max_attempts} "
+                f"attempts: {failure}"
+            ) from failure
+        delay = min(2 ** attempt, 16)
+        resume_at = partial.stat().st_size if partial.is_file() else 0
+        print(
+            f"[comfycolab] Retrying {name} after {failure} "
+            f"(attempt {attempt + 1}/{max_attempts}, in {delay}s, "
+            f"resume at {_format_bytes(resume_at)})...",
+            flush=True,
         )
-    partial.replace(destination)
+        time.sleep(delay)
 
 
 def trellis_workspace_metadata_valid(workspace: Path) -> bool:
@@ -302,13 +554,18 @@ def restore_trellis_cache() -> bool:
             part = dict(configured_part)
             part["url"] = f"{release_base}/{part['name']}"
             download_jobs.append((part, cache_dir / f"part-{index:03d}"))
-        with ThreadPoolExecutor(max_workers=len(download_jobs)) as executor:
-            futures = [
-                executor.submit(download_cache_part, part, destination)
-                for part, destination in download_jobs
-            ]
-            for future in futures:
-                future.result()
+        progress = CacheDownloadProgress([part for part, _ in download_jobs])
+        progress.start()
+        try:
+            with ThreadPoolExecutor(max_workers=len(download_jobs)) as executor:
+                futures = [
+                    executor.submit(download_cache_part, part, destination, progress)
+                    for part, destination in download_jobs
+                ]
+                for future in futures:
+                    future.result()
+        finally:
+            progress.stop()
         part_paths = [destination for _, destination in download_jobs]
 
         archive = cache_dir / "trellis2-cache.tar.zst"

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import io
 import json
 import re
+import socket
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -217,7 +220,38 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertEqual(len(cache["parts"]), 3)
         for part in cache["parts"]:
             self.assertRegex(part["name"], r"\.part-\d{3}$")
+            self.assertGreater(part["bytes"], 0)
             self.assertRegex(part["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_trellis_cache_progress_reports_percentage_speed_and_eta(self) -> None:
+        parts = [{"name": "part-000", "bytes": 1_000_000_000}]
+        with mock.patch.object(
+            remote_bootstrap.time,
+            "monotonic",
+            side_effect=[0.0, 10.0],
+        ), mock.patch("builtins.print") as output:
+            progress = remote_bootstrap.CacheDownloadProgress(parts, report_interval=0)
+            progress.advance("part-000", 500_000_000)
+
+        message = output.call_args.args[0]
+        self.assertIn("0.50 GB/1.00 GB (50.0%)", message)
+        self.assertIn("50.0 MB/s", message)
+        self.assertIn("ETA 0m 10s", message)
+
+    def test_trellis_cache_progress_reports_during_a_stall(self) -> None:
+        progress = remote_bootstrap.CacheDownloadProgress(
+            [{"name": "part-000", "bytes": 1_000_000_000}],
+            report_interval=0.01,
+        )
+        with mock.patch("builtins.print") as output:
+            progress.start()
+            deadline = remote_bootstrap.time.monotonic() + 0.2
+            while output.call_count < 2 and remote_bootstrap.time.monotonic() < deadline:
+                remote_bootstrap.time.sleep(0.005)
+            reports_before_stop = output.call_count
+            progress.stop()
+
+        self.assertGreaterEqual(reports_before_stop, 2)
 
     def test_trellis_cache_part_download_is_checksum_verified(self) -> None:
         payload = b"verified-cache-part"
@@ -247,8 +281,248 @@ class BootstrapRenderingTests(unittest.TestCase):
                     remote_bootstrap.download_cache_part(
                         {"url": "https://example.test/part", "sha256": "0" * 64},
                         destination,
+                        max_attempts=1,
                     )
             self.assertFalse(destination.exists())
+
+    def test_trellis_cache_part_resumes_after_stall(self) -> None:
+        class Response(io.BytesIO):
+            def __init__(self, payload: bytes, *, status: int, content_range: str | None = None):
+                super().__init__(payload)
+                self.status = status
+                self.headers = {}
+                if content_range is not None:
+                    self.headers["Content-Range"] = content_range
+
+        class StalledResponse(Response):
+            def __init__(self):
+                super().__init__(b"abc", status=200)
+                self.stalled = False
+
+            def read(self, size: int = -1) -> bytes:
+                chunk = super().read(size)
+                if chunk:
+                    return chunk
+                if not self.stalled:
+                    self.stalled = True
+                    raise socket.timeout("stalled")
+                return b""
+
+        payload = b"abcdef"
+        expected = hashlib.sha256(payload).hexdigest()
+        responses = [
+            StalledResponse(),
+            Response(b"def", status=206, content_range="bytes 3-5/6"),
+        ]
+        requests = []
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return responses.pop(0)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            side_effect=open_request,
+        ), mock.patch.object(remote_bootstrap.time, "sleep"):
+            destination = Path(directory) / "part-000"
+            remote_bootstrap.download_cache_part(
+                {
+                    "name": "part-000",
+                    "url": "https://example.test/part",
+                    "bytes": len(payload),
+                    "sha256": expected,
+                },
+                destination,
+                stall_timeout=7,
+            )
+            downloaded = destination.read_bytes()
+
+        self.assertEqual(downloaded, payload)
+        self.assertIsNone(requests[0][0].get_header("Range"))
+        self.assertEqual(requests[1][0].get_header("Range"), "bytes=3-")
+        self.assertEqual([timeout for _, timeout in requests], [7, 7])
+
+    def test_trellis_cache_checksum_failure_retries_from_zero(self) -> None:
+        payload = b"good"
+        expected = hashlib.sha256(payload).hexdigest()
+        requests = []
+
+        def open_request(request, timeout):
+            requests.append(request)
+            return io.BytesIO(b"evil" if len(requests) == 1 else payload)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            side_effect=open_request,
+        ), mock.patch.object(remote_bootstrap.time, "sleep"):
+            destination = Path(directory) / "part-000"
+            remote_bootstrap.download_cache_part(
+                {
+                    "name": "part-000",
+                    "url": "https://example.test/part",
+                    "bytes": len(payload),
+                    "sha256": expected,
+                },
+                destination,
+            )
+            downloaded = destination.read_bytes()
+
+        self.assertEqual(downloaded, payload)
+        self.assertEqual(len(requests), 2)
+        self.assertIsNone(requests[1].get_header("Range"))
+
+    def test_trellis_cache_complete_partial_is_promoted_without_network(self) -> None:
+        payload = b"complete"
+        expected = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+        ) as urlopen:
+            destination = Path(directory) / "part-000"
+            destination.with_suffix(".partial").write_bytes(payload)
+            remote_bootstrap.download_cache_part(
+                {
+                    "name": "part-000",
+                    "url": "https://example.test/part",
+                    "bytes": len(payload),
+                    "sha256": expected,
+                },
+                destination,
+            )
+            self.assertEqual(destination.read_bytes(), payload)
+        urlopen.assert_not_called()
+
+    def test_trellis_cache_restarts_when_server_ignores_range(self) -> None:
+        class Response(io.BytesIO):
+            status = 200
+            headers = {}
+
+        payload = b"abcdef"
+        expected = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            return_value=Response(payload),
+        ) as urlopen:
+            destination = Path(directory) / "part-000"
+            destination.with_suffix(".partial").write_bytes(b"abc")
+            remote_bootstrap.download_cache_part(
+                {
+                    "name": "part-000",
+                    "url": "https://example.test/part",
+                    "bytes": len(payload),
+                    "sha256": expected,
+                },
+                destination,
+            )
+            self.assertEqual(destination.read_bytes(), payload)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Range"), "bytes=3-")
+
+    def test_trellis_cache_oversized_response_retries_from_zero(self) -> None:
+        payload = b"good"
+        expected = hashlib.sha256(payload).hexdigest()
+        requests = []
+
+        def open_request(request, timeout):
+            requests.append(request)
+            return io.BytesIO(b"too-long" if len(requests) == 1 else payload)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            side_effect=open_request,
+        ), mock.patch.object(remote_bootstrap.time, "sleep"):
+            destination = Path(directory) / "part-000"
+            remote_bootstrap.download_cache_part(
+                {
+                    "name": "part-000",
+                    "url": "https://example.test/part",
+                    "bytes": len(payload),
+                    "sha256": expected,
+                },
+                destination,
+            )
+            self.assertEqual(destination.read_bytes(), payload)
+
+        self.assertEqual(len(requests), 2)
+        self.assertIsNone(requests[1].get_header("Range"))
+
+    def test_trellis_cache_permanent_http_error_does_not_retry(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://example.test/missing",
+            404,
+            "missing",
+            hdrs=None,
+            fp=None,
+        )
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                remote_bootstrap.download_cache_part(
+                    {
+                        "name": "part-000",
+                        "url": "https://example.test/missing",
+                        "bytes": 4,
+                        "sha256": "0" * 64,
+                    },
+                    Path(directory) / "part-000",
+                )
+        urlopen.assert_called_once()
+
+    def test_trellis_cache_retryable_http_error_exhausts_attempts(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://example.test/busy",
+            503,
+            "busy",
+            hdrs=None,
+            fp=None,
+        )
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ) as urlopen, mock.patch.object(remote_bootstrap.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "after 3 attempts"):
+                remote_bootstrap.download_cache_part(
+                    {
+                        "name": "part-000",
+                        "url": "https://example.test/busy",
+                        "bytes": 4,
+                        "sha256": "0" * 64,
+                    },
+                    Path(directory) / "part-000",
+                    max_attempts=3,
+                )
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(2), mock.call(4)])
+
+    def test_trellis_cache_disk_error_is_not_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            return_value=io.BytesIO(b"data"),
+        ) as urlopen, mock.patch.object(
+            remote_bootstrap.Path,
+            "open",
+            side_effect=OSError(errno.ENOSPC, "disk full"),
+        ), mock.patch.object(remote_bootstrap.time, "sleep") as sleep:
+            with self.assertRaisesRegex(OSError, "disk full"):
+                remote_bootstrap.download_cache_part(
+                    {
+                        "name": "part-000",
+                        "url": "https://example.test/part",
+                        "bytes": 4,
+                        "sha256": "0" * 64,
+                    },
+                    Path(directory) / "part-000",
+                )
+        urlopen.assert_called_once()
+        sleep.assert_not_called()
 
     def test_incompatible_runtime_skips_trellis_cache_download(self) -> None:
         with mock.patch.object(
