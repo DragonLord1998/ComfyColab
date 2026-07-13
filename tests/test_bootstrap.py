@@ -68,6 +68,25 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("normalize_scale=normalize_scale, rng=rng", rendered)
         self.assertNotIn("np.random.rand", rendered)
 
+    def test_patched_isolated_nodes_invalidate_prebuilt_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            expected = []
+            for name in ("trellis2-nodes", "geometrypack-nodes"):
+                metadata = workspace / ".pixi" / "envs" / name / ".metadata_cache.pkl"
+                metadata.parent.mkdir(parents=True)
+                metadata.write_bytes(b"stale")
+                expected.append(metadata)
+            unrelated = workspace / ".pixi" / "envs" / "other" / ".metadata_cache.pkl"
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_bytes(b"keep")
+
+            removed = remote_bootstrap.invalidate_comfyenv_metadata_cache(workspace)
+
+            self.assertEqual(removed, expected)
+            self.assertTrue(unrelated.is_file())
+            self.assertTrue(all(not path.exists() for path in expected))
+
     def test_sm120_ultrashape_validation_executes_a_cubvh_kernel(self) -> None:
         completed = mock.Mock(returncode=0)
         with mock.patch.object(remote_bootstrap.subprocess, "run", return_value=completed) as run:

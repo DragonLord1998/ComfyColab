@@ -941,6 +941,24 @@ def install_dependencies() -> str:
     return cache_profile or "source-install"
 
 
+def invalidate_comfyenv_metadata_cache(workspace: Path | None = None) -> list[Path]:
+    """Force isolated node metadata to match the patched upstream sources."""
+
+    workspace = workspace or (Path.home() / ".ce")
+    removed: list[Path] = []
+    for environment_name in ("trellis2-nodes", "geometrypack-nodes"):
+        metadata = workspace / ".pixi" / "envs" / environment_name / ".metadata_cache.pkl"
+        if metadata.is_file():
+            metadata.unlink()
+            removed.append(metadata)
+    if removed:
+        print(
+            "[comfycolab] Invalidated isolated node metadata after applying pinned patches.",
+            flush=True,
+        )
+    return removed
+
+
 def install_node_pack() -> None:
     node_packs = (
         (REPO_DIR / "custom_nodes" / "ComfyColab-ZImage", NODE_TARGET),
@@ -1266,6 +1284,7 @@ def main() -> None:
     )
     install_node_pack()
     environment_cache_profile = install_dependencies()
+    invalidate_comfyenv_metadata_cache()
 
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
