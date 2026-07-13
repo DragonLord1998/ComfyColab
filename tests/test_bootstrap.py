@@ -18,6 +18,206 @@ from comfycolab import remote_bootstrap
 
 
 class BootstrapRenderingTests(unittest.TestCase):
+    def test_patch_specs_pin_expected_upstream_revisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        trellis = json.loads(
+            (root / "patches" / "trellis2-no-1536-downgrade.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        ultrashape = json.loads(
+            (root / "patches" / "ultrashape-inference-only-imports.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(trellis["patch_id"], remote_bootstrap.TRELLIS_PATCH_ID)
+        self.assertEqual(trellis["revision"], remote_bootstrap.TRELLIS_REF)
+        birefnet = next(
+            item for item in trellis["files"] if item["path"] == "nodes/rembg/BiRefNet.py"
+        )
+        birefnet_patch = "\n".join(
+            line
+            for replacement in birefnet["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn(remote_bootstrap.BIREFNET_MODEL_REF, birefnet_patch)
+        self.assertIn("code_revision=BIREFNET_MODEL_REVISION", birefnet_patch)
+        self.assertEqual(ultrashape["patch_id"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
+        self.assertEqual(ultrashape["revision"], remote_bootstrap.ULTRASHAPE_REF)
+        surface = next(
+            item for item in ultrashape["files"]
+            if item["path"] == "ultrashape/surface_loaders.py"
+        )
+        rendered = "\n".join(
+            line
+            for replacement in surface["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn("trimesh.sample.sample_surface(mesh, num, seed=rng)", rendered)
+        self.assertIn("normalize_scale=normalize_scale, rng=rng", rendered)
+        self.assertNotIn("np.random.rand", rendered)
+
+    def test_sm120_ultrashape_validation_executes_a_cubvh_kernel(self) -> None:
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(remote_bootstrap.subprocess, "run", return_value=completed) as run:
+            remote_bootstrap.validate_ultrashape_imports(
+                Path("/cached/python"), require_sm120=True
+            )
+        command = run.call_args.args[0]
+        source = command[2]
+        self.assertIn("cubvh.cuBVH", source)
+        self.assertIn("unsigned_distance", source)
+        self.assertIn("torch.cuda.synchronize", source)
+        self.assertIn("get_device_capability() == (12, 0)", source)
+
+    def test_malformed_combined_manifest_falls_back_to_trellis_cache(self) -> None:
+        with mock.patch.object(
+            remote_bootstrap,
+            "combined_cache_specification",
+            side_effect=RuntimeError("malformed manifest"),
+        ), mock.patch.object(
+            remote_bootstrap, "restore_trellis_cache", return_value=True
+        ) as restore:
+            self.assertEqual(
+                remote_bootstrap.restore_3d_environment_cache(),
+                remote_bootstrap.TRELLIS_CACHE["profile"],
+            )
+        restore.assert_called_once_with()
+
+    def test_ready_combined_manifest_rejects_cubvh_or_comfy_env_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            cache_dir.mkdir()
+            manifest = {
+                "schema": 1,
+                "status": "ready",
+                "profile": "test",
+                "sources": {
+                    "comfy": remote_bootstrap.COMFY_REF,
+                    "trellis": remote_bootstrap.TRELLIS_REF,
+                    "geometry": remote_bootstrap.GEOMETRY_REF,
+                    "ultrashape": remote_bootstrap.ULTRASHAPE_REF,
+                    "cubvh": "wrong",
+                    "birefnet": remote_bootstrap.BIREFNET_MODEL_REF,
+                    "comfyEnv": remote_bootstrap.COMFY_ENV_VERSION,
+                },
+                "patches": {
+                    "trellis": remote_bootstrap.TRELLIS_PATCH_ID,
+                    "ultrashape": remote_bootstrap.ULTRASHAPE_PATCH_ID,
+                },
+            }
+            (cache_dir / remote_bootstrap.COMBINED_CACHE_MANIFEST).write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with mock.patch.object(remote_bootstrap, "REPO_DIR", root):
+                with self.assertRaisesRegex(RuntimeError, "does not match pinned sources"):
+                    remote_bootstrap.combined_cache_specification()
+            manifest["sources"]["cubvh"] = remote_bootstrap.ULTRASHAPE_CUBVH_REF
+            manifest["sources"]["comfyEnv"] = "0.0.0"
+            (cache_dir / remote_bootstrap.COMBINED_CACHE_MANIFEST).write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with mock.patch.object(remote_bootstrap, "REPO_DIR", root):
+                with self.assertRaisesRegex(RuntimeError, "does not match pinned sources"):
+                    remote_bootstrap.combined_cache_specification()
+
+    def test_ultrashape_overlay_reruns_all_trellis_and_cuda_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            python = home / ".ce" / ".pixi" / "envs" / "trellis2-nodes" / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("", encoding="utf-8")
+            with mock.patch.object(remote_bootstrap.Path, "home", return_value=home), mock.patch.object(
+                remote_bootstrap, "run"
+            ), mock.patch.object(remote_bootstrap, "validate_trellis_cache") as validate:
+                remote_bootstrap.install_ultrashape_overlay()
+        validate.assert_called_once_with(home / ".ce", validate_ultrashape=True)
+
+    def test_content_addressed_patch_is_strict_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repository"
+            repository.mkdir()
+            target = repository / "target.py"
+            target.write_text("original\n", encoding="utf-8")
+            before = hashlib.sha256(b"original\n").hexdigest()
+            after = hashlib.sha256(b"patched\n").hexdigest()
+            specification = Path(directory) / "patch.json"
+            specification.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "patch_id": "test-v1",
+                        "revision": "abc123",
+                        "files": [
+                            {
+                                "path": "target.py",
+                                "before_sha256": before,
+                                "after_sha256": after,
+                                "replacements": [
+                                    {
+                                        "before_lines": ["original"],
+                                        "after_lines": ["patched"],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(remote_bootstrap, "git_commit", return_value="abc123"):
+                self.assertEqual(
+                    remote_bootstrap.apply_pinned_patch(repository, specification),
+                    "test-v1",
+                )
+                self.assertEqual(target.read_text(encoding="utf-8"), "patched\n")
+                self.assertEqual(
+                    remote_bootstrap.apply_pinned_patch(repository, specification),
+                    "test-v1",
+                )
+            target.write_text("unexpected\n", encoding="utf-8")
+            with mock.patch.object(remote_bootstrap, "git_commit", return_value="abc123"):
+                with self.assertRaisesRegex(RuntimeError, "refused unexpected content"):
+                    remote_bootstrap.apply_pinned_patch(repository, specification)
+            with mock.patch.object(remote_bootstrap, "git_commit", return_value="wrong"):
+                with self.assertRaisesRegex(RuntimeError, "requires revision"):
+                    remote_bootstrap.apply_pinned_patch(repository, specification)
+
+    def test_install_node_pack_links_image_and_3d_facades(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"
+            image_source = repository / "custom_nodes" / "ComfyColab-ZImage"
+            three_d_source = repository / "custom_nodes" / "ComfyColab-3D"
+            image_source.mkdir(parents=True)
+            three_d_source.mkdir(parents=True)
+            image_target = root / "custom_nodes" / "ComfyColab-ZImage"
+            three_d_target = root / "custom_nodes" / "ComfyColab-3D"
+            image_target.mkdir(parents=True)
+            three_d_target.mkdir(parents=True)
+            with mock.patch.multiple(
+                remote_bootstrap,
+                REPO_DIR=repository,
+                NODE_TARGET=image_target,
+                NODE_3D_TARGET=three_d_target,
+            ):
+                remote_bootstrap.install_node_pack()
+            self.assertEqual(image_target.resolve(), image_source.resolve())
+            self.assertEqual(three_d_target.resolve(), three_d_source.resolve())
+
+    def test_awaiting_combined_cache_falls_back_to_trellis_profile(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with mock.patch.object(remote_bootstrap, "REPO_DIR", root):
+            self.assertIsNone(remote_bootstrap.combined_cache_specification())
+        with mock.patch.object(
+            remote_bootstrap, "combined_cache_specification", return_value=None
+        ), mock.patch.object(remote_bootstrap, "restore_trellis_cache", return_value=True):
+            self.assertEqual(
+                remote_bootstrap.restore_3d_environment_cache(),
+                remote_bootstrap.TRELLIS_CACHE["profile"],
+            )
+
     def test_working_colab_proxy_survives_cloudflare_failure(self) -> None:
         class Process:
             def __init__(self, pid: int):
@@ -46,12 +246,25 @@ class BootstrapRenderingTests(unittest.TestCase):
                 GGUF_DIR=root / "ComfyUI-GGUF",
                 TRELLIS_DIR=root / "ComfyUI-TRELLIS2",
                 GEOMETRY_DIR=root / "ComfyUI-GeometryPack",
+                ULTRASHAPE_DIR=root / "UltraShape-1.0",
                 NODE_TARGET=root / "node",
+                NODE_3D_TARGET=root / "node-3d",
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
-            ), mock.patch.object(remote_bootstrap, "install_dependencies"), mock.patch.object(
+            ), mock.patch.object(
+                remote_bootstrap,
+                "apply_pinned_patch",
+                side_effect=[
+                    remote_bootstrap.TRELLIS_PATCH_ID,
+                    remote_bootstrap.ULTRASHAPE_PATCH_ID,
+                ],
+            ), mock.patch.object(
+                remote_bootstrap,
+                "install_dependencies",
+                return_value="combined-test-cache",
+            ), mock.patch.object(
                 remote_bootstrap, "cloudflared_path", return_value=Path("/tmp/cloudflared")
             ), mock.patch.object(remote_bootstrap, "wait_for_comfy"), mock.patch.object(
                 remote_bootstrap, "wait_for_tunnel", side_effect=RuntimeError("no tunnel")
@@ -77,6 +290,10 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertIsNone(payload["cloudflareUrl"])
             self.assertEqual(payload["trellisCommit"], "abc123")
             self.assertEqual(payload["geometryCommit"], "abc123")
+            self.assertEqual(payload["ultrashapeCommit"], "abc123")
+            self.assertEqual(payload["trellisPatch"], remote_bootstrap.TRELLIS_PATCH_ID)
+            self.assertEqual(payload["ultrashapePatch"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
+            self.assertEqual(payload["environmentCacheProfile"], "combined-test-cache")
             self.assertEqual(stopped, [202])
 
     def test_failed_tunnel_start_cleans_both_managed_processes(self) -> None:
@@ -106,12 +323,25 @@ class BootstrapRenderingTests(unittest.TestCase):
                 GGUF_DIR=root / "ComfyUI-GGUF",
                 TRELLIS_DIR=root / "ComfyUI-TRELLIS2",
                 GEOMETRY_DIR=root / "ComfyUI-GeometryPack",
+                ULTRASHAPE_DIR=root / "UltraShape-1.0",
                 NODE_TARGET=root / "node",
+                NODE_3D_TARGET=root / "node-3d",
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
-            ), mock.patch.object(remote_bootstrap, "install_dependencies"), mock.patch.object(
+            ), mock.patch.object(
+                remote_bootstrap,
+                "apply_pinned_patch",
+                side_effect=[
+                    remote_bootstrap.TRELLIS_PATCH_ID,
+                    remote_bootstrap.ULTRASHAPE_PATCH_ID,
+                ],
+            ), mock.patch.object(
+                remote_bootstrap,
+                "install_dependencies",
+                return_value="combined-test-cache",
+            ), mock.patch.object(
                 remote_bootstrap, "cloudflared_path", return_value=Path("/tmp/cloudflared")
             ), mock.patch.object(remote_bootstrap, "wait_for_comfy"), mock.patch.object(
                 remote_bootstrap, "wait_for_tunnel", side_effect=RuntimeError("no tunnel")
@@ -171,6 +401,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("6ea2651e7df66d7585f6ffee804b20e92fb38b8a", source)
         self.assertIn("9b878516f2dc2fd873f4f6cceadba403dd12d83e", source)
         self.assertIn("c67199de05705642258e727fa118f412877b4ebf", source)
+        self.assertIn("5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66", source)
 
     def test_trellis_dependencies_use_isolated_upstream_installer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,7 +426,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "run",
                 side_effect=lambda command, cwd=None: commands.append((command, cwd)),
-            ):
+            ), mock.patch.object(remote_bootstrap, "install_ultrashape_overlay"):
                 remote_bootstrap.install_dependencies()
 
             self.assertEqual(commands[0][1], comfy_dir)
@@ -641,7 +872,9 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "restore_trellis_cache",
                 side_effect=RuntimeError("bad cache"),
-            ), mock.patch.object(remote_bootstrap, "run") as run:
+            ), mock.patch.object(remote_bootstrap, "run") as run, mock.patch.object(
+                remote_bootstrap, "install_ultrashape_overlay"
+            ):
                 remote_bootstrap.install_dependencies()
             self.assertFalse(install_hash.exists())
             self.assertEqual(

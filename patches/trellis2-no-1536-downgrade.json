@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "patch_id": "trellis2-strict-1536-birefnet-pin-v2",
+  "revision": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+  "files": [
+    {
+      "path": "nodes/stages.py",
+      "before_sha256": "09ade463bb944382abd45b87ce27a98b0fe39a579ab998c1563e68ecb530a4b4",
+      "after_sha256": "377013a5507454cb992f0c68327d433dc458305207b4cf94e8cdad569548136d",
+      "replacements": [
+        {
+          "before_lines": [
+            "    # Determine actual HR resolution (may reduce if too many tokens)",
+            "    hr_resolution = hr_resolution_target",
+            "    while True:",
+            "        quant_coords = torch.cat([",
+            "            hr_coords[:, :1],",
+            "            ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // 16)).int(),",
+            "        ], dim=1)",
+            "        final_coords = quant_coords.unique(dim=0)",
+            "        num_tokens = final_coords.shape[0]",
+            "        if num_tokens < max_num_tokens or hr_resolution == 1024:",
+            "            if hr_resolution != hr_resolution_target:",
+            "                log.info(f\"Resolution reduced to {hr_resolution} due to token limit\")",
+            "            break",
+            "        hr_resolution -= 128"
+          ],
+          "after_lines": [
+            "    # Preserve the requested cascade resolution. Silent fallback makes the",
+            "    # resulting asset impossible to identify and cache correctly.",
+            "    hr_resolution = hr_resolution_target",
+            "    quant_coords = torch.cat([",
+            "        hr_coords[:, :1],",
+            "        ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // 16)).int(),",
+            "    ], dim=1)",
+            "    final_coords = quant_coords.unique(dim=0)",
+            "    num_tokens = final_coords.shape[0]",
+            "    if hr_resolution_target == 1536 and num_tokens >= max_num_tokens:",
+            "        raise RuntimeError(",
+            "            \"TRELLIS.2 1536_cascade needs \"",
+            "            f\"{num_tokens} tokens, but max_tokens is {max_num_tokens}. \"",
+            "            f\"Increase max_tokens to at least {num_tokens + 1}, or manually select \"",
+            "            \"1024_cascade. ComfyColab did not downgrade this request.\"",
+            "        )",
+            "    log.info(f\"Strict cascade: {num_tokens} tokens at resolution {hr_resolution}\")"
+          ]
+        },
+        {
+          "before_lines": [
+            "    hr_resolution = hr_resolution_target",
+            "    while True:",
+            "        quant_coords = torch.cat([",
+            "            hr_coords[:, :1],",
+            "            ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // 16)).int(),",
+            "        ], dim=1)",
+            "        final_coords = quant_coords.unique(dim=0)",
+            "        num_tokens = final_coords.shape[0]",
+            "        if num_tokens < max_num_tokens or hr_resolution == 1024:",
+            "            if hr_resolution != hr_resolution_target:",
+            "                log.info(f\"Resolution reduced to {hr_resolution} due to token limit\")",
+            "            break",
+            "        hr_resolution -= 128"
+          ],
+          "after_lines": [
+            "    hr_resolution = hr_resolution_target",
+            "    quant_coords = torch.cat([",
+            "        hr_coords[:, :1],",
+            "        ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // 16)).int(),",
+            "    ], dim=1)",
+            "    final_coords = quant_coords.unique(dim=0)",
+            "    num_tokens = final_coords.shape[0]",
+            "    if hr_resolution_target == 1536 and num_tokens >= max_num_tokens:",
+            "        raise RuntimeError(",
+            "            \"TRELLIS.2 1536_cascade needs \"",
+            "            f\"{num_tokens} tokens, but max_tokens is {max_num_tokens}. \"",
+            "            f\"Increase max_tokens to at least {num_tokens + 1}, or manually select \"",
+            "            \"1024_cascade. ComfyColab did not downgrade this request.\"",
+            "        )",
+            "    log.info(f\"Strict cascade: {num_tokens} tokens at resolution {hr_resolution}\")"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/rembg/BiRefNet.py",
+      "before_sha256": "81a71e07f91c28293d01eb4cee005ea1cb24ed4b2249511b03095226aa161542",
+      "after_sha256": "65397e5dbd850ff6fe5daa5dd0ec6043b6ddcae5f0acacb677653e15775f7ae2",
+      "replacements": [
+        {
+          "before_lines": [
+            "RMBG_MODEL_REMAP = {",
+            "    \"briaai/RMBG-2.0\": \"ZhengPeng7/BiRefNet\",",
+            "}"
+          ],
+          "after_lines": [
+            "RMBG_MODEL_REMAP = {",
+            "    \"briaai/RMBG-2.0\": \"ZhengPeng7/BiRefNet\",",
+            "}",
+            "BIREFNET_MODEL_REVISION = \"e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4\""
+          ]
+        },
+        {
+          "before_lines": ["def _is_model_cached(model_name: str, cache_dir: str) -> bool:"],
+          "after_lines": ["def _is_model_cached(model_name: str, cache_dir: str, revision: str) -> bool:"]
+        },
+        {
+          "before_lines": ["        cached = try_to_load_from_cache(model_name, \"config.json\", cache_dir=cache_dir)"],
+          "after_lines": [
+            "        cached = try_to_load_from_cache(",
+            "            model_name, \"config.json\", cache_dir=cache_dir, revision=revision",
+            "        )"
+          ]
+        },
+        {
+          "before_lines": ["        local_files_only = _is_offline_mode() or _is_model_cached(actual_model_name, cache_dir)"],
+          "after_lines": [
+            "        local_files_only = _is_offline_mode() or _is_model_cached(",
+            "            actual_model_name, cache_dir, BIREFNET_MODEL_REVISION",
+            "        )"
+          ]
+        },
+        {
+          "before_lines": [
+            "        self.model = AutoModelForImageSegmentation.from_pretrained(",
+            "            actual_model_name, trust_remote_code=True, cache_dir=cache_dir,",
+            "            local_files_only=local_files_only",
+            "        )"
+          ],
+          "after_lines": [
+            "        self.model = AutoModelForImageSegmentation.from_pretrained(",
+            "            actual_model_name, trust_remote_code=True, cache_dir=cache_dir,",
+            "            revision=BIREFNET_MODEL_REVISION, code_revision=BIREFNET_MODEL_REVISION,",
+            "            local_files_only=local_files_only",
+            "        )"
+          ]
+        }
+      ]
+    }
+  ]
+}

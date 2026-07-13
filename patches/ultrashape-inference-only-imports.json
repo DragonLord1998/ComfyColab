@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "patch_id": "ultrashape-inference-compat-v2",
+  "revision": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
+  "files": [
+    {
+      "path": "ultrashape/__init__.py",
+      "before_sha256": "3572f114c322b3647a007372c95a79e22338008612d3f9e3f5bcb4ff73bb10d8",
+      "after_sha256": "9534595b04a382efd95667cb6df1f33913ed85c2a3e8cbafc54eff6ea7446a3b",
+      "replacements": [
+        {
+          "before_lines": [
+            "from .postprocessors import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier"
+          ],
+          "after_lines": []
+        }
+      ]
+    },
+    {
+      "path": "ultrashape/models/autoencoders/__init__.py",
+      "before_sha256": "a84a34f6d14a75341805656725cc1ae6adbd8ae5c65da837fe04f5c2d917402f",
+      "after_sha256": "f1c91751fa8db7ecf531189aae33a59b5b9e3e10aa0d524edf33f6857eea8cfd",
+      "replacements": [
+        {
+          "before_lines": ["from .vae_trainer import VAETrainer"],
+          "after_lines": []
+        }
+      ]
+    },
+    {
+      "path": "ultrashape/surface_loaders.py",
+      "before_sha256": "f8f75d089b8c406d0b47b0c60eca79a18d3aa65667b5bb4b796955e9fe326122",
+      "after_sha256": "5f152fe8cac996eb61d088cd229f3efb68229237f5c3d4152b5470e199c7f4da",
+      "replacements": [
+        {
+          "before_lines": ["def sample_pointcloud(mesh, num=200000):"],
+          "after_lines": ["def sample_pointcloud(mesh, num=200000, rng=None):"]
+        },
+        {
+          "before_lines": ["    points, face_idx = mesh.sample(num, return_index=True)"],
+          "after_lines": [
+            "    rng = np.random.default_rng() if rng is None else rng",
+            "    points, face_idx = trimesh.sample.sample_surface(mesh, num, seed=rng)"
+          ]
+        },
+        {
+          "before_lines": ["def load_surface(mesh, num_points=8192):"],
+          "after_lines": ["def load_surface(mesh, num_points=8192, rng=None):"]
+        },
+        {
+          "before_lines": [
+            "    surface, normal = sample_pointcloud(mesh)",
+            "",
+            "    rng = np.random.default_rng(seed=0)"
+          ],
+          "after_lines": [
+            "    rng = np.random.default_rng() if rng is None else rng",
+            "    surface, normal = sample_pointcloud(mesh, rng=rng)"
+          ]
+        },
+        {
+          "before_lines": ["def sharp_sample_pointcloud(mesh, num=16384):"],
+          "after_lines": ["def sharp_sample_pointcloud(mesh, num=16384, rng=None):"]
+        },
+        {
+          "before_lines": [
+            "    random_number = np.random.rand(num)",
+            "    w = np.random.rand(num, 1)"
+          ],
+          "after_lines": [
+            "    rng = np.random.default_rng() if rng is None else rng",
+            "    random_number = rng.random(num)",
+            "    w = rng.random((num, 1))"
+          ]
+        },
+        {
+          "before_lines": ["def load_surface_sharpegde(mesh, num_points=4096, num_sharp_points=4096, sharpedge_flag=True, normalize_scale=0.9999):"],
+          "after_lines": [
+            "def load_surface_sharpegde(mesh, num_points=4096, num_sharp_points=4096, sharpedge_flag=True, normalize_scale=0.9999, rng=None):",
+            "    rng = np.random.default_rng() if rng is None else rng"
+          ]
+        },
+        {
+          "before_lines": ["    random_surface, random_normal = sample_pointcloud(mesh, num=num)"],
+          "after_lines": ["    random_surface, random_normal = sample_pointcloud(mesh, num=num, rng=rng)"]
+        },
+        {
+          "before_lines": [
+            "        random_surface_fill, random_normal_fill = sample_pointcloud(mesh_fill, num=num_fill)",
+            "    random_sharp_surface, sharp_normal = sharp_sample_pointcloud(mesh, num=sample_num)"
+          ],
+          "after_lines": [
+            "        random_surface_fill, random_normal_fill = sample_pointcloud(mesh_fill, num=num_fill, rng=rng)",
+            "    random_sharp_surface, sharp_normal = sharp_sample_pointcloud(mesh, num=sample_num, rng=rng)"
+          ]
+        },
+        {
+          "before_lines": ["    rng = np.random.default_rng()"],
+          "after_lines": []
+        },
+        {
+          "before_lines": ["    def __call__(self, mesh_or_mesh_path, num_points=None):"],
+          "after_lines": ["    def __call__(self, mesh_or_mesh_path, num_points=None, rng=None):"]
+        },
+        {
+          "before_lines": ["        surface, mesh = load_surface(mesh, num_points=num_points)"],
+          "after_lines": ["        surface, mesh = load_surface(mesh, num_points=num_points, rng=rng)"]
+        },
+        {
+          "before_lines": [
+            "    def __call__(self, mesh_or_mesh_path, num_uniform_points=None, ",
+            "        num_sharp_points=None, normalize_scale=0.9999):"
+          ],
+          "after_lines": [
+            "    def __call__(self, mesh_or_mesh_path, num_uniform_points=None, ",
+            "        num_sharp_points=None, normalize_scale=0.9999, rng=None):"
+          ]
+        },
+        {
+          "before_lines": [
+            "        surface, mesh = load_surface_sharpegde(mesh, num_points=num_uniform_points, ",
+            "            num_sharp_points=num_sharp_points, normalize_scale=normalize_scale)"
+          ],
+          "after_lines": [
+            "        surface, mesh = load_surface_sharpegde(mesh, num_points=num_uniform_points, ",
+            "            num_sharp_points=num_sharp_points, normalize_scale=normalize_scale, rng=rng)"
+          ]
+        }
+      ]
+    }
+  ]
+}

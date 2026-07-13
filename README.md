@@ -12,7 +12,8 @@ terminal.
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
-- Experimental single-image TRELLIS.2 generation with PBR mesh and GLB export
+- Two simple 3D nodes for TRELLIS.2 generation and UltraShape refinement
+- The complete advanced TRELLIS.2 and GeometryPack node suites
 - On-demand model downloads with checksums and resume support
 - A public Cloudflare URL for the ComfyUI interface
 - No Google Drive and no permanent cloud storage
@@ -77,9 +78,10 @@ left consuming compute units.
 1. The launcher creates or reuses a named Colab session.
 2. It requests the `G4` accelerator unless you configured another one.
 3. It clones tested versions of ComfyUI and ComfyUI-GGUF into `/content`.
-4. On a matching G4 runtime, it restores the checksum-verified TRELLIS.2 cache;
-   otherwise it uses the normal isolated installer.
-5. It clones this repository and links the custom node pack into ComfyUI.
+4. On a matching G4 runtime, it restores the checksum-verified combined 3D
+   cache when available, with the existing TRELLIS.2 cache as a rollback path.
+5. It clones pinned TRELLIS.2, GeometryPack, and UltraShape sources, applies
+   revision-checked compatibility patches, and links both ComfyColab node packs.
 6. It starts ComfyUI and a Cloudflare quick tunnel.
 7. It prints the browser URL in your Mac terminal.
 
@@ -154,19 +156,91 @@ This is the largest bundle. BFL recommends guidance 4 and 50 steps; 28 steps is
 a practical speed/quality compromise. FLUX.2 Dev uses the BFL FLUX
 Non-Commercial License.
 
-## TRELLIS.2 image-to-3D
-
-ComfyColab installs the pinned
-[`PozzettiAndrea/ComfyUI-TRELLIS2`](https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2)
-node suite in an isolated `comfy-env` environment. TRELLIS.2 is a separate 3D
-pipeline, so it does not appear under `ComfyColab / loaders` and does not return
-the usual `MODEL`, `CLIP`, and `VAE` outputs.
+## Simple 3D nodes
 
 After updating an existing runtime, start with:
 
 ```bash
 comfycolab start --refresh
 ```
+
+In ComfyUI, search for:
+
+- **ComfyColab TRELLIS.2 — Image to 3D**
+- **ComfyColab UltraShape — Refine Geometry**
+
+Both output a native GLB `File3D`, so their result connects directly to
+**Preview 3D & Animation** and **Save 3D Model**. The two facades are the only
+normal-search ComfyColab 3D nodes; their adapters remain development-only.
+
+### TRELLIS.2 — Image to 3D
+
+Connect an image, choose a quality preset, and run the workflow. `1024 —
+Quality` is the default. `512 — Fast` is the safest first test. `1536 —
+Maximum` is expensive and never silently falls back to a smaller shape.
+
+When strict 1536 needs more than `max_tokens`, the node stops with the required
+token count. Raise the cap if the runtime has room, or manually choose 1024;
+ComfyColab does not rerun at 1408, 1280, 1152, or 1024 behind your back.
+
+`remove_background=Auto` uses the pinned TRELLIS BiRefNet node. `Off` supplies
+an all-foreground mask. The advanced TRELLIS inputs use `0` for their preset
+value, except `max_tokens`, whose visible default is `49152`.
+
+### UltraShape — Refine Geometry
+
+Connect a native GLB from TRELLIS (or another File3D-producing node), connect
+the original reference image, and choose `Fast`, `Detailed`, or `Ultra`.
+UltraShape runs in its own process group but deliberately reuses the cached
+`trellis2-nodes` Python/CUDA environment. Cancellation terminates that process
+group and removes incomplete outputs.
+
+The first UltraShape run downloads two temporary, revision-pinned model sets:
+
+| Artifact | Approximate size | Verification |
+| --- | ---: | --- |
+| UltraShape `ultrashape_v1.pt` | 7.37 GB | exact size + SHA-256 |
+| DINOv2 Large inference files | 1.22 GB | exact size + per-file SHA-256 |
+
+Downloads resume `.partial` files, retry stalls, and report percentage, speed,
+and ETA through ComfyUI progress. They live under
+`/content/.comfycolab/models/3d` and disappear with the Colab runtime.
+
+With `retexture=true`, the refined geometry is normalized for TRELLIS encoding,
+textured and rasterized in that same normalized space, then restored to the
+input GLB's orientation, position, and scale. With `retexture=false`, the node
+returns restored geometry with a neutral material and records it as
+geometry-only in its sidecar.
+
+`Detailed` and `Ultra` use provisional 1024 octree presets. Their release gate
+is two successful full G4 runs without OOM; current evidence is tracked in
+[`docs/3d-validation.md`](docs/3d-validation.md). Hostile local scenarios and
+failure-cleanup evidence are tracked separately in
+[`docs/3d-ultraqa.md`](docs/3d-ultraqa.md).
+
+### Temporary 3D cache
+
+Pipeline results are stored under:
+
+```text
+/content/.comfycolab/cache/3d/
+  trellis/<key>/model.glb
+  ultrashape/<key>/geometry.glb + transform.json + record.json
+  texture/<key>/model.glb
+```
+
+`Use cache` reuses validated artifacts, `Refresh this node` recomputes all
+stages owned by that facade, and `Disable cache` performs no result-cache reads
+or writes. Final GLBs are published under `/content/ComfyUI/output/3d` for the
+normal ComfyUI preview/download path.
+
+## Advanced TRELLIS.2 nodes
+
+ComfyColab installs the pinned
+[`PozzettiAndrea/ComfyUI-TRELLIS2`](https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2)
+node suite in an isolated `comfy-env` environment. TRELLIS.2 is a separate 3D
+pipeline, so it does not appear under `ComfyColab / loaders` and does not return
+the usual `MODEL`, `CLIP`, and `VAE` outputs.
 
 In ComfyUI, search for the `TRELLIS2` category and add **(Down)Load TRELLIS.2
 Models**. The upstream `geometry_texture.json` workflow included with the node
@@ -184,7 +258,7 @@ Important notes:
   A part that receives no data for 30 seconds is retried automatically up to
   five times, resuming the verified partial download when GitHub supports it.
 - Start at `512` resolution. Test `1024_cascade` only after the 512 workflow is
-  stable.
+  stable. The simple facade does not remove or replace these advanced nodes.
 - Microsoft officially requires Linux, CUDA, and at least 24 GB VRAM. The G4's
   96 GB is sufficient, but its Blackwell CUDA architecture is outside
   Microsoft's officially tested A100/H100 set. All cached native extensions and
@@ -201,15 +275,22 @@ Important notes:
 Generated `.glb` files are written under `/content/ComfyUI/output` and disappear
 with the rest of the runtime unless you download them.
 
-### TRELLIS.2 environment cache
+### 3D environment cache
 
-The exact G4 cache profile is recorded in
-[`cache/trellis2-g4-v1.json`](cache/trellis2-g4-v1.json). It is pinned to Linux
+The rollback G4 cache profile is recorded in
+[`cache/trellis2-g4-v1.json`](cache/trellis2-g4-v1.json). The combined profile
+state is recorded in [`cache/3d-g4-v2.json`](cache/3d-g4-v2.json). They are pinned to Linux
 x86-64, Python 3.12.13, PyTorch 2.11.0 + CUDA 12.8, Blackwell compute capability
-12.0, TRELLIS.2, GeometryPack, and ComfyUI revisions. Bootstrap verifies every
-part and the combined archive before extraction, then imports all native CUDA
-modules and runs a CUDA tensor probe. Any mismatch removes the cache and falls
-back to the normal upstream installer.
+12.0, exact source revisions, and exact patch IDs. Bootstrap verifies every
+archive part before extraction, imports all native CUDA modules, and runs a CUDA
+tensor probe. A combined-cache mismatch falls back to the existing TRELLIS.2
+cache plus the minimal UltraShape inference overlay; a base-cache mismatch
+falls back to the normal upstream installer.
+
+No archive or model weights are committed to Git. Release parts are created on
+the matching G4 with `scripts/build_3d_cache.py` only after the live validation
+gates pass. Third-party licensing and territory notices are summarized in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Temporary storage
 

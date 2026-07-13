@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "status": "awaiting-build",
+  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-3d-v2",
+  "releaseTag": "3d-cache-v2",
+  "fallbackProfile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1",
+  "archive": null,
+  "runtime": {
+    "platform": "linux-64",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu128",
+    "torchCuda": "12.8",
+    "computeCapability": [12, 0],
+    "environment": "trellis2-nodes"
+  },
+  "sources": {
+    "comfy": "8b099de36acd81acd1afa3b5442951dc847e0a52",
+    "trellis": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+    "geometry": "c67199de05705642258e727fa118f412877b4ebf",
+    "ultrashape": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
+    "cubvh": "757b913bfbf19ed65e3a379d159391a8e29efa0f",
+    "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
+    "comfyEnv": "0.3.89"
+  },
+  "patches": {
+    "trellis": "trellis2-strict-1536-birefnet-pin-v2",
+    "ultrashape": "ultrashape-inference-compat-v2"
+  },
+  "validation": {
+    "baseProfile": "trellis2-g4-v1",
+    "ultrashapeImports": [
+      "ultrashape.pipelines.UltraShapePipeline",
+      "ultrashape.surface_loaders.SharpEdgeSurfaceLoader"
+    ],
+    "cudaTensorProbe": true
+  }
+}

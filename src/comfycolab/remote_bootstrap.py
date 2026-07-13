@@ -43,6 +43,7 @@ CONFIG = (
 CONTENT = Path("/content")
 COMFY_DIR = CONTENT / "ComfyUI"
 REPO_DIR = CONTENT / "ComfyColab"
+ULTRASHAPE_DIR = CONTENT / "UltraShape-1.0"
 STATE_DIR = CONTENT / ".comfycolab"
 STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
@@ -51,11 +52,25 @@ GGUF_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-GGUF"
 TRELLIS_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-TRELLIS2"
 GEOMETRY_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-GeometryPack"
 NODE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-ZImage"
+NODE_3D_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-3D"
 READY_PREFIX = "COMFYCOLAB_READY="
 COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
 TRELLIS_REF = "9b878516f2dc2fd873f4f6cceadba403dd12d83e"
 GEOMETRY_REF = "c67199de05705642258e727fa118f412877b4ebf"
+ULTRASHAPE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
+TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-v2"
+ULTRASHAPE_PATCH_ID = "ultrashape-inference-compat-v2"
+COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
+ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
+BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
+COMFY_ENV_VERSION = "0.3.89"
+ULTRASHAPE_INFERENCE_REQUIREMENTS = (
+    "accelerate==1.1.1",
+    "diffusers==0.30.0",
+    "omegaconf==2.3.0",
+    "scikit-image==0.24.0",
+)
 TRELLIS_CACHE = {
     "profile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1",
     "release_base": (
@@ -139,6 +154,83 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def apply_pinned_patch(repository: Path, specification_path: Path) -> str:
+    """Apply a content-addressed patch only to its exact upstream revision."""
+    specification = json.loads(specification_path.read_text(encoding="utf-8"))
+    if specification.get("schema") != 1:
+        raise RuntimeError(f"Unsupported patch schema: {specification_path}")
+    patch_id = str(specification.get("patch_id", ""))
+    expected_revision = str(specification.get("revision", ""))
+    if not patch_id or not expected_revision:
+        raise RuntimeError(f"Incomplete patch metadata: {specification_path}")
+    actual_revision = git_commit(repository)
+    if actual_revision != expected_revision:
+        raise RuntimeError(
+            f"Patch {patch_id} requires revision {expected_revision}, got {actual_revision}."
+        )
+
+    repository_root = repository.resolve()
+    prepared: list[tuple[Path, str, int]] = []
+    states: set[str] = set()
+    files = specification.get("files")
+    if not isinstance(files, list) or not files:
+        raise RuntimeError(f"Patch {patch_id} has no file specifications.")
+    for file_specification in files:
+        if not isinstance(file_specification, dict):
+            raise RuntimeError(f"Patch {patch_id} contains malformed file metadata.")
+        relative_path = PurePosixPath(str(file_specification.get("path", "")))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RuntimeError(f"Patch {patch_id} contains an unsafe path: {relative_path}")
+        path = (repository / Path(*relative_path.parts)).resolve()
+        if path != repository_root and repository_root not in path.parents:
+            raise RuntimeError(f"Patch {patch_id} escapes its repository: {relative_path}")
+        before_sha256 = str(file_specification.get("before_sha256", ""))
+        after_sha256 = str(file_specification.get("after_sha256", ""))
+        actual_sha256 = sha256_file(path)
+        if actual_sha256 == after_sha256:
+            states.add("after")
+            continue
+        if actual_sha256 != before_sha256:
+            raise RuntimeError(
+                f"Patch {patch_id} refused unexpected content in {relative_path}: "
+                f"expected {before_sha256}, got {actual_sha256}."
+            )
+        states.add("before")
+        content = path.read_text(encoding="utf-8")
+        replacements = file_specification.get("replacements")
+        if not isinstance(replacements, list) or not replacements:
+            raise RuntimeError(f"Patch {patch_id} has no replacements for {relative_path}.")
+        for replacement in replacements:
+            before_lines = replacement.get("before_lines")
+            after_lines = replacement.get("after_lines")
+            if not isinstance(before_lines, list) or not isinstance(after_lines, list):
+                raise RuntimeError(f"Patch {patch_id} contains malformed replacement lines.")
+            before = "\n".join(str(line) for line in before_lines) + "\n"
+            after = "\n".join(str(line) for line in after_lines)
+            if after_lines:
+                after += "\n"
+            if not before or content.count(before) != 1:
+                raise RuntimeError(
+                    f"Patch {patch_id} expected one match in {relative_path}, "
+                    f"found {content.count(before) if before else 0}."
+                )
+            content = content.replace(before, after, 1)
+        if hashlib.sha256(content.encode("utf-8")).hexdigest() != after_sha256:
+            raise RuntimeError(f"Patch {patch_id} produced an unexpected {relative_path} hash.")
+        prepared.append((path, content, path.stat().st_mode))
+
+    if states == {"after"}:
+        return patch_id
+    if states != {"before"}:
+        raise RuntimeError(f"Patch {patch_id} found a partially patched repository.")
+    for path, content, mode in prepared:
+        temporary = path.with_suffix(path.suffix + ".comfycolab-patch")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.chmod(mode)
+        temporary.replace(path)
+    return patch_id
 
 
 def trellis_cache_compatible() -> bool:
@@ -427,10 +519,14 @@ def download_cache_part(
         time.sleep(delay)
 
 
-def trellis_workspace_metadata_valid(workspace: Path) -> bool:
+def trellis_workspace_metadata_valid(
+    workspace: Path,
+    cache: dict[str, object] | None = None,
+) -> bool:
+    cache = TRELLIS_CACHE if cache is None else cache
     expected_files = {
-        workspace / "pixi.toml": str(TRELLIS_CACHE["pixi_toml_sha256"]),
-        workspace / "pixi.lock": str(TRELLIS_CACHE["pixi_lock_sha256"]),
+        workspace / "pixi.toml": str(cache["pixi_toml_sha256"]),
+        workspace / "pixi.lock": str(cache["pixi_lock_sha256"]),
     }
     for path, expected in expected_files.items():
         if not path.is_file() or sha256_file(path) != expected:
@@ -439,7 +535,7 @@ def trellis_workspace_metadata_valid(workspace: Path) -> bool:
     if (
         not install_hash.is_file()
         or install_hash.read_text(encoding="utf-8").strip()
-        != TRELLIS_CACHE["install_hash"]
+        != cache["install_hash"]
     ):
         return False
     envs = workspace / ".pixi" / "envs"
@@ -524,31 +620,88 @@ def validate_restored_links(workspace: Path) -> None:
                 raise RuntimeError(f"Unsafe relative symlink in TRELLIS cache: {path}")
 
 
-def restore_trellis_cache() -> bool:
-    parts = TRELLIS_CACHE.get("parts", [])
-    archive_sha256 = TRELLIS_CACHE.get("archive_sha256", "")
+def combined_cache_specification() -> dict[str, object] | None:
+    manifest_path = REPO_DIR / "cache" / COMBINED_CACHE_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if manifest.get("schema") != 1 or manifest.get("status") != "ready":
+        return None
+    sources = manifest.get("sources", {})
+    patches = manifest.get("patches", {})
+    if not isinstance(sources, dict) or not isinstance(patches, dict):
+        raise RuntimeError("The combined 3D cache manifest has malformed source metadata.")
+    expected_sources = {
+        "comfy": COMFY_REF,
+        "trellis": TRELLIS_REF,
+        "geometry": GEOMETRY_REF,
+        "ultrashape": ULTRASHAPE_REF,
+        "cubvh": ULTRASHAPE_CUBVH_REF,
+        "birefnet": BIREFNET_MODEL_REF,
+        "comfyEnv": COMFY_ENV_VERSION,
+    }
+    expected_patches = {
+        "trellis": TRELLIS_PATCH_ID,
+        "ultrashape": ULTRASHAPE_PATCH_ID,
+    }
+    if sources != {**sources, **expected_sources} or patches != {**patches, **expected_patches}:
+        raise RuntimeError("The combined 3D cache manifest does not match pinned sources.")
+    archive = manifest.get("archive")
+    inputs = manifest.get("inputs")
+    if not isinstance(archive, dict) or not isinstance(inputs, dict):
+        raise RuntimeError("The ready combined 3D cache manifest is incomplete.")
+    parts = archive.get("parts")
+    if not isinstance(parts, list) or not parts:
+        raise RuntimeError("The ready combined 3D cache manifest has no archive parts.")
+    release_tag = str(manifest.get("releaseTag", ""))
+    if not release_tag:
+        raise RuntimeError("The ready combined 3D cache manifest has no release tag.")
+    return {
+        "profile": str(manifest["profile"]),
+        "release_base": (
+            "https://github.com/DragonLord1998/ComfyColab/releases/download/"
+            f"{release_tag}"
+        ),
+        "archive_sha256": str(archive["sha256"]),
+        "pixi_toml_sha256": str(inputs["pixiTomlSha256"]),
+        "pixi_lock_sha256": str(inputs["pixiLockSha256"]),
+        "install_hash": str(inputs["installHash"]),
+        "parts": parts,
+    }
+
+
+def restore_trellis_cache(
+    cache: dict[str, object] | None = None,
+    *,
+    label: str = "TRELLIS.2",
+    validate_ultrashape: bool = False,
+) -> bool:
+    cache = TRELLIS_CACHE if cache is None else cache
+    parts = cache.get("parts", [])
+    archive_sha256 = cache.get("archive_sha256", "")
     if not parts or not archive_sha256 or not trellis_cache_compatible():
         return False
 
     workspace = Path.home() / ".ce"
-    if trellis_workspace_metadata_valid(workspace):
+    if trellis_workspace_metadata_valid(workspace, cache):
         try:
-            validate_trellis_cache(workspace)
+            validate_trellis_cache(workspace, validate_ultrashape=validate_ultrashape)
         except Exception:
             pass
         else:
-            print("[comfycolab] Reusing the verified TRELLIS.2 environment.", flush=True)
+            print(f"[comfycolab] Reusing the verified {label} environment.", flush=True)
             return True
 
-    cache_dir = STATE_DIR / "trellis-cache" / str(TRELLIS_CACHE["profile"])
+    cache_dir = STATE_DIR / "environment-cache" / str(cache["profile"])
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         print(
-            f"[comfycolab] Restoring prebuilt TRELLIS.2 cache "
-            f"({TRELLIS_CACHE['profile']}, {len(parts)} part(s))...",
+            f"[comfycolab] Restoring prebuilt {label} cache "
+            f"({cache['profile']}, {len(parts)} part(s))...",
             flush=True,
         )
-        release_base = str(TRELLIS_CACHE["release_base"])
+        release_base = str(cache["release_base"])
         download_jobs: list[tuple[dict[str, str], Path]] = []
         for index, configured_part in enumerate(parts):
             part = dict(configured_part)
@@ -600,7 +753,7 @@ def restore_trellis_cache() -> bool:
             ]
         )
         restored_workspace = staging / ".ce"
-        if not trellis_workspace_metadata_valid(restored_workspace):
+        if not trellis_workspace_metadata_valid(restored_workspace, cache):
             raise RuntimeError("The restored TRELLIS cache metadata is incomplete.")
         validate_restored_links(restored_workspace)
 
@@ -609,7 +762,7 @@ def restore_trellis_cache() -> bool:
             workspace.replace(backup)
         try:
             restored_workspace.replace(workspace)
-            validate_trellis_cache(workspace)
+            validate_trellis_cache(workspace, validate_ultrashape=validate_ultrashape)
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
             if backup.exists():
@@ -621,11 +774,11 @@ def restore_trellis_cache() -> bool:
         raise
     else:
         shutil.rmtree(cache_dir, ignore_errors=True)
-    print("[comfycolab] Prebuilt TRELLIS.2 cache restored.", flush=True)
+    print(f"[comfycolab] Prebuilt {label} cache restored.", flush=True)
     return True
 
 
-def validate_trellis_cache(workspace: Path) -> None:
+def validate_trellis_cache(workspace: Path, *, validate_ultrashape: bool = False) -> None:
     envs = workspace / ".pixi" / "envs"
     probes = {
         "trellis2-nodes": (
@@ -658,9 +811,96 @@ def validate_trellis_cache(workspace: Path) -> None:
             text=True,
             timeout=120,
         )
+    if validate_ultrashape:
+        validate_ultrashape_imports(
+            envs / "trellis2-nodes" / "bin" / "python",
+            require_sm120=True,
+        )
 
 
-def install_dependencies() -> None:
+def validate_ultrashape_imports(python: Path, *, require_sm120: bool = False) -> None:
+    kernel_probe = ""
+    if require_sm120:
+        kernel_probe = (
+            "; assert torch.cuda.get_device_capability() == (12, 0)"
+            "; vertices = torch.tensor([[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],"
+            "[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]], dtype=torch.float32)"
+            "; faces = torch.tensor([[0,2,1],[0,3,2],[4,5,6],[4,6,7],"
+            "[0,1,5],[0,5,4],[2,3,7],[2,7,6],[0,4,7],[0,7,3],"
+            "[1,2,6],[1,6,5]], dtype=torch.int32)"
+            "; bvh = cubvh.cuBVH(vertices, faces)"
+            "; distance = bvh.unsigned_distance(torch.tensor([[0.,0.,0.]], device='cuda'))[0]"
+            "; torch.cuda.synchronize()"
+            "; assert distance.shape == (1,) and torch.isfinite(distance).all()"
+        )
+    subprocess.run(
+        [
+            str(python),
+            "-c",
+            (
+                "import torch, cubvh; "
+                "from ultrashape.pipelines import UltraShapePipeline; "
+                "from ultrashape.surface_loaders import SharpEdgeSurfaceLoader"
+                f"{kernel_probe}"
+            ),
+        ],
+        cwd=ULTRASHAPE_DIR,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
+    )
+
+
+def restore_3d_environment_cache() -> str | None:
+    try:
+        combined = combined_cache_specification()
+    except Exception as error:
+        print(
+            f"[comfycolab] Combined 3D cache manifest rejected ({error}); "
+            "falling back to the TRELLIS.2 cache.",
+            flush=True,
+        )
+        combined = None
+    if combined is not None:
+        try:
+            if restore_trellis_cache(
+                combined,
+                label="TRELLIS.2 + UltraShape",
+                validate_ultrashape=True,
+            ):
+                return str(combined["profile"])
+        except Exception as error:
+            print(
+                f"[comfycolab] Combined 3D cache restore failed ({error}); "
+                "falling back to the TRELLIS.2 cache.",
+                flush=True,
+            )
+    if restore_trellis_cache():
+        return str(TRELLIS_CACHE["profile"])
+    return None
+
+
+def install_ultrashape_overlay() -> None:
+    python = Path.home() / ".ce" / ".pixi" / "envs" / "trellis2-nodes" / "bin" / "python"
+    if not python.is_file():
+        raise RuntimeError(f"The shared trellis2-nodes Python is missing: {python}")
+    run([str(python), "-m", "pip", "install", *ULTRASHAPE_INFERENCE_REQUIREMENTS])
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            f"git+https://github.com/ashawkey/cubvh.git@{ULTRASHAPE_CUBVH_REF}",
+        ]
+    )
+    validate_trellis_cache(Path.home() / ".ce", validate_ultrashape=True)
+
+
+def install_dependencies() -> str:
     run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], cwd=COMFY_DIR)
     gguf_requirements = GGUF_DIR / "requirements.txt"
     if gguf_requirements.exists():
@@ -680,7 +920,7 @@ def install_dependencies() -> None:
         ]
     )
     try:
-        restore_trellis_cache()
+        cache_profile = restore_3d_environment_cache()
     except Exception as error:
         (Path.home() / ".ce" / "install.hash").unlink(missing_ok=True)
         print(
@@ -688,19 +928,32 @@ def install_dependencies() -> None:
             "using the normal installer.",
             flush=True,
         )
+        cache_profile = None
     run([sys.executable, "install.py"], cwd=TRELLIS_DIR)
+    combined = combined_cache_specification()
+    if combined is None or cache_profile != str(combined["profile"]):
+        print(
+            "[comfycolab] Installing the pinned UltraShape inference overlay into "
+            "the shared trellis2-nodes environment...",
+            flush=True,
+        )
+        install_ultrashape_overlay()
+    return cache_profile or "source-install"
 
 
 def install_node_pack() -> None:
-    source = REPO_DIR / "custom_nodes" / "ComfyColab-ZImage"
-    if not source.is_dir():
-        raise RuntimeError(f"Node pack is missing from repository: {source}")
-
-    if NODE_TARGET.is_symlink() or NODE_TARGET.is_file():
-        NODE_TARGET.unlink()
-    elif NODE_TARGET.exists():
-        shutil.rmtree(NODE_TARGET)
-    NODE_TARGET.symlink_to(source, target_is_directory=True)
+    node_packs = (
+        (REPO_DIR / "custom_nodes" / "ComfyColab-ZImage", NODE_TARGET),
+        (REPO_DIR / "custom_nodes" / "ComfyColab-3D", NODE_3D_TARGET),
+    )
+    for source, target in node_packs:
+        if not source.is_dir():
+            raise RuntimeError(f"Node pack is missing from repository: {source}")
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        target.symlink_to(source, target_is_directory=True)
 
 
 def cloudflared_path() -> Path:
@@ -994,12 +1247,25 @@ def main() -> None:
         GEOMETRY_REF,
     )
     clone_or_update(
+        "https://github.com/PKU-YuanGroup/UltraShape-1.0.git",
+        ULTRASHAPE_DIR,
+        ULTRASHAPE_REF,
+    )
+    clone_or_update(
         str(CONFIG["repository_url"]),
         REPO_DIR,
         str(CONFIG["repository_ref"]),
     )
+    trellis_patch = apply_pinned_patch(
+        TRELLIS_DIR,
+        REPO_DIR / "patches" / "trellis2-no-1536-downgrade.json",
+    )
+    ultrashape_patch = apply_pinned_patch(
+        ULTRASHAPE_DIR,
+        REPO_DIR / "patches" / "ultrashape-inference-only-imports.json",
+    )
     install_node_pack()
-    install_dependencies()
+    environment_cache_profile = install_dependencies()
 
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
@@ -1080,6 +1346,11 @@ def main() -> None:
             "ggufCommit": git_commit(GGUF_DIR),
             "trellisCommit": git_commit(TRELLIS_DIR),
             "geometryCommit": git_commit(GEOMETRY_DIR),
+            "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
+            "birefnetModelRef": BIREFNET_MODEL_REF,
+            "trellisPatch": trellis_patch,
+            "ultrashapePatch": ultrashape_patch,
+            "environmentCacheProfile": environment_cache_profile,
         }
         save_state(payload)
         ready = True

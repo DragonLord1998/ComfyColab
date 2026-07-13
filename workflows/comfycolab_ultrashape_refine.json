@@ -1,0 +1,124 @@
+{
+  "id": "f8a6326e-bcd4-462d-b740-f94898e49a79",
+  "revision": 0,
+  "last_node_id": 5,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [-680, 100],
+      "size": [315, 314],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
+        {"name": "upload", "type": "IMAGEUPLOAD", "widget": {"name": "upload"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1, 3]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 2,
+      "type": "ComfyColabTrellisImageTo3D",
+      "pos": [-250, -40],
+      "size": [340, 330],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1},
+        {"name": "quality", "type": "COMBO", "widget": {"name": "quality"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "exact_resolution", "type": "COMBO", "widget": {"name": "exact_resolution"}, "link": null},
+        {"name": "sampling_steps", "type": "INT", "widget": {"name": "sampling_steps"}, "link": null},
+        {"name": "target_face_count", "type": "INT", "widget": {"name": "target_face_count"}, "link": null},
+        {"name": "texture_size", "type": "INT", "widget": {"name": "texture_size"}, "link": null},
+        {"name": "max_tokens", "type": "INT", "widget": {"name": "max_tokens"}, "link": null},
+        {"name": "remove_background", "type": "COMBO", "widget": {"name": "remove_background"}, "link": null},
+        {"name": "cache_mode", "type": "COMBO", "widget": {"name": "cache_mode"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "model_3d", "type": "FILE_3D_GLB", "links": [2]}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabTrellisImageTo3D"},
+      "widgets_values": ["512 — Fast", 0, "Auto", 0, 0, 0, 49152, "Auto", "Use cache"]
+    },
+    {
+      "id": 3,
+      "type": "ComfyColabUltraShapeRefine",
+      "pos": [180, 20],
+      "size": [380, 390],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "model_3d", "type": "FILE_3D_GLB", "link": 2},
+        {"name": "reference_image", "type": "IMAGE", "link": 3},
+        {"name": "detail", "type": "COMBO", "widget": {"name": "detail"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "retexture", "type": "BOOLEAN", "widget": {"name": "retexture"}, "link": null},
+        {"name": "steps", "type": "INT", "widget": {"name": "steps"}, "link": null},
+        {"name": "num_latents", "type": "INT", "widget": {"name": "num_latents"}, "link": null},
+        {"name": "octree_resolution", "type": "INT", "widget": {"name": "octree_resolution"}, "link": null},
+        {"name": "decode_chunk_size", "type": "INT", "widget": {"name": "decode_chunk_size"}, "link": null},
+        {"name": "target_face_count", "type": "INT", "widget": {"name": "target_face_count"}, "link": null},
+        {"name": "texture_size", "type": "INT", "widget": {"name": "texture_size"}, "link": null},
+        {"name": "low_vram", "type": "COMBO", "widget": {"name": "low_vram"}, "link": null},
+        {"name": "cache_mode", "type": "COMBO", "widget": {"name": "cache_mode"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "refined_model_3d", "type": "FILE_3D_GLB", "links": [4, 5]}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabUltraShapeRefine"},
+      "widgets_values": ["Detailed", 0, true, 0, 0, 0, 0, 0, 0, "Auto", "Use cache"]
+    },
+    {
+      "id": 4,
+      "type": "Preview3D",
+      "pos": [680, -160],
+      "size": [420, 540],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "model_file", "type": "STRING,FILE_3D_GLB,FILE_3D", "link": 4}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "Preview3D"},
+      "widgets_values": [""]
+    },
+    {
+      "id": 5,
+      "type": "SaveGLB",
+      "pos": [680, 420],
+      "size": [300, 82],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "mesh", "type": "MESH,FILE_3D_GLB,FILE_3D", "link": 5},
+        {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "SaveGLB"},
+      "widgets_values": ["3d/ComfyColab_UltraShape"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 2, 0, 3, 0, "FILE_3D_GLB"],
+    [3, 1, 0, 3, 1, "IMAGE"],
+    [4, 3, 0, 4, 0, "FILE_3D_GLB"],
+    [5, 3, 0, 5, 0, "FILE_3D_GLB"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {"workflowRendererVersion": "LG"},
+  "version": 0.4
+}

@@ -1,0 +1,66 @@
+# ComfyColab 3D validation record
+
+This record separates local contract tests from live G4 evidence. A local green
+suite does not prove model inference, peak VRAM, or output quality.
+
+## Pinned runtime
+
+| Component | Revision/profile |
+| --- | --- |
+| ComfyUI | `8b099de36acd81acd1afa3b5442951dc847e0a52` |
+| ComfyUI-TRELLIS2 | `9b878516f2dc2fd873f4f6cceadba403dd12d83e` |
+| GeometryPack | `c67199de05705642258e727fa118f412877b4ebf` |
+| UltraShape source | `5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66` |
+| UltraShape model | `5aeb21a7185d39f042d02b2695802f125a6f5159` |
+| DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
+| cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
+| BiRefNet | `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4` |
+| G4 base cache | `g4-linux64-py31213-torch2110-cu128-sm120-glibc235-v1` |
+| Combined cache | See `cache/3d-g4-v2.json`; `awaiting-build` is not release-ready |
+
+## Local contract gates
+
+- [x] Exactly two public ComfyColab 3D nodes; all adapters are dev-only.
+- [x] Import does not load torch, trimesh, NumPy, Pillow, or initialize CUDA.
+- [x] TRELLIS facade expands through the pinned modular node IDs and never uses
+      `Trellis2ExportGLB`.
+- [x] File3D outputs are string-path-backed and validate as GLB before return.
+- [x] Strict 1536 raises when its token count reaches the cap and never retries
+      at a lower resolution.
+- [x] Worker cancellation kills its process group and removes partial files.
+- [x] Cache use, refresh, disable, corruption recovery, and atomic writes pass.
+- [x] Asymmetric Y-up/Z-up and normalization round trips preserve handedness,
+      orientation, position, and scale.
+- [x] `scripts/check.sh` passes: 100 tests on 2026-07-13.
+
+## Live G4 benchmark table
+
+Do not fill a row from requested settings alone. Record the actual shape
+resolution and token count emitted by the patched runtime, validate the GLB,
+and retain only the metrics/JSON record—not benchmark GLBs—in Git.
+
+| Pipeline | Actual resolution | Tokens | Runtime | Peak VRAM | GLB bytes | Faces | Texture | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| TRELLIS fast | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
+| TRELLIS quality cascade | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
+| TRELLIS maximum cascade | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
+| UltraShape 384 smoke | 384 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
+| UltraShape 512 smoke | 512 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
+| UltraShape 1024 run 1 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
+| UltraShape 1024 run 2 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
+
+`Detailed` and `Ultra` may remain wired to provisional 1024 settings only after
+the two 1024 rows pass without OOM. Until then the UI must identify them as
+experimental or use a proven lower octree setting.
+
+## Full workflow gates
+
+- [ ] Hard-surface input
+- [ ] Organic input
+- [ ] Thin input
+- [ ] Holed input
+- [ ] Transparent/background-removal input
+- [ ] Unchanged rerun proves cache hits and performs no model inference
+- [ ] Cancellation leaves no child process, partial GLB, or retained allocation
+- [ ] Existing advanced TRELLIS workflows still load and execute
+- [ ] Both facade outputs connect directly to Preview 3D and Save 3D Model
