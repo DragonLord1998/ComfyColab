@@ -30,6 +30,7 @@ REQUIRED_LIVE_GATES = (
     "trellis_512_textured_glb",
     "trellis_1024_cascade_textured_glb",
     "trellis_1536_cascade_genuine",
+    "trellis_1536_default_cap_no_downgrade",
     "combined_environment_cuda_probes",
     "ultrashape_384_refinement",
     "ultrashape_512_refinement",
@@ -79,6 +80,7 @@ def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
 def expected_validation_patches(remote_bootstrap) -> dict[str, str]:
     return {
         "trellis": remote_bootstrap.TRELLIS_PATCH_ID,
+        "trellisCategory": remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
         "ultrashape": remote_bootstrap.ULTRASHAPE_PATCH_ID,
     }
 

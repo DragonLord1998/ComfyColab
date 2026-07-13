@@ -25,6 +25,11 @@ class BootstrapRenderingTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        trellis_categories = json.loads(
+            (root / "patches" / "trellis2-advanced-categories.json").read_text(
+                encoding="utf-8"
+            )
+        )
         ultrashape = json.loads(
             (root / "patches" / "ultrashape-inference-only-imports.json").read_text(
                 encoding="utf-8"
@@ -53,6 +58,11 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("ComfyColab shape metrics", inference_patch)
         self.assertIn("shape_slat_data['_resolution']", inference_patch)
         self.assertIn("shape_slat_data['feats'].shape[0]", inference_patch)
+        self.assertEqual(
+            trellis_categories["patch_id"],
+            remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+        )
+        self.assertEqual(trellis_categories["revision"], remote_bootstrap.TRELLIS_REF)
         self.assertEqual(ultrashape["patch_id"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
         self.assertEqual(ultrashape["revision"], remote_bootstrap.ULTRASHAPE_REF)
         surface = next(
@@ -67,6 +77,64 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("trimesh.sample.sample_surface(mesh, num, seed=rng)", rendered)
         self.assertIn("normalize_scale=normalize_scale, rng=rng", rendered)
         self.assertNotIn("np.random.rand", rendered)
+
+    def test_trellis_category_patch_changes_categories_only(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        specification = json.loads(
+            (root / "patches" / "trellis2-advanced-categories.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        replacements = [
+            replacement
+            for file_specification in specification["files"]
+            for replacement in file_specification["replacements"]
+        ]
+
+        self.assertEqual(
+            {file_specification["path"] for file_specification in specification["files"]},
+            {
+                "nodes/nodes_loader.py",
+                "nodes/nodes_native_sampling.py",
+                "nodes/nodes_export.py",
+                "nodes/nodes_inference.py",
+                "nodes/nodes_unwrap.py",
+            },
+        )
+        self.assertEqual(
+            sum(replacement["occurrences"] for replacement in replacements),
+            24,
+        )
+        allowed_changes = {
+            (
+                'category="TRELLIS2",',
+                'category="TRELLIS2 / Advanced",',
+            ),
+            (
+                'category="TRELLIS2/Native",',
+                'category="TRELLIS2 / Advanced/Native",',
+            ),
+        }
+        for replacement in replacements:
+            self.assertEqual(len(replacement["before_lines"]), 1)
+            self.assertEqual(len(replacement["after_lines"]), 1)
+            self.assertIn(
+                (
+                    replacement["before_lines"][0].strip(),
+                    replacement["after_lines"][0].strip(),
+                ),
+                allowed_changes,
+            )
+
+        rendered = json.dumps(specification, sort_keys=True)
+        for protected_contract_token in (
+            "class ",
+            "schema=io.Schema",
+            "node_id=",
+            "inputs=[",
+            "outputs=[",
+        ):
+            self.assertNotIn(protected_contract_token, rendered)
 
     def test_patched_isolated_nodes_invalidate_prebuilt_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -288,6 +356,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 "apply_pinned_patch",
                 side_effect=[
                     remote_bootstrap.TRELLIS_PATCH_ID,
+                    remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
                     remote_bootstrap.ULTRASHAPE_PATCH_ID,
                 ],
             ), mock.patch.object(
@@ -322,6 +391,10 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(payload["geometryCommit"], "abc123")
             self.assertEqual(payload["ultrashapeCommit"], "abc123")
             self.assertEqual(payload["trellisPatch"], remote_bootstrap.TRELLIS_PATCH_ID)
+            self.assertEqual(
+                payload["trellisCategoryPatch"],
+                remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+            )
             self.assertEqual(payload["ultrashapePatch"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
             self.assertEqual(payload["environmentCacheProfile"], "combined-test-cache")
             self.assertEqual(stopped, [202])
@@ -365,6 +438,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 "apply_pinned_patch",
                 side_effect=[
                     remote_bootstrap.TRELLIS_PATCH_ID,
+                    remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
                     remote_bootstrap.ULTRASHAPE_PATCH_ID,
                 ],
             ), mock.patch.object(

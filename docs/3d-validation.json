@@ -15,12 +15,14 @@
   },
   "patches": {
     "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
+    "trellisCategory": "trellis2-advanced-categories-v1",
     "ultrashape": "ultrashape-inference-compat-v2"
   },
   "gates": {
     "trellis_512_textured_glb": {"status": "pending", "evidence": null},
     "trellis_1024_cascade_textured_glb": {"status": "pending", "evidence": null},
     "trellis_1536_cascade_genuine": {"status": "pending", "evidence": null},
+    "trellis_1536_default_cap_no_downgrade": {"status": "pending", "evidence": null},
     "combined_environment_cuda_probes": {"status": "pending", "evidence": null},
     "ultrashape_384_refinement": {"status": "pending", "evidence": null},
     "ultrashape_512_refinement": {"status": "pending", "evidence": null},

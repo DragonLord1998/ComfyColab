@@ -32,6 +32,7 @@ def fake_remote_bootstrap():
         BIREFNET_MODEL_REF="birefnet-ref",
         COMFY_ENV_VERSION="comfy-env-version",
         TRELLIS_PATCH_ID="trellis-patch",
+        TRELLIS_CATEGORY_PATCH_ID="trellis-category-patch",
         ULTRASHAPE_PATCH_ID="ultrashape-patch",
     )
 

@@ -74,7 +74,8 @@ CASES: dict[str, CaseSpec] = {
         require_textured=True,
     ),
     "trellis_1536_default_cap": CaseSpec(
-        "trellis_1536_default_cap", "strict1536", resolution="1536_cascade",
+        "trellis_1536_default_cap", "strict1536",
+        "trellis_1536_default_cap_no_downgrade", resolution="1536_cascade",
         actual_resolution=1536, quality="1536 — Maximum", texture_size=4096,
         require_textured=True,
     ),
@@ -716,6 +717,15 @@ def read_settled_log_since(
         time.sleep(0.25)
 
 
+def compact_log_evidence(text: str, *, tail_bytes: int = 12_000) -> str:
+    """Retain shape markers even when verbose mesh logs exceed the evidence tail."""
+
+    tail = text[-tail_bytes:]
+    markers = [match.group(0) for match in SHAPE_METRICS.finditer(text)]
+    missing = [marker for marker in markers if marker not in tail]
+    return "\n".join([*missing, tail]) if missing else tail
+
+
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
@@ -822,7 +832,7 @@ def run_prompt_once(
         "previewSaveProof": proof,
         "glb": primary,
         "resultFiles": validated,
-        "logExcerpt": log_text[-12000:],
+        "logExcerpt": compact_log_evidence(log_text),
     }
 
 

@@ -105,6 +105,7 @@ class Live3DG4ValidationTests(unittest.TestCase):
         )
         self.assertEqual(args.max_tokens, 49152)
         spec = self.module.CASES[args.case]
+        self.assertEqual(spec.gate, "trellis_1536_default_cap_no_downgrade")
         prompt = self.module.build_prompt(spec, args, "input.png", "strict-run")
         self.assertEqual(prompt["2"]["inputs"]["exact_resolution"], "1536_cascade")
         self.assertEqual(prompt["2"]["inputs"]["max_tokens"], 49152)
@@ -186,6 +187,12 @@ class Live3DG4ValidationTests(unittest.TestCase):
             )
             writer.join()
         self.assertIn("3964 tokens at resolution 512", text)
+
+    def test_log_compaction_preserves_shape_marker_before_verbose_tail(self) -> None:
+        marker = "ComfyColab shape metrics: 3964 tokens at resolution 512"
+        compacted = self.module.compact_log_evidence(marker + "\n" + ("mesh-log\n" * 5000))
+        self.assertIn(marker, compacted)
+        self.assertLess(len(compacted), 12_100)
 
     def test_ultrashape_benchmark_rejects_resolution_override(self) -> None:
         spec = self.module.CASES["ultrashape_1024_run_1"]

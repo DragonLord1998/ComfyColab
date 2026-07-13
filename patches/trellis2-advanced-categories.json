@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "patch_id": "trellis2-advanced-categories-v1",
+  "revision": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+  "files": [
+    {
+      "path": "nodes/nodes_loader.py",
+      "before_sha256": "c0a5b72b198c0c2f5940771a22b8aae59ca02efabcfce6d7a11d7aa649ebc79a",
+      "after_sha256": "13664a0fd788112c35ba3283bf73307ab2fe3d21be8c47e887af8b0ba6c4fa99",
+      "replacements": [
+        {
+          "occurrences": 1,
+          "before_lines": [
+            "            category=\"TRELLIS2\","
+          ],
+          "after_lines": [
+            "            category=\"TRELLIS2 / Advanced\","
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/nodes_native_sampling.py",
+      "before_sha256": "fa51e8e07e4ca75d3283838ad6ef3e9883d8e43c0d5ca0120e78e6a2a205d1a4",
+      "after_sha256": "91dc0db189cccf5675f87f35c405da15c0f878571c653cc69a97fafd177303b8",
+      "replacements": [
+        {
+          "occurrences": 5,
+          "before_lines": [
+            "            category=\"TRELLIS2/Native\","
+          ],
+          "after_lines": [
+            "            category=\"TRELLIS2 / Advanced/Native\","
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/nodes_export.py",
+      "before_sha256": "eb11cca56e84cf53e2b04fbf745e1c972fbb5ba1f073ebe66331877f865d3f73",
+      "after_sha256": "deb06056cc5f31b719cde75982e8ea6903ac20be8c0478db8c8787714ee5c335",
+      "replacements": [
+        {
+          "occurrences": 2,
+          "before_lines": [
+            "            category=\"TRELLIS2\","
+          ],
+          "after_lines": [
+            "            category=\"TRELLIS2 / Advanced\","
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/nodes_inference.py",
+      "before_sha256": "d7edd9cf23aac3a5132d89de2c1178d22ac68a4913e3607d9e45ab562e296cb5",
+      "after_sha256": "cadfd9c1b4ef0d891bda694d07e73b2d7480676876d64debdde31e22360f7a33",
+      "replacements": [
+        {
+          "occurrences": 10,
+          "before_lines": [
+            "            category=\"TRELLIS2\","
+          ],
+          "after_lines": [
+            "            category=\"TRELLIS2 / Advanced\","
+          ]
+        }
+      ]
+    },
+    {
+      "path": "nodes/nodes_unwrap.py",
+      "before_sha256": "d7bc1bbfb2af83e5e846fdfe357c7c15c9ae0a900b75f328507ca0f58d218f94",
+      "after_sha256": "9b320ee5cc49e6ffb16439451d8954a6a2eb9f0a591e1fd418ecc7b1d09f5b51",
+      "replacements": [
+        {
+          "occurrences": 6,
+          "before_lines": [
+            "            category=\"TRELLIS2\","
+          ],
+          "after_lines": [
+            "            category=\"TRELLIS2 / Advanced\","
+          ]
+        }
+      ]
+    }
+  ]
+}

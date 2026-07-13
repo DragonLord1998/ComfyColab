@@ -60,6 +60,7 @@ TRELLIS_REF = "9b878516f2dc2fd873f4f6cceadba403dd12d83e"
 GEOMETRY_REF = "c67199de05705642258e727fa118f412877b4ebf"
 ULTRASHAPE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
 TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
+TRELLIS_CATEGORY_PATCH_ID = "trellis2-advanced-categories-v1"
 ULTRASHAPE_PATCH_ID = "ultrashape-inference-compat-v2"
 COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
@@ -207,16 +208,20 @@ def apply_pinned_patch(repository: Path, specification_path: Path) -> str:
             after_lines = replacement.get("after_lines")
             if not isinstance(before_lines, list) or not isinstance(after_lines, list):
                 raise RuntimeError(f"Patch {patch_id} contains malformed replacement lines.")
+            occurrences = replacement.get("occurrences", 1)
+            if not isinstance(occurrences, int) or isinstance(occurrences, bool) or occurrences < 1:
+                raise RuntimeError(f"Patch {patch_id} contains an invalid occurrence count.")
             before = "\n".join(str(line) for line in before_lines) + "\n"
             after = "\n".join(str(line) for line in after_lines)
             if after_lines:
                 after += "\n"
-            if not before or content.count(before) != 1:
+            actual_occurrences = content.count(before) if before else 0
+            if not before or actual_occurrences != occurrences:
                 raise RuntimeError(
-                    f"Patch {patch_id} expected one match in {relative_path}, "
-                    f"found {content.count(before) if before else 0}."
+                    f"Patch {patch_id} expected {occurrences} match(es) in {relative_path}, "
+                    f"found {actual_occurrences}."
                 )
-            content = content.replace(before, after, 1)
+            content = content.replace(before, after, occurrences)
         if hashlib.sha256(content.encode("utf-8")).hexdigest() != after_sha256:
             raise RuntimeError(f"Patch {patch_id} produced an unexpected {relative_path} hash.")
         prepared.append((path, content, path.stat().st_mode))
@@ -1278,6 +1283,10 @@ def main() -> None:
         TRELLIS_DIR,
         REPO_DIR / "patches" / "trellis2-no-1536-downgrade.json",
     )
+    trellis_category_patch = apply_pinned_patch(
+        TRELLIS_DIR,
+        REPO_DIR / "patches" / "trellis2-advanced-categories.json",
+    )
     ultrashape_patch = apply_pinned_patch(
         ULTRASHAPE_DIR,
         REPO_DIR / "patches" / "ultrashape-inference-only-imports.json",
@@ -1368,6 +1377,7 @@ def main() -> None:
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
             "birefnetModelRef": BIREFNET_MODEL_REF,
             "trellisPatch": trellis_patch,
+            "trellisCategoryPatch": trellis_category_patch,
             "ultrashapePatch": ultrashape_patch,
             "environmentCacheProfile": environment_cache_profile,
         }
