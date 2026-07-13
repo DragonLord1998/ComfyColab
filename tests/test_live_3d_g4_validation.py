@@ -97,6 +97,16 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
         self.assertIn("run-1-trellis_512", prompt["91"]["inputs"]["filename_prefix"])
 
+    def test_cli_keeps_public_token_default_and_stages_strict_1536_separately(self) -> None:
+        args = self.module.parser().parse_args(
+            ["run", "--case", "trellis_1536_default_cap", "--image", "/content/input.png"]
+        )
+        self.assertEqual(args.max_tokens, 49152)
+        spec = self.module.CASES[args.case]
+        prompt = self.module.build_prompt(spec, args, "input.png", "strict-run")
+        self.assertEqual(prompt["2"]["inputs"]["exact_resolution"], "1536_cascade")
+        self.assertEqual(prompt["2"]["inputs"]["max_tokens"], 49152)
+
     def test_ultrashape_prompt_uses_native_file3d_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "input.glb"
@@ -111,6 +121,30 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["3"]["inputs"]["octree_resolution"], 512)
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["3", 0])
 
+    def test_object_info_proves_native_preview_and_save_compatibility(self) -> None:
+        spec = self.module.CASES["trellis_512"]
+        prompt = self.module.build_prompt(spec, options(), "input.png", "run-3")
+        info = {
+            node["class_type"]: {"output": []}
+            for node in prompt.values()
+        }
+        info["ComfyColabTrellisImageTo3D"]["output"] = ["FILE_3D_GLB"]
+        info["Preview3D"]["input"] = {
+            "required": {"model_file": ["STRING,FILE_3D_GLB,FILE_3D", {}]}
+        }
+        info["SaveGLB"]["input"] = {
+            "required": {"mesh": ["MESH,FILE_3D_GLB,FILE_3D", {}]}
+        }
+        api = mock.Mock()
+        api.get.return_value = info
+        proof = self.module.check_object_info(api, prompt, "2")
+        self.assertEqual(proof["outputType"], "FILE_3D_GLB")
+        self.assertEqual(proof["previewNode"], "90")
+        self.assertEqual(proof["saveNode"], "91")
+        info["Preview3D"]["input"]["required"]["model_file"][0] = "STRING"
+        with self.assertRaisesRegex(RuntimeError, "does not accept"):
+            self.module.check_object_info(api, prompt, "2")
+
     def test_shape_metrics_require_actual_resolution_and_reject_downgrade(self) -> None:
         spec = self.module.CASES["trellis_1536_cascade"]
         glb = {"bytes": 123, "faces": 45}
@@ -124,6 +158,18 @@ class Live3DG4ValidationTests(unittest.TestCase):
             self.module.benchmark_from(
                 spec, 1.5, 2048, glb,
                 "ComfyColab shape metrics: 48000 tokens at resolution 1408",
+            )
+
+    def test_ultrashape_benchmark_rejects_resolution_override(self) -> None:
+        spec = self.module.CASES["ultrashape_1024_run_1"]
+        with self.assertRaisesRegex(RuntimeError, "requires octree resolution 1024"):
+            self.module.benchmark_from(
+                spec,
+                1.5,
+                2048,
+                {"bytes": 123, "faces": 45},
+                "",
+                requested_resolution=512,
             )
 
     def test_glb_inspection_requires_embedded_material_texture_and_uv(self) -> None:

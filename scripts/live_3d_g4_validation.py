@@ -73,6 +73,11 @@ CASES: dict[str, CaseSpec] = {
         "trellis_1536_cascade", "1536_cascade", 1536, "1536 — Maximum", 4096,
         require_textured=True,
     ),
+    "trellis_1536_default_cap": CaseSpec(
+        "trellis_1536_default_cap", "strict1536", resolution="1536_cascade",
+        actual_resolution=1536, quality="1536 — Maximum", texture_size=4096,
+        require_textured=True,
+    ),
     "ultrashape_384": CaseSpec(
         "ultrashape_384", "ultrashape", "ultrashape_384_refinement",
         "ultrashape_384", actual_resolution=384, detail="Fast", octree_resolution=384,
@@ -227,7 +232,7 @@ class VramSampler:
     def sample() -> int:
         try:
             output = subprocess.check_output(
-                ["nvidia-smi", "--query-compute-apps=used_memory", "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
                 text=True,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
@@ -330,7 +335,7 @@ def build_prompt(
     cache_mode = cache_mode or args.cache_mode
     prompt: dict[str, Any] = {"1": {"class_type": "LoadImage", "inputs": {"image": image_name}}}
     output_node: str
-    if spec.kind in {"trellis", "cache"}:
+    if spec.kind in {"trellis", "cache", "strict1536"}:
         prompt["2"] = {
             "class_type": "ComfyColabTrellisImageTo3D",
             "inputs": trellis_inputs(spec, "1", args, cache_mode),
@@ -534,6 +539,51 @@ def _parse_glb(path: Path) -> tuple[dict[str, Any], bytes]:
     return document, binary
 
 
+_COMPONENTS = {
+    5120: ("b", 1),
+    5121: ("B", 1),
+    5122: ("h", 2),
+    5123: ("H", 2),
+    5125: ("I", 4),
+    5126: ("f", 4),
+}
+_WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+
+
+def iter_accessor(
+    document: dict[str, Any], binary: bytes, accessor_index: int
+) -> tuple[int, Iterable[tuple[Any, ...]]]:
+    accessors = document.get("accessors") or []
+    views = document.get("bufferViews") or []
+    if not 0 <= accessor_index < len(accessors):
+        raise ValueError(f"GLB accessor {accessor_index} is invalid")
+    accessor = accessors[accessor_index]
+    view_index = accessor.get("bufferView")
+    if not isinstance(view_index, int) or not 0 <= view_index < len(views):
+        raise ValueError(f"GLB accessor {accessor_index} has no embedded buffer view")
+    view = views[view_index]
+    if int(view.get("buffer", 0)) != 0:
+        raise ValueError("GLB references an external mesh buffer")
+    component = _COMPONENTS.get(int(accessor.get("componentType", 0)))
+    width = _WIDTHS.get(str(accessor.get("type", "")))
+    count = int(accessor.get("count", 0))
+    if component is None or width is None or count <= 0:
+        raise ValueError(f"GLB accessor {accessor_index} has an unsupported representation")
+    format_code, component_bytes = component
+    packed_bytes = component_bytes * width
+    stride = int(view.get("byteStride", packed_bytes))
+    if stride < packed_bytes:
+        raise ValueError(f"GLB accessor {accessor_index} has an invalid stride")
+    view_start = int(view.get("byteOffset", 0))
+    view_end = view_start + int(view.get("byteLength", 0))
+    offset = view_start + int(accessor.get("byteOffset", 0))
+    final_end = offset + (count - 1) * stride + packed_bytes
+    if offset < 0 or final_end > min(view_end, len(binary)):
+        raise ValueError(f"GLB accessor {accessor_index} exceeds its embedded buffer")
+    unpack = struct.Struct("<" + format_code * width).unpack_from
+    return count, (unpack(binary, offset + item * stride) for item in range(count))
+
+
 def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
     document, binary = _parse_glb(path)
     accessors = document.get("accessors") or []
@@ -557,6 +607,21 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
             index_count = int(index_accessor.get("count", 0))
             if vertex_count <= 0 or index_count <= 0 or index_count % 3:
                 raise ValueError("GLB primitive has invalid vertex/index counts")
+            actual_vertex_count, position_rows = iter_accessor(document, binary, position)
+            if actual_vertex_count != vertex_count or not all(
+                isinstance(value, (int, float)) and float("-inf") < float(value) < float("inf")
+                for row in position_rows for value in row
+            ):
+                raise ValueError("GLB primitive has non-finite vertices")
+            actual_index_count, index_rows = iter_accessor(document, binary, indices)
+            index_values = [int(row[0]) for row in index_rows]
+            if (
+                actual_index_count != index_count
+                or not index_values
+                or min(index_values) < 0
+                or max(index_values) >= vertex_count
+            ):
+                raise ValueError("GLB primitive has out-of-range triangle indices")
             vertices += vertex_count
             faces += index_count // 3
             if require_textured:
@@ -566,6 +631,12 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
                     raise ValueError("Textured GLB primitive has no UV accessor")
                 if int(accessors[uv].get("count", 0)) != vertex_count:
                     raise ValueError("Textured GLB UV count does not match vertices")
+                uv_count, uv_rows = iter_accessor(document, binary, uv)
+                if uv_count != vertex_count or not all(
+                    isinstance(value, (int, float)) and float("-inf") < float(value) < float("inf")
+                    for row in uv_rows for value in row
+                ):
+                    raise ValueError("Textured GLB has invalid UV coordinates")
                 if not isinstance(material, int) or not 0 <= material < len(materials):
                     raise ValueError("Textured GLB primitive has no material")
                 texture = (materials[material].get("pbrMetallicRoughness") or {}).get("baseColorTexture")
@@ -576,7 +647,17 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
                 if not isinstance(image_index, int) or not 0 <= image_index < len(images):
                     raise ValueError("Textured GLB texture has no image")
                 image = images[image_index]
-                if "bufferView" not in image and not str(image.get("uri", "")).startswith("data:"):
+                image_view = image.get("bufferView")
+                if image_view is not None:
+                    views = document.get("bufferViews") or []
+                    if not isinstance(image_view, int) or not 0 <= image_view < len(views):
+                        raise ValueError("Textured GLB image has an invalid buffer view")
+                    view = views[image_view]
+                    start = int(view.get("byteOffset", 0))
+                    length = int(view.get("byteLength", 0))
+                    if int(view.get("buffer", 0)) != 0 or start < 0 or length <= 0 or start + length > len(binary):
+                        raise ValueError("Textured GLB embedded image exceeds its buffer")
+                elif not str(image.get("uri", "")).startswith("data:"):
                     raise ValueError("Textured GLB image is not embedded")
     if not primitives or not binary:
         raise ValueError("GLB has no embedded mesh data")
@@ -607,7 +688,7 @@ def read_log_since(path: Path, offset: int) -> tuple[str, int]:
 
 
 def source_node_for(spec: CaseSpec) -> str:
-    if spec.kind in {"trellis", "cache"}:
+    if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
     if spec.kind in {"ultrashape", "full", "cancel"}:
         return "3"
@@ -629,9 +710,16 @@ def benchmark_from(
     peak_vram: int,
     glb: dict[str, Any],
     log_text: str,
+    *,
+    requested_resolution: int | None = None,
+    texture_size: int | None = None,
 ) -> dict[str, Any] | None:
     if not spec.benchmark:
         return None
+    if runtime <= 0 or peak_vram <= 0 or int(glb.get("bytes", 0)) <= 0 or int(glb.get("faces", 0)) <= 0:
+        raise RuntimeError(
+            "Benchmark metrics are incomplete; runtime, peak VRAM, GLB bytes, and faces must be positive"
+        )
     matches = list(SHAPE_METRICS.finditer(log_text))
     if spec.kind == "trellis":
         if not matches:
@@ -644,8 +732,12 @@ def benchmark_from(
                 f"TRELLIS requested {spec.actual_resolution} but actually ran {actual_resolution}; silent downgrade rejected"
             )
     else:
-        actual_resolution = spec.actual_resolution
+        actual_resolution = requested_resolution or spec.actual_resolution
         tokens = None
+        if actual_resolution != spec.actual_resolution:
+            raise RuntimeError(
+                f"{spec.name} requires octree resolution {spec.actual_resolution}, got {actual_resolution}"
+            )
     benchmark = {
         "status": "passed",
         "actualResolution": actual_resolution,
@@ -656,7 +748,7 @@ def benchmark_from(
         "glbValidated": True,
     }
     if spec.kind == "trellis":
-        benchmark.update(tokens=tokens, textureSize=spec.texture_size)
+        benchmark.update(tokens=tokens, textureSize=texture_size or spec.texture_size)
     return benchmark
 
 
@@ -723,15 +815,135 @@ def run_cache_case(
     }
 
 
+def run_strict_1536_default_case(
+    spec: CaseSpec, args: argparse.Namespace, run_id: str, image_name: str, recorder: Recorder
+) -> dict[str, Any]:
+    """Prove the public default cap either runs at 1536 or fails without downgrade."""
+
+    strict_args = argparse.Namespace(**{**vars(args), "max_tokens": 49152})
+    api = ApiClient(args.base_url)
+    prompt = build_prompt(spec, strict_args, image_name, run_id, cache_mode="Disable cache")
+    proof = check_object_info(api, prompt, source_node_for(spec))
+    output_root = Path(args.comfy_root) / "output"
+    before = output_snapshot(output_root)
+    log_offset = Path(args.comfy_log).stat().st_size if Path(args.comfy_log).exists() else 0
+    started = time.monotonic()
+    with VramSampler(args.vram_interval) as sampler:
+        prompt_id = queue_prompt(api, prompt, f"comfycolab-live3d-{run_id}-strict-1536")
+        recorder.event("queued", promptId=prompt_id, maxTokens=49152)
+        deadline = time.monotonic() + args.timeout
+        entry = None
+        failure = None
+        while time.monotonic() < deadline:
+            entry = history_entry(api.get(f"/history/{prompt_id}"), prompt_id)
+            if entry is not None:
+                failure = history_failure(entry)
+                if failure or (entry.get("status") or {}).get("completed") is True:
+                    break
+            time.sleep(1)
+        else:
+            raise TimeoutError(f"Strict 1536 prompt {prompt_id} did not finish within {args.timeout:.0f}s")
+    log_text, _ = read_log_since(Path(args.comfy_log), log_offset)
+    markers = [
+        {"tokens": int(match.group("tokens")), "resolution": int(match.group("resolution"))}
+        for match in SHAPE_METRICS.finditer(log_text)
+    ]
+    downgraded = [marker for marker in markers if marker["resolution"] < 1536]
+    if downgraded:
+        raise RuntimeError(f"Default-cap 1536 silently downgraded: {downgraded}")
+    runtime = time.monotonic() - started
+    if failure:
+        combined_error = failure + "\n" + log_text
+        if "Increase max_tokens" not in combined_error or "manually select 1024" not in combined_error:
+            raise RuntimeError(
+                "Default-cap 1536 failed without the required actionable max_tokens/1024 guidance: "
+                + failure
+            )
+        if changed_glbs(before, output_root):
+            raise RuntimeError("Failed strict 1536 run left a completed GLB behind")
+        return {
+            "promptId": prompt_id,
+            "runtimeSeconds": round(runtime, 3),
+            "peakVramBytes": sampler.peak_bytes,
+            "strictDefaultCapProof": {
+                "maxTokens": 49152,
+                "outcome": "actionable-error",
+                "silentDowngrade": False,
+                "observedShapeMetrics": markers,
+                "error": failure,
+            },
+        }
+    files = changed_glbs(before, output_root)
+    if not files:
+        raise RuntimeError("Successful strict 1536 run produced no GLB")
+    validated = [inspect_glb(path, require_textured=True) for path in files]
+    marker = markers[-1] if markers else None
+    if not marker or marker["resolution"] != 1536:
+        raise RuntimeError("Successful strict 1536 run did not emit a genuine 1536 shape marker")
+    proof.update(historyCompleted=True, saveArtifactValidated=True)
+    return {
+        "promptId": prompt_id,
+        "runtimeSeconds": round(runtime, 3),
+        "peakVramBytes": sampler.peak_bytes,
+        "previewSaveProof": proof,
+        "glb": max(validated, key=lambda item: item["bytes"]),
+        "resultFiles": validated,
+        "strictDefaultCapProof": {
+            "maxTokens": 49152,
+            "outcome": "genuine-1536",
+            "silentDowngrade": False,
+            "observedShapeMetrics": markers,
+        },
+    }
+
+
 def run_probe_case(args: argparse.Namespace) -> dict[str, Any]:
     python = Path(args.trellis_python)
     if not python.is_file():
         raise FileNotFoundError(f"TRELLIS interpreter is missing: {python}")
+    environment = dict(os.environ)
+    repo_src = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = repo_src + (
+        os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
+    )
+    regression = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "from comfycolab.remote_bootstrap import validate_trellis_cache; "
+                "validate_trellis_cache(Path.home() / '.ce', validate_ultrashape=True)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=args.timeout,
+    )
+    if regression.returncode:
+        raise RuntimeError(
+            "Pinned TRELLIS/GeometryPack/UltraShape regression probes failed: "
+            f"{regression.stdout}\n{regression.stderr}"
+        )
     code = """
 import json, torch
 import cubvh
 from ultrashape.pipelines import UltraShapePipeline
 from ultrashape.surface_loaders import SharpEdgeSurfaceLoader
+vertices = torch.tensor([
+  [-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],
+  [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1],
+], dtype=torch.float32)
+faces = torch.tensor([
+  [0,2,1], [0,3,2], [4,5,6], [4,6,7], [0,1,5], [0,5,4],
+  [2,3,7], [2,7,6], [0,4,7], [0,7,3], [1,2,6], [1,6,5],
+], dtype=torch.int32)
+bvh = cubvh.cuBVH(vertices, faces)
+distance = bvh.unsigned_distance(torch.tensor([[0.,0.,0.]], device='cuda'))[0]
+torch.cuda.synchronize()
+if distance.shape != (1,) or not torch.isfinite(distance).all():
+    raise RuntimeError('cubvh SM120 distance probe returned an invalid value')
 payload = {
   'cuda': torch.cuda.is_available(),
   'device': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
@@ -740,12 +952,12 @@ payload = {
   'cubvh': getattr(cubvh, '__file__', None),
   'ultrashapePipeline': UltraShapePipeline.__name__,
   'surfaceLoader': SharpEdgeSurfaceLoader.__name__,
+  'cubvhDistanceKernel': True,
 }
 if not payload['cuda'] or payload['capability'] != [12, 0]:
     raise RuntimeError(payload)
 print(json.dumps(payload, sort_keys=True))
 """
-    environment = dict(os.environ)
     source = str(Path(args.ultrashape_source))
     environment["PYTHONPATH"] = source + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
     result = subprocess.run(
@@ -756,7 +968,12 @@ print(json.dumps(payload, sort_keys=True))
     lines = [line for line in result.stdout.splitlines() if line.strip().startswith("{")]
     if not lines:
         raise RuntimeError(f"Combined environment probe returned no JSON: {result.stdout}")
-    return {"probe": json.loads(lines[-1]), "runtimeSeconds": 0, "peakVramBytes": VramSampler.sample()}
+    return {
+        "probe": json.loads(lines[-1]),
+        "bootstrapRegressionProbes": True,
+        "runtimeSeconds": 0,
+        "peakVramBytes": VramSampler.sample(),
+    }
 
 
 def partial_artifacts(roots: Iterable[Path]) -> list[str]:
@@ -817,18 +1034,24 @@ def run_cancellation_case(
     after_partial = set(partial_artifacts(roots))
     new_partial = sorted(after_partial - before_partial)
     final_vram = VramSampler.sample()
-    if retained_workers or new_partial:
-        raise RuntimeError(f"Cancellation cleanup failed: workers={retained_workers}, partials={new_partial}")
+    interrupted = bool(entry and history_failure(entry))
+    gpu_released = final_vram <= baseline_vram + 512 * 1024**2
+    if not interrupted or retained_workers or new_partial or not gpu_released:
+        raise RuntimeError(
+            "Cancellation cleanup failed: "
+            f"interrupted={interrupted}, workers={retained_workers}, "
+            f"partials={new_partial}, baseline_vram={baseline_vram}, final_vram={final_vram}"
+        )
     return {
         "promptId": prompt_id,
-        "interrupted": bool(entry and history_failure(entry)),
+        "interrupted": interrupted,
         "cleanupProof": {
             "workerStarted": True,
             "retainedWorkerPids": retained_workers,
             "newPartialArtifacts": new_partial,
             "baselineVramBytes": baseline_vram,
             "finalVramBytes": final_vram,
-            "gpuAllocationReleased": final_vram <= baseline_vram + 512 * 1024**2,
+            "gpuAllocationReleased": gpu_released,
         },
     }
 
@@ -852,6 +1075,8 @@ def execute_case(args: argparse.Namespace) -> int:
             result = run_probe_case(args)
         elif spec.kind == "cache":
             result = run_cache_case(spec, args, run["runId"], image_name, recorder)
+        elif spec.kind == "strict1536":
+            result = run_strict_1536_default_case(spec, args, run["runId"], image_name, recorder)
         elif spec.kind == "cancel":
             result = run_cancellation_case(spec, args, run["runId"], image_name, recorder)
         else:
@@ -864,6 +1089,8 @@ def execute_case(args: argparse.Namespace) -> int:
                 int(result["peakVramBytes"]),
                 result["glb"],
                 result.get("logExcerpt", ""),
+                requested_resolution=args.octree_resolution or spec.octree_resolution,
+                texture_size=args.texture_size or spec.texture_size,
             )
         record = {
             "schema": CASE_SCHEMA,
@@ -1052,7 +1279,7 @@ def add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sampling-steps", type=int, default=0)
     parser.add_argument("--target-face-count", type=int, default=0)
     parser.add_argument("--texture-size", type=int, default=0)
-    parser.add_argument("--max-tokens", type=int, default=262144)
+    parser.add_argument("--max-tokens", type=int, default=49152)
     parser.add_argument("--remove-background", choices=("Auto", "On", "Off"), default="Auto")
     parser.add_argument("--cache-mode", choices=("Use cache", "Refresh this node", "Disable cache"), default="Disable cache")
     parser.add_argument("--steps", type=int, default=0)
