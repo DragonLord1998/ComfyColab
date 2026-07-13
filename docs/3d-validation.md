@@ -39,7 +39,7 @@ ID, completion time, and passed-gate list for auditability.
 - [x] Cache use, refresh, disable, corruption recovery, and atomic writes pass.
 - [x] Asymmetric Y-up/Z-up and normalization round trips preserve handedness,
       orientation, position, and scale.
-- [x] `scripts/check.sh` passes: 100 tests on 2026-07-13.
+- [x] `scripts/check.sh` passes: 118 tests on 2026-07-13.
 
 ## Live G4 benchmark table
 
@@ -49,9 +49,9 @@ and retain only the metrics/JSON record—not benchmark GLBs—in Git.
 
 | Pipeline | Actual resolution | Tokens | Runtime | Peak VRAM | GLB bytes | Faces | Texture | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| TRELLIS fast | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
-| TRELLIS quality cascade | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
-| TRELLIS maximum cascade | pending | pending | pending | pending | pending | pending | pending | pending live G4 |
+| TRELLIS fast | 512 | 3,964 | 29.06 s | 4,190,109,696 B | 13,623,892 | 195,999 | 1024 | passed |
+| TRELLIS quality cascade | 1024 | 18,945 | 96.49 s | 5,320,474,624 B | 37,959,968 | 488,148 | 2048 | passed |
+| TRELLIS maximum cascade | incomplete | 50,145 observed at default cap | n/a | n/a | n/a | n/a | n/a | Colab backend disappeared during the genuine 1536 retry; no GLB recorded |
 | UltraShape 384 smoke | 384 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 512 smoke | 512 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 1024 run 1 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
@@ -60,6 +60,28 @@ and retain only the metrics/JSON record—not benchmark GLBs—in Git.
 `Detailed` and `Ultra` may remain wired to provisional 1024 settings only after
 the two 1024 rows pass without OOM. Until then the UI must identify them as
 experimental or use a proven lower octree setting.
+
+The default 1536 path separately passed the strict no-downgrade gate: this
+input required 50,145 tokens with a 49,152 cap, and returned an actionable error
+recommending at least 50,146 tokens or manual 1024 selection. It did not retry
+at a lower resolution. The later genuine-1536 attempt progressed through the
+high-density tiled sparse-convolution path, but the Colab backend became
+unavailable before completion, so it is not counted as a passed benchmark.
+
+Also proven on the same live G4 run:
+
+- PyTorch 2.11.0 + CUDA 12.8 on SM120, cubvh's CUDA distance kernel,
+  UltraShape imports, TRELLIS surface loading, and bootstrap regression probes.
+- The preserved advanced modular TRELLIS workflow produced a validated textured
+  GLB after its category move.
+- TRELLIS facade and advanced-workflow GLBs connected directly to Preview 3D
+  and Save 3D.
+
+UltraShape model refinement, the five full chained workflows, cancellation,
+cache-hit inference suppression, and the combined-cache build were deliberately
+stopped before live release proof. The machine-readable record therefore
+remains `pending`, and bootstrap continues to use the rollback TRELLIS cache
+plus the UltraShape inference overlay.
 
 ## Publishing the combined environment cache
 
@@ -87,5 +109,5 @@ provenance.
 - [ ] Transparent/background-removal input
 - [ ] Unchanged rerun proves cache hits and performs no model inference
 - [ ] Cancellation leaves no child process, partial GLB, or retained allocation
-- [ ] Existing advanced TRELLIS workflows still load and execute
+- [x] Existing advanced TRELLIS workflows still load and execute
 - [ ] Both facade outputs connect directly to Preview 3D and Save 3D Model

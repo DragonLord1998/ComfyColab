@@ -242,10 +242,11 @@ node suite in an isolated `comfy-env` environment. TRELLIS.2 is a separate 3D
 pipeline, so it does not appear under `ComfyColab / loaders` and does not return
 the usual `MODEL`, `CLIP`, and `VAE` outputs.
 
-In ComfyUI, search for the `TRELLIS2` category and add **(Down)Load TRELLIS.2
-Models**. The upstream `geometry_texture.json` workflow included with the node
-shows the full path from a single input image to a PBR-textured mesh and GLB
-export.
+In ComfyUI, search the `TRELLIS2 / Advanced` category and add **(Down)Load
+TRELLIS.2 Models**. The upstream `geometry_texture.json` workflow included with
+the node shows the full path from a single input image to a PBR-textured mesh
+and GLB export. Existing node IDs and workflow contracts are unchanged; only
+their search category moved.
 
 Important notes:
 
@@ -261,9 +262,11 @@ Important notes:
   stable. The simple facade does not remove or replace these advanced nodes.
 - Microsoft officially requires Linux, CUDA, and at least 24 GB VRAM. The G4's
   96 GB is sufficient, but its Blackwell CUDA architecture is outside
-  Microsoft's officially tested A100/H100 set. All cached native extensions and
-  the ComfyUI nodes pass a live G4 import/CUDA smoke test; full model generation
-  remains experimental until the 512-to-GLB workflow is exercised end to end.
+  Microsoft's officially tested A100/H100 set. The facade has produced and
+  validated textured GLBs at genuine 512 and 1024-cascade resolutions on a live
+  G4, and the preserved advanced workflow also passes. A genuine 1536 run is
+  still a release gate; the recorded attempt lost its Colab backend during the
+  high-density tiled stage before a GLB was produced.
 - Microsoft's official pipeline is single-image. The selected wrapper also
   provides an experimental `TRELLIS.2 Multi-View Image to Shape` node for up to
   six views; that spatial-blending implementation is a wrapper extension, not an

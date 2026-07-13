@@ -2,7 +2,7 @@
   "schema": "comfycolab-3d-live-validation-v1",
   "status": "pending",
   "profile": "g4-linux64-py31213-torch2110-cu128-sm120-glibc235-3d-v2",
-  "runId": null,
+  "runId": "g4-19446f1f7eac49e2",
   "completedAt": null,
   "sources": {
     "comfy": "8b099de36acd81acd1afa3b5442951dc847e0a52",
@@ -19,11 +19,11 @@
     "ultrashape": "ultrashape-inference-compat-v2"
   },
   "gates": {
-    "trellis_512_textured_glb": {"status": "pending", "evidence": null},
-    "trellis_1024_cascade_textured_glb": {"status": "pending", "evidence": null},
+    "trellis_512_textured_glb": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:trellis_512:52a04c51e5202d111e00a067bd7136753fc1912fc7c3efc40c324e92898bd55d"},
+    "trellis_1024_cascade_textured_glb": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:trellis_1024_cascade:c5aa0929b79d13c42aee2949830f1b010fec857f2dd4ca745347a2eb211c8dda"},
     "trellis_1536_cascade_genuine": {"status": "pending", "evidence": null},
-    "trellis_1536_default_cap_no_downgrade": {"status": "pending", "evidence": null},
-    "combined_environment_cuda_probes": {"status": "pending", "evidence": null},
+    "trellis_1536_default_cap_no_downgrade": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:trellis_1536_default_cap:601933964f35a3da555e538ff56cb3e1d2d882b47546e3418eba3e1c48ad4a2d"},
+    "combined_environment_cuda_probes": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:combined_environment_cuda_probes:375c31677dc651781e9ff01b5c7d1b4181e395869055f15be74b1a77c542d28d"},
     "ultrashape_384_refinement": {"status": "pending", "evidence": null},
     "ultrashape_512_refinement": {"status": "pending", "evidence": null},
     "ultrashape_1024_run_1": {"status": "pending", "evidence": null},
@@ -35,12 +35,12 @@
     "full_workflow_transparent_background": {"status": "pending", "evidence": null},
     "cache_hit_no_inference": {"status": "pending", "evidence": null},
     "cancellation_cleanup": {"status": "pending", "evidence": null},
-    "advanced_trellis_workflow": {"status": "pending", "evidence": null},
+    "advanced_trellis_workflow": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:advanced_trellis_workflow:2f0516af41e6f098118638d4e3becdaf2cd21d56ffd2371b162d0f83b67aecb0"},
     "preview_and_save_native_file3d": {"status": "pending", "evidence": null}
   },
   "benchmarks": {
-    "trellis_512": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
-    "trellis_1024_cascade": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "trellis_512": {"status": "passed", "actualResolution": 512, "tokens": 3964, "runtimeSeconds": 29.06, "peakVramBytes": 4190109696, "glbBytes": 13623892, "faces": 195999, "textureSize": 1024, "glbValidated": true},
+    "trellis_1024_cascade": {"status": "passed", "actualResolution": 1024, "tokens": 18945, "runtimeSeconds": 96.492, "peakVramBytes": 5320474624, "glbBytes": 37959968, "faces": 488148, "textureSize": 2048, "glbValidated": true},
     "trellis_1536_cascade": {"status": "pending", "actualResolution": null, "tokens": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
     "ultrashape_384": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
     "ultrashape_512": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
