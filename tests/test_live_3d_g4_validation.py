@@ -84,6 +84,61 @@ def minimal_glb(path: Path, *, textured: bool = True) -> None:
     path.write_bytes(payload)
 
 
+def stage_binary(node_id: str, text: str) -> bytes:
+    encoded_node = node_id.encode("utf-8")
+    return (
+        struct.pack(">II", 3, len(encoded_node))
+        + encoded_node
+        + text.encode("utf-8")
+    )
+
+
+def completed_stage_verifier(module, *, prompt_id: str = "prompt-1"):
+    verifier = module.FiveStageVerifier("2")
+    verifier.prompt_id = prompt_id
+    for index, text in enumerate(module.FIVE_STAGE_TEXTS):
+        verifier.record_binary(stage_binary("2", text))
+        if index > 0:
+            verifier.record_json(
+                {
+                    "type": "progress_state",
+                    "data": {
+                        "prompt_id": prompt_id,
+                        "nodes": {
+                            "2": {
+                                "value": index,
+                                "max": 5,
+                            }
+                        },
+                    },
+                }
+            )
+        if index == 2:
+            verifier.record_json(
+                {
+                    "type": "executed",
+                    "data": {
+                        "prompt_id": prompt_id,
+                        "node": "2:early-preview",
+                        "display_node": "90",
+                        "output": {"result": ["preview3d_early.glb", None, None]},
+                    },
+                }
+            )
+    verifier.record_json(
+        {
+            "type": "executed",
+            "data": {
+                "prompt_id": prompt_id,
+                "node": "90",
+                "display_node": "90",
+                "output": {"result": ["preview3d_final.glb", None, None]},
+            },
+        }
+    )
+    return verifier
+
+
 class Live3DG4ValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -98,6 +153,126 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
         self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
         self.assertIn("run-1-trellis_512", prompt["91"]["inputs"]["filename_prefix"])
+
+    def test_five_stage_verifier_requires_ordered_stages_progress_and_two_previews(self) -> None:
+        verifier = completed_stage_verifier(self.module)
+        proof = verifier.verify()
+        self.assertEqual(proof["status"], "passed")
+        self.assertTrue(all(proof["checks"].values()))
+        self.assertEqual(
+            [event["text"] for event in proof["stageEvents"]],
+            list(self.module.FIVE_STAGE_TEXTS),
+        )
+        self.assertEqual(
+            [event["value"] for event in proof["progressEvents"]],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertEqual(len(proof["previewEvents"]), 2)
+
+    def test_five_stage_verifier_rejects_missing_final_preview(self) -> None:
+        verifier = completed_stage_verifier(self.module)
+        verifier.preview_events.pop()
+        with self.assertRaisesRegex(RuntimeError, "finalPreview"):
+            verifier.verify()
+
+    def test_history_output_paths_and_glb_classifier_separate_preview_from_save(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            neutral = output / "neutral.glb"
+            textured = output / "saved.glb"
+            minimal_glb(neutral, textured=False)
+            minimal_glb(textured, textured=True)
+            history = {
+                "outputs": {
+                    "91": {
+                        "3d": [
+                            {"filename": "saved.glb", "subfolder": "", "type": "output"},
+                            {"filename": "ignored.glb", "subfolder": "", "type": "temp"},
+                        ]
+                    }
+                }
+            }
+            self.assertEqual(
+                self.module.history_output_paths(history, "91", output),
+                [textured.resolve()],
+            )
+            self.assertEqual(self.module.classify_glb(neutral)["artifactKind"], "geometry")
+            self.assertEqual(self.module.classify_glb(textured)["artifactKind"], "textured")
+            event = {"glbs": ["neutral.glb"]}
+            self.assertEqual(
+                self.module.preview_event_paths(event, output),
+                [neutral.resolve()],
+            )
+            with self.assertRaisesRegex(RuntimeError, "escaped"):
+                self.module.preview_event_paths({"glbs": ["../outside.glb"]}, output)
+
+    def test_fresh_trellis_run_wires_five_stage_and_explicit_save_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            neutral = output / "preview3d_early.glb"
+            final_preview = output / "preview3d_final.glb"
+            textured = output / "saved.glb"
+            minimal_glb(neutral, textured=False)
+            minimal_glb(final_preview, textured=True)
+            minimal_glb(textured, textured=True)
+            verifier = completed_stage_verifier(self.module)
+            history = {
+                "status": {"completed": True},
+                "outputs": {
+                    "91": {
+                        "3d": [
+                            {"filename": "saved.glb", "subfolder": "", "type": "output"}
+                        ]
+                    }
+                },
+            }
+            args = options(
+                base_url="http://127.0.0.1:8188",
+                comfy_root=root,
+                comfy_log=root / "comfy.log",
+                timeout=60.0,
+                vram_interval=0.01,
+            )
+            recorder = mock.Mock()
+            marker = "ComfyColab shape metrics: 3964 tokens at resolution 512"
+            with mock.patch.object(
+                self.module,
+                "check_object_info",
+                return_value={"previewNode": "90", "saveNode": "91"},
+            ), mock.patch.object(
+                self.module,
+                "queue_and_capture_five_stage_events",
+                return_value=("prompt-1", verifier),
+            ) as capture, mock.patch.object(
+                self.module,
+                "wait_prompt",
+                return_value=history,
+            ), mock.patch.object(
+                self.module,
+                "changed_glbs",
+                return_value=[neutral, final_preview, textured],
+            ), mock.patch.object(
+                self.module,
+                "read_settled_log_since",
+                return_value=(marker, 0),
+            ), mock.patch.object(self.module.VramSampler, "sample", return_value=1):
+                result = self.module.run_prompt_once(
+                    self.module.CASES["trellis_512"],
+                    args,
+                    "run-1",
+                    "input.png",
+                    recorder,
+                )
+
+            capture.assert_called_once()
+            self.assertEqual(result["glb"]["path"], str(textured.resolve()))
+            stage_proof = result["previewSaveProof"]["fiveStageProof"]
+            self.assertEqual(stage_proof["status"], "passed")
+            self.assertTrue(stage_proof["checks"]["explicitSaveGLBArtifactValidated"])
+            self.assertEqual(stage_proof["artifacts"]["geometryPreviewCount"], 1)
+            self.assertEqual(stage_proof["artifacts"]["finalPreviewCount"], 1)
 
     def test_cli_keeps_public_token_default_and_stages_strict_1536_separately(self) -> None:
         args = self.module.parser().parse_args(

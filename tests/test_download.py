@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import importlib.util
 import io
+import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -25,11 +28,20 @@ def load_download_module():
 
 
 class FakeResponse(io.BytesIO):
-    status = 200
-
-    def __init__(self, content: bytes):
+    def __init__(
+        self,
+        content: bytes,
+        *,
+        status: int = 200,
+        declared_length: int | None = None,
+    ):
         super().__init__(content)
-        self.headers = {"Content-Length": str(len(content))}
+        self.status = status
+        self.headers = {
+            "Content-Length": str(
+                len(content) if declared_length is None else declared_length
+            )
+        }
 
     def __enter__(self):
         return self
@@ -80,6 +92,213 @@ class DownloadTests(unittest.TestCase):
                 expected_sha256=digest,
             )
             self.assertEqual(result.read_bytes(), content)
+
+    def test_transient_403_retries_anonymously_without_force_redownload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "public.gguf"
+            content = b"public model bytes"
+            digest = hashlib.sha256(content).hexdigest()
+            requests = []
+
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 120)
+                requests.append(request)
+                if len(requests) == 1:
+                    raise urllib.error.HTTPError(
+                        request.full_url,
+                        403,
+                        "Forbidden",
+                        {},
+                        None,
+                    )
+                return FakeResponse(content)
+
+            with mock.patch.dict(os.environ, {"HF_TOKEN": "stale-token"}, clear=False), mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=open_request,
+            ), mock.patch.object(self.download.time, "sleep") as sleep:
+                result = self.download.download_file(
+                    url="https://huggingface.co/public/model/resolve/revision/model.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertEqual(requests[0].get_header("Authorization"), "Bearer stale-token")
+            self.assertIsNone(requests[1].get_header("Authorization"))
+            self.assertEqual(requests[1].get_header("Cache-control"), "no-cache")
+            sleep.assert_called_once_with(2)
+
+    def test_transient_failure_preserves_and_resumes_partial_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "resumable.gguf"
+            partial = destination.with_suffix(".gguf.part")
+            partial.write_bytes(b"first-")
+            content = b"first-second"
+            digest = hashlib.sha256(content).hexdigest()
+            requests = []
+
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 120)
+                requests.append(request)
+                if len(requests) == 1:
+                    raise urllib.error.HTTPError(
+                        request.full_url,
+                        503,
+                        "Service Unavailable",
+                        {},
+                        None,
+                    )
+                return FakeResponse(b"second", status=206)
+
+            with mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=open_request,
+            ), mock.patch.object(self.download.time, "sleep"):
+                result = self.download.download_file(
+                    url="https://example.test/resumable.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertEqual(
+                [request.get_header("Range") for request in requests],
+                ["bytes=6-", "bytes=6-"],
+            )
+
+    def test_permanent_http_error_fails_without_retrying(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "missing.gguf"
+            error = urllib.error.HTTPError(
+                "https://example.test/missing.gguf",
+                404,
+                "Not Found",
+                {},
+                None,
+            )
+            with mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=error,
+            ) as urlopen, mock.patch.object(self.download.time, "sleep") as sleep:
+                with self.assertRaisesRegex(self.download.DownloadError, "not retryable"):
+                    self.download.download_file(
+                        url=error.url,
+                        destination=destination,
+                        expected_sha256="0" * 64,
+                    )
+            urlopen.assert_called_once()
+            sleep.assert_not_called()
+
+    def test_unverifiable_range_restarts_from_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "range-reset.gguf"
+            partial = destination.with_suffix(".gguf.part")
+            partial.write_bytes(b"stale-partial")
+            content = b"current model"
+            digest = hashlib.sha256(content).hexdigest()
+            requests = []
+
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 120)
+                requests.append(request)
+                if len(requests) == 1:
+                    raise urllib.error.HTTPError(
+                        request.full_url,
+                        416,
+                        "Range Not Satisfiable",
+                        {},
+                        None,
+                    )
+                return FakeResponse(content)
+
+            with mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=open_request,
+            ), mock.patch.object(self.download.time, "sleep"):
+                result = self.download.download_file(
+                    url="https://example.test/range-reset.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertEqual(requests[0].get_header("Range"), "bytes=13-")
+            self.assertIsNone(requests[1].get_header("Range"))
+
+    def test_short_declared_response_resumes_retained_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "short-response.gguf"
+            content = b"first-second"
+            digest = hashlib.sha256(content).hexdigest()
+            requests = []
+
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 120)
+                requests.append(request)
+                if len(requests) == 1:
+                    return FakeResponse(b"first-", declared_length=len(content))
+                return FakeResponse(b"second", status=206)
+
+            with mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=open_request,
+            ), mock.patch.object(self.download.time, "sleep"):
+                result = self.download.download_file(
+                    url="https://example.test/short-response.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertIsNone(requests[0].get_header("Range"))
+            self.assertEqual(requests[1].get_header("Range"), "bytes=6-")
+
+    def test_incomplete_read_bytes_are_retained_for_resume(self) -> None:
+        class InterruptedResponse:
+            status = 200
+            headers = {"Content-Length": "12"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self, _size):
+                raise http.client.IncompleteRead(b"first-", 6)
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "incomplete-read.gguf"
+            content = b"first-second"
+            digest = hashlib.sha256(content).hexdigest()
+            requests = []
+
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 120)
+                requests.append(request)
+                if len(requests) == 1:
+                    return InterruptedResponse()
+                return FakeResponse(b"second", status=206)
+
+            with mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=open_request,
+            ), mock.patch.object(self.download.time, "sleep"):
+                result = self.download.download_file(
+                    url="https://example.test/incomplete-read.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertEqual(requests[1].get_header("Range"), "bytes=6-")
 
 
 if __name__ == "__main__":

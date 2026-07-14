@@ -20,4 +20,9 @@ ComfyColab bootstrap installs that dependency automatically.
 All files are stored under the active ComfyUI `models` folders. In a Colab
 runtime these files are temporary and disappear when the runtime is released.
 Downloads resume when supported and are installed only after SHA-256
-verification succeeds.
+verification succeeds. Transient `401`, `403`, `408`, `416`, `425`, `429`, and `5xx`
+responses are retried up to five times with backoff while preserving partial
+data. Because these curated artifacts are public, a `401`/`403` received with a
+configured Hugging Face token is retried anonymously in case that token is
+stale. `force_redownload` remains the explicit opt-in that removes cached and
+partial files.

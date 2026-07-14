@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Stage and record live ComfyColab 3D validation runs on a Colab G4.
 
-The runner intentionally uses ComfyUI's HTTP API rather than a websocket.  A
-case can therefore be launched into its own process group and continue after a
-Colab CLI/websocket client disconnects.
+Cases normally use ComfyUI's HTTP API and can continue after a Colab client
+disconnects. Fresh TRELLIS facade cases additionally use a short-lived
+WebSocket connection to prove the five user-visible stages and both previews.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import datetime as dt
 import hashlib
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib import error as urlerror
 from urllib import request as urlrequest
+from urllib.parse import urlparse
 
 
 STATE_SCHEMA = "comfycolab-3d-live-run-state-v1"
@@ -36,6 +38,15 @@ EVENT_PREFIX = "COMFYCOLAB_LIVE3D="
 SHAPE_METRICS = re.compile(
     r"ComfyColab shape metrics:\s*(?P<tokens>\d+)\s+tokens\s+at\s+resolution\s+(?P<resolution>\d+)"
 )
+FIVE_STAGE_TEXTS = (
+    "Stage 1/5 - Preparing models and input...",
+    "Stage 2/5 - Generating 3D shape...",
+    "Stage 3/5 - Building geometry preview...",
+    "Stage 4/5 - Geometry preview ready; generating texture...",
+    "Stage 5/5 - Baking PBR material and final GLB...",
+    "Complete - 3D model ready",
+)
+BINARY_TEXT_EVENT = 3
 DEFAULT_STATE_DIR = Path("/content/.comfycolab/live-3d-validation")
 DEFAULT_COMFY_ROOT = Path("/content/ComfyUI")
 DEFAULT_LOG = Path("/content/.comfycolab/comfyui.log")
@@ -132,6 +143,189 @@ CASES: dict[str, CaseSpec] = {
         "combined_environment_cuda_probes", "probe", "combined_environment_cuda_probes",
     ),
 }
+
+
+def _collect_glb_names(value: Any) -> list[str]:
+    names: list[str] = []
+    if isinstance(value, str) and value.lower().endswith(".glb"):
+        names.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            names.extend(_collect_glb_names(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            names.extend(_collect_glb_names(item))
+    return names
+
+
+class FiveStageVerifier:
+    """Collect and validate native ComfyUI stage/progress/preview events."""
+
+    def __init__(self, facade_node: str, preview_node: str = "90"):
+        self.facade_node = str(facade_node)
+        self.preview_node = str(preview_node)
+        self.prompt_id: str | None = None
+        self.sequence = 0
+        self.stage_events: list[dict[str, Any]] = []
+        self.progress_events: list[dict[str, Any]] = []
+        self.preview_events: list[dict[str, Any]] = []
+
+    def _next(self) -> int:
+        self.sequence += 1
+        return self.sequence
+
+    def record_binary(self, payload: bytes) -> None:
+        sequence = self._next()
+        if len(payload) < 8 or struct.unpack(">I", payload[:4])[0] != BINARY_TEXT_EVENT:
+            return
+        node_length = struct.unpack(">I", payload[4:8])[0]
+        text_start = 8 + node_length
+        if text_start > len(payload):
+            return
+        node_id = payload[8:text_start].decode("utf-8", "replace")
+        if node_id != self.facade_node:
+            return
+        self.stage_events.append(
+            {
+                "sequence": sequence,
+                "node": node_id,
+                "text": payload[text_start:].decode("utf-8", "replace"),
+            }
+        )
+
+    def record_json(self, payload: dict[str, Any]) -> str | None:
+        sequence = self._next()
+        event_type = payload.get("type")
+        data = payload.get("data") or {}
+        prompt_id = data.get("prompt_id")
+        if self.prompt_id and prompt_id not in (None, self.prompt_id):
+            return None
+        if event_type == "progress" and str(data.get("node")) == self.facade_node:
+            self._record_progress(sequence, data.get("value"), data.get("max"), "progress")
+        elif event_type == "progress_state":
+            state = (data.get("nodes") or {}).get(self.facade_node)
+            if isinstance(state, dict):
+                self._record_progress(
+                    sequence,
+                    state.get("value"),
+                    state.get("max"),
+                    "progress_state",
+                )
+        elif event_type == "executed":
+            display_node = str(data.get("display_node") or data.get("node"))
+            if display_node == self.preview_node:
+                self.preview_events.append(
+                    {
+                        "sequence": sequence,
+                        "node": str(data.get("node")),
+                        "displayNode": display_node,
+                        "glbs": _collect_glb_names(data.get("output")),
+                    }
+                )
+        elif event_type in {"execution_error", "execution_interrupted"}:
+            return "failed"
+        elif event_type == "executing" and data.get("node") is None:
+            return "completed"
+        return None
+
+    def _record_progress(self, sequence: int, value: Any, maximum: Any, source: str) -> None:
+        try:
+            numeric_value = int(float(value))
+            numeric_max = int(float(maximum))
+        except (TypeError, ValueError):
+            return
+        self.progress_events.append(
+            {
+                "sequence": sequence,
+                "node": self.facade_node,
+                "value": numeric_value,
+                "max": numeric_max,
+                "source": source,
+            }
+        )
+
+    @staticmethod
+    def _ordered_positions(events: list[dict[str, Any]], expected: list[Any], key: str) -> list[int]:
+        positions: list[int] = []
+        after = -1
+        for value in expected:
+            match = next(
+                (
+                    int(event["sequence"])
+                    for event in events
+                    if event.get(key) == value and int(event["sequence"]) > after
+                ),
+                None,
+            )
+            if match is None:
+                return []
+            positions.append(match)
+            after = match
+        return positions
+
+    def verify(self) -> dict[str, Any]:
+        stage_positions = self._ordered_positions(
+            self.stage_events,
+            list(FIVE_STAGE_TEXTS),
+            "text",
+        )
+        progress = [event for event in self.progress_events if event.get("max") == 5]
+        progress_positions = self._ordered_positions(progress, [1, 2, 3, 4, 5], "value")
+        early = next(
+            (event for event in self.preview_events if event["node"] != self.preview_node),
+            None,
+        )
+        final = next(
+            (
+                event
+                for event in self.preview_events
+                if event["node"] == self.preview_node
+                and (early is None or event["sequence"] > early["sequence"])
+            ),
+            None,
+        )
+        stage4 = stage_positions[3] if stage_positions else None
+        complete = stage_positions[-1] if stage_positions else None
+        progress_matches_stages = bool(stage_positions and progress_positions) and all(
+            stage_positions[index + 1] < progress_positions[index]
+            and (
+                index == 4
+                or progress_positions[index] < stage_positions[index + 2]
+            )
+            for index in range(5)
+        )
+        checks = {
+            "allStageTextsInOrder": bool(stage_positions),
+            "progressOneThroughFiveInOrder": bool(progress_positions),
+            "progressMatchesStageTransitions": progress_matches_stages,
+            "earlyPreviewObserved": early is not None,
+            "earlyPreviewArtifactNamed": bool(early and early["glbs"]),
+            "finalPreviewObserved": final is not None,
+            "finalPreviewArtifactNamed": bool(final and final["glbs"]),
+            "earlyPreviewBeforeTexture": bool(
+                early is not None
+                and len(progress_positions) == 5
+                and stage4 is not None
+                and progress_positions[1] < early["sequence"] < stage4
+            ),
+            "finalPreviewAfterComplete": bool(
+                final is not None
+                and complete is not None
+                and len(progress_positions) == 5
+                and final["sequence"] > max(complete, progress_positions[-1])
+            ),
+        }
+        proof = {
+            "status": "passed" if all(checks.values()) else "failed",
+            "checks": checks,
+            "stageEvents": self.stage_events,
+            "progressEvents": progress,
+            "previewEvents": self.preview_events,
+        }
+        if proof["status"] != "passed":
+            failed = ", ".join(name for name, passed in checks.items() if not passed)
+            raise RuntimeError(f"Five-stage progress/preview verification failed: {failed}")
+        return proof
 
 
 def utc_now() -> str:
@@ -454,6 +648,98 @@ def queue_prompt(api: ApiClient, prompt: dict[str, Any], client_id: str) -> str:
     return prompt_id
 
 
+async def _queue_and_capture_five_stage_events(
+    api: ApiClient,
+    prompt: dict[str, Any],
+    client_id: str,
+    timeout: float,
+    recorder: Recorder,
+    facade_node: str,
+) -> tuple[str, FiveStageVerifier]:
+    try:
+        import aiohttp
+    except ImportError as error:
+        raise RuntimeError(
+            "Five-stage live verification requires aiohttp from the pinned ComfyUI environment"
+        ) from error
+
+    parsed = urlparse(api.base_url)
+    websocket_scheme = "wss" if parsed.scheme == "https" else "ws"
+    websocket_url = (
+        f"{websocket_scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/ws"
+        f"?clientId={client_id}"
+    )
+    verifier = FiveStageVerifier(facade_node)
+    deadline = time.monotonic() + timeout
+    client_timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=None)
+    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with session.ws_connect(websocket_url, heartbeat=20) as websocket:
+            async with session.post(
+                api.base_url + "/prompt",
+                json={"prompt": prompt, "client_id": client_id},
+            ) as response:
+                queued = await response.json()
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"ComfyUI prompt submission returned {response.status}: {queued}"
+                    )
+            prompt_id = queued.get("prompt_id")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                raise RuntimeError(f"ComfyUI did not return a prompt ID: {queued}")
+            verifier.prompt_id = prompt_id
+            recorder.event("queued", promptId=prompt_id, fiveStageVerification=True)
+            last_waiting = 0.0
+            while time.monotonic() < deadline:
+                remaining = max(0.1, deadline - time.monotonic())
+                try:
+                    message = await asyncio.wait_for(
+                        websocket.receive(),
+                        timeout=min(10.0, remaining),
+                    )
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    if now - last_waiting >= 10:
+                        recorder.event("waiting", promptId=prompt_id)
+                        last_waiting = now
+                    continue
+                outcome = None
+                if message.type == aiohttp.WSMsgType.BINARY:
+                    verifier.record_binary(bytes(message.data))
+                elif message.type == aiohttp.WSMsgType.TEXT:
+                    outcome = verifier.record_json(json.loads(message.data))
+                elif message.type in {
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.ERROR,
+                }:
+                    raise RuntimeError("ComfyUI WebSocket closed during five-stage verification")
+                if outcome in {"completed", "failed"}:
+                    return prompt_id, verifier
+    raise TimeoutError(
+        f"ComfyUI prompt did not finish five-stage event capture within {timeout:.0f}s"
+    )
+
+
+def queue_and_capture_five_stage_events(
+    api: ApiClient,
+    prompt: dict[str, Any],
+    client_id: str,
+    timeout: float,
+    recorder: Recorder,
+    facade_node: str,
+) -> tuple[str, FiveStageVerifier]:
+    return asyncio.run(
+        _queue_and_capture_five_stage_events(
+            api,
+            prompt,
+            client_id,
+            timeout,
+            recorder,
+            facade_node,
+        )
+    )
+
+
 def history_entry(payload: Any, prompt_id: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
@@ -509,6 +795,49 @@ def changed_glbs(before: dict[Path, tuple[int, int]], output_root: Path) -> list
         (path for path, value in after.items() if before.get(path) != value),
         key=lambda item: after[item][0],
     )
+
+
+def history_output_paths(
+    history: dict[str, Any],
+    node_id: str,
+    output_root: Path,
+) -> list[Path]:
+    node_output = (history.get("outputs") or {}).get(str(node_id), {})
+    paths: list[Path] = []
+    for entries in node_output.values() if isinstance(node_output, dict) else []:
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not str(entry.get("filename", "")).lower().endswith(".glb"):
+                continue
+            if entry.get("type") != "output":
+                continue
+            path = output_root / str(entry.get("subfolder") or "") / str(entry["filename"])
+            paths.append(path.resolve())
+    return paths
+
+
+def preview_event_paths(event: dict[str, Any], output_root: Path) -> list[Path]:
+    root = output_root.resolve()
+    paths: list[Path] = []
+    for name in event.get("glbs", []):
+        relative = Path(str(name))
+        if relative.is_absolute():
+            raise RuntimeError(f"Preview reported an absolute output path: {name}")
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as error:
+            raise RuntimeError(f"Preview output escaped the ComfyUI output directory: {name}") from error
+        paths.append(candidate)
+    return paths
+
+
+def classify_glb(path: Path) -> dict[str, Any]:
+    try:
+        return {**inspect_glb(path, require_textured=True), "artifactKind": "textured"}
+    except ValueError:
+        return {**inspect_glb(path, require_textured=False), "artifactKind": "geometry"}
 
 
 def _parse_glb(path: Path) -> tuple[dict[str, Any], bytes]:
@@ -801,17 +1130,41 @@ def run_prompt_once(
     cache_mode: str | None = None,
 ) -> dict[str, Any]:
     api = ApiClient(args.base_url)
-    prompt = build_prompt(spec, args, image_name, run_id, cache_mode=cache_mode)
+    effective_cache_mode = cache_mode or args.cache_mode
+    prompt = build_prompt(
+        spec,
+        args,
+        image_name,
+        run_id,
+        cache_mode=effective_cache_mode,
+    )
     source_node = source_node_for(spec)
     proof = check_object_info(api, prompt, source_node)
+    verify_five_stages = (
+        spec.kind in {"trellis", "cache"}
+        and effective_cache_mode != "Use cache"
+    )
     output_root = Path(args.comfy_root) / "output"
     before = output_snapshot(output_root)
     log_offset = Path(args.comfy_log).stat().st_size if Path(args.comfy_log).exists() else 0
     started = time.monotonic()
+    stage_verifier: FiveStageVerifier | None = None
     with VramSampler(args.vram_interval) as sampler:
-        prompt_id = queue_prompt(api, prompt, f"comfycolab-live3d-{run_id}-{spec.name}")
-        recorder.event("queued", promptId=prompt_id)
-        history = wait_prompt(api, prompt_id, args.timeout, recorder)
+        client_id = f"comfycolab-live3d-{run_id}-{spec.name}"
+        if verify_five_stages:
+            prompt_id, stage_verifier = queue_and_capture_five_stage_events(
+                api,
+                prompt,
+                client_id,
+                args.timeout,
+                recorder,
+                facade_node=source_node,
+            )
+            history = wait_prompt(api, prompt_id, min(args.timeout, 60.0), recorder)
+        else:
+            prompt_id = queue_prompt(api, prompt, client_id)
+            recorder.event("queued", promptId=prompt_id)
+            history = wait_prompt(api, prompt_id, args.timeout, recorder)
     runtime = time.monotonic() - started
     log_text, _ = read_settled_log_since(
         Path(args.comfy_log),
@@ -821,9 +1174,64 @@ def run_prompt_once(
     files = changed_glbs(before, output_root)
     if not files:
         raise RuntimeError("ComfyUI completed but produced no new or changed GLB")
-    validated = [inspect_glb(path, require_textured=spec.require_textured) for path in files]
+    if verify_five_stages:
+        assert stage_verifier is not None
+        stage_proof = stage_verifier.verify()
+        changed = {path.resolve() for path in files}
+        early_event = next(
+            event
+            for event in stage_proof["previewEvents"]
+            if event["node"] != stage_verifier.preview_node
+        )
+        final_event = next(
+            event
+            for event in stage_proof["previewEvents"]
+            if event["node"] == stage_verifier.preview_node
+        )
+        early_paths = preview_event_paths(early_event, output_root)
+        final_preview_paths = preview_event_paths(final_event, output_root)
+        if any(path not in changed for path in [*early_paths, *final_preview_paths]):
+            raise RuntimeError("A recorded preview did not point to a GLB from this prompt")
+        early_artifacts = [classify_glb(path) for path in early_paths]
+        if not early_artifacts or any(
+            item["artifactKind"] != "geometry" for item in early_artifacts
+        ):
+            raise RuntimeError("The recorded early preview was not a geometry-only GLB")
+        final_previews = [
+            inspect_glb(path, require_textured=True)
+            for path in final_preview_paths
+        ]
+        if not final_previews:
+            raise RuntimeError("The final preview did not report a textured GLB")
+        saved_paths = history_output_paths(history, "91", output_root)
+        if not saved_paths:
+            raise RuntimeError("SaveGLB node 91 did not report an output artifact")
+        if any(path not in changed for path in saved_paths):
+            raise RuntimeError("SaveGLB node 91 reported an artifact outside this prompt")
+        saved = [inspect_glb(path, require_textured=True) for path in saved_paths]
+        current_paths = dict.fromkeys(
+            [*early_paths, *final_preview_paths, *saved_paths]
+        )
+        validated = [classify_glb(path) for path in current_paths]
+        stage_proof["checks"].update(
+            earlyGeometryArtifactValidated=True,
+            finalTexturedArtifactValidated=True,
+            explicitSaveGLBArtifactValidated=True,
+        )
+        stage_proof["artifacts"] = {
+            "geometryPreviewCount": len(early_artifacts),
+            "finalPreviewCount": len(final_previews),
+            "saveGLBOutputCount": len(saved),
+        }
+        proof["fiveStageProof"] = stage_proof
+        primary = max(saved, key=lambda item: item["bytes"])
+    else:
+        validated = [
+            inspect_glb(path, require_textured=spec.require_textured)
+            for path in files
+        ]
+        primary = max(validated, key=lambda item: item["bytes"])
     proof.update(historyCompleted=True, saveArtifactValidated=True)
-    primary = max(validated, key=lambda item: item["bytes"])
     return {
         "promptId": prompt_id,
         "runtimeSeconds": round(runtime, 3),
@@ -854,6 +1262,7 @@ def run_cache_case(
             "firstRuntimeSeconds": first["runtimeSeconds"],
             "secondRuntimeSeconds": second["runtimeSeconds"],
             "noModelInference": True,
+            "freshFiveStageProof": first["previewSaveProof"].get("fiveStageProof"),
         },
     }
 

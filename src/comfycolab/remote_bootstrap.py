@@ -6,6 +6,8 @@ import base64
 import errno
 import http.client
 import hashlib
+import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -66,6 +68,8 @@ COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 COMFY_ENV_VERSION = "0.3.89"
+COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
+COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
 ULTRASHAPE_INFERENCE_REQUIREMENTS = (
     "accelerate==1.1.1",
     "diffusers==0.30.0",
@@ -943,7 +947,72 @@ def install_dependencies() -> str:
             flush=True,
         )
         install_ultrashape_overlay()
+    patch_comfyenv_call_timeout()
     return cache_profile or "source-install"
+
+
+def patch_comfyenv_call_timeout(
+    metadata_path: Path | None = None,
+    *,
+    installed_version: str | None = None,
+) -> str:
+    """Make the pinned isolation timeout configurable without discarding caches."""
+
+    version = installed_version or importlib.metadata.version("comfy-env")
+    if version != COMFY_ENV_VERSION:
+        raise RuntimeError(
+            "Refusing to patch an unexpected comfy-env version: "
+            f"expected {COMFY_ENV_VERSION}, got {version}."
+        )
+    if metadata_path is None:
+        specification = importlib.util.find_spec("comfy_env.isolation.metadata")
+        if specification is None or not specification.origin:
+            raise RuntimeError("Unable to locate comfy-env isolation metadata.py.")
+        metadata_path = Path(specification.origin)
+
+    original_timeout = "                    timeout=600.0,\n"
+    patched_timeout = (
+        "                    timeout=float(os.environ.get("
+        "\"COMFY_ENV_CALL_TIMEOUT\", \"600.0\")),\n"
+    )
+    original_cleanup = "            except (RuntimeError, ConnectionError):\n"
+    patched_cleanup = (
+        "            except (RuntimeError, ConnectionError, TimeoutError):\n"
+    )
+    content = metadata_path.read_text(encoding="utf-8")
+    states = {
+        "timeout": (
+            content.count(original_timeout),
+            content.count(patched_timeout),
+        ),
+        "cleanup": (
+            content.count(original_cleanup),
+            content.count(patched_cleanup),
+        ),
+    }
+    if states == {"timeout": (0, 1), "cleanup": (0, 1)}:
+        return COMFY_ENV_TIMEOUT_PATCH_ID
+    if states != {"timeout": (1, 0), "cleanup": (1, 0)}:
+        raise RuntimeError(
+            "Refusing to patch drifted or partially patched comfy-env isolation metadata: "
+            f"{states}."
+        )
+
+    patched = content.replace(original_timeout, patched_timeout, 1).replace(
+        original_cleanup,
+        patched_cleanup,
+        1,
+    )
+    temporary = metadata_path.with_suffix(".py.comfycolab-patch")
+    temporary.write_text(patched, encoding="utf-8")
+    temporary.chmod(metadata_path.stat().st_mode)
+    temporary.replace(metadata_path)
+    print(
+        "[comfycolab] Patched comfy-env isolated calls to honor "
+        "COMFY_ENV_CALL_TIMEOUT while preserving resumable model caches.",
+        flush=True,
+    )
+    return COMFY_ENV_TIMEOUT_PATCH_ID
 
 
 def invalidate_comfyenv_metadata_cache(workspace: Path | None = None) -> list[Path]:
@@ -1297,6 +1366,9 @@ def main() -> None:
 
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
+    environment["COMFY_ENV_CALL_TIMEOUT"] = os.environ.get(
+        "COMFY_ENV_CALL_TIMEOUT", str(COMFY_ENV_CALL_TIMEOUT_SECONDS)
+    )
     comfy: subprocess.Popen[bytes] | None = None
     tunnel: subprocess.Popen[bytes] | None = None
     ready = False
@@ -1379,6 +1451,8 @@ def main() -> None:
             "trellisPatch": trellis_patch,
             "trellisCategoryPatch": trellis_category_patch,
             "ultrashapePatch": ultrashape_patch,
+            "comfyEnvTimeoutPatch": COMFY_ENV_TIMEOUT_PATCH_ID,
+            "isolatedCallTimeoutSeconds": int(environment["COMFY_ENV_CALL_TIMEOUT"]),
             "environmentCacheProfile": environment_cache_profile,
         }
         save_state(payload)

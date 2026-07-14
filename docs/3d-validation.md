@@ -32,6 +32,10 @@ ID, completion time, and passed-gate list for auditability.
 - [x] Import does not load torch, trimesh, NumPy, Pillow, or initialize CUDA.
 - [x] TRELLIS facade expands through the pinned modular node IDs and never uses
       `Trellis2ExportGLB`.
+- [x] The facade emits all five ordered text/progress transitions and constructs
+      an early neutral Preview3D branch before texture generation.
+- [x] The live runner's WebSocket verifier rejects missing/reordered stages or
+      previews and separately validates the early geometry and final SaveGLB.
 - [x] File3D outputs are string-path-backed and validate as GLB before return.
 - [x] Strict 1536 raises when its token count reaches the cap and never retries
       at a lower resolution.
@@ -39,7 +43,7 @@ ID, completion time, and passed-gate list for auditability.
 - [x] Cache use, refresh, disable, corruption recovery, and atomic writes pass.
 - [x] Asymmetric Y-up/Z-up and normalization round trips preserve handedness,
       orientation, position, and scale.
-- [x] `scripts/check.sh` passes: 118 tests on 2026-07-13.
+- [x] `scripts/check.sh` passes: 134 tests on 2026-07-15.
 
 ## Live G4 benchmark table
 
@@ -82,6 +86,10 @@ cache-hit inference suppression, and the combined-cache build were deliberately
 stopped before live release proof. The machine-readable record therefore
 remains `pending`, and bootstrap continues to use the rollback TRELLIS cache
 plus the UltraShape inference overlay.
+
+The five-stage/dual-preview verifier is locally covered but has not yet been
+executed against a new Colab runtime. A future live run must capture its
+WebSocket proof before this UI behavior is counted as release evidence.
 
 ## Publishing the combined environment cache
 

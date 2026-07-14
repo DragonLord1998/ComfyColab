@@ -104,6 +104,11 @@ Every bundle loader returns the same three standard outputs:
 
 The files are downloaded only when you run the node for the first time. Running
 the same node again in the same Colab session reuses the verified files.
+Transient Hugging Face failures (including stale signed-link `403` responses,
+rate limits, and server errors) are retried up to five times with backoff. A
+partial file is kept and resumed; if a stale Colab `HF_TOKEN` causes `401` or
+`403`, the public bundle is retried anonymously. `force_redownload` is the only
+option that deliberately discards resumable partial data.
 
 | Loader node | Default/typical bundle | Approximate download | Notes |
 | --- | --- | ---: | --- |
@@ -179,6 +184,15 @@ Connect an image, choose a quality preset, and run the workflow. `1024 —
 Quality` is the default. `512 — Fast` is the safest first test. `1536 —
 Maximum` is expensive and never silently falls back to a smaller shape.
 
+The visible facade reports coarse, truthful stages while its expanded TRELLIS
+nodes execute: preparing models and input, generating shape, building the
+geometry preview, generating texture, and baking the final GLB. When its output
+is connected to **Preview 3D & Animation** or **Preview 3D (Advanced)**, that
+viewer receives an early neutral-gray geometry preview as soon as the processed
+shape exists. The final textured model replaces it after PBR baking completes.
+The early preview is not a continuously updating mesh; it is the first valid
+geometry checkpoint.
+
 When strict 1536 needs more than `max_tokens`, the node stops with the required
 token count. Raise the cap if the runtime has room, or manually choose 1024;
 ComfyColab does not rerun at 1408, 1280, 1152, or 1024 behind your back.
@@ -251,7 +265,11 @@ their search category moved.
 Important notes:
 
 - The first model-node execution downloads roughly 17–18 GB into temporary
-  Colab storage. Later runs in the same session reuse those files.
+  Colab storage. Later runs in the same session reuse those files. ComfyColab
+  raises the pinned `comfy-env` isolated-call limit from 10 minutes to 2 hours
+  for its server process, so a healthy first download is not killed mid-transfer.
+  The patch is version/source checked and does not enable force-download or
+  delete Hugging Face's resumable cache.
 - The default G4 bootstrap downloads a separate 5.02 GB prebuilt environment
   cache in three parallel parts. This replaces the much slower dependency
   resolution step; it does not contain model weights. Bootstrap prints the

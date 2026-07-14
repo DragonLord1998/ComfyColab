@@ -60,6 +60,44 @@ def _cache_root() -> Path:
     return Path(root) if root else Path("/content/.comfycolab/cache/3d")
 
 
+def _hidden_value(node_class: type, name: str):
+    return getattr(getattr(node_class, "hidden", None), name, None)
+
+
+def _send_progress_text(node_id: str | None, text: str) -> None:
+    if not node_id:
+        return
+    try:
+        prompt_server = importlib.import_module("server").PromptServer
+        prompt_server.instance.send_progress_text(text, node_id)
+    except (AttributeError, ModuleNotFoundError):
+        pass
+
+
+def _connected_preview_target(
+    prompt: dict[str, Any] | None,
+    source_node_id: str | None,
+    source_slot: int = 0,
+) -> dict[str, Any] | None:
+    if not isinstance(prompt, dict) or source_node_id is None:
+        return None
+    expected_link = [str(source_node_id), source_slot]
+    for node_id, node in prompt.items():
+        class_type = node.get("class_type")
+        if class_type not in {"Preview3D", "Preview3DAdvanced"}:
+            continue
+        inputs = node.get("inputs", {})
+        model_input = "model_3d" if class_type == "Preview3DAdvanced" else "model_file"
+        value = inputs.get(model_input)
+        if isinstance(value, (list, tuple)) and list(value) == expected_link:
+            return {
+                "node_id": str(node_id),
+                "class_type": class_type,
+                "inputs": dict(inputs),
+            }
+    return None
+
+
 def _make_temp_directory(prefix: str) -> Path:
     try:
         comfy_temp = Path(importlib.import_module("folder_paths").get_temp_directory())
@@ -105,6 +143,10 @@ class ComfyColabTrellisImageTo3D:
             node_id="ComfyColabTrellisImageTo3D",
             display_name="ComfyColab TRELLIS.2 — Image to 3D",
             category="ComfyColab/3D",
+            description=(
+                "Generates a textured GLB with visible stage progress. Connect Preview 3D "
+                "to receive an early untextured geometry preview before texture baking finishes."
+            ),
             enable_expand=True,
             inputs=[
                 io.Image.Input("image"),
@@ -121,6 +163,7 @@ class ComfyColabTrellisImageTo3D:
                 io.Combo.Input("cache_mode", options=list(CACHE_MODES), default="Use cache", advanced=True),
             ],
             outputs=[io.File3DGLB.Output("model_3d")],
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt],
         )
 
     @classmethod
@@ -138,6 +181,10 @@ class ComfyColabTrellisImageTo3D:
             texture_size=texture_size,
             max_tokens=max_tokens,
         )
+        progress_node_id = _hidden_value(cls, "unique_id")
+        preview_target = _connected_preview_target(
+            _hidden_value(cls, "prompt"), progress_node_id
+        )
         key = trellis_cache_key(
             image,
             settings=settings,
@@ -150,6 +197,7 @@ class ComfyColabTrellisImageTo3D:
         )
         destination = cache_path(_cache_root(), "trellis", key)
         if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
+            _send_progress_text(progress_node_id, "Complete - Loaded cached 3D model")
             return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
         required = {
             "LoadTrellis2Models", "Trellis2GetConditioning", "Trellis2ImageToShape",
@@ -158,9 +206,12 @@ class ComfyColabTrellisImageTo3D:
         if remove_background != "Off":
             required.add("Trellis2RemoveBackground")
         _require_upstream_nodes(required)
+        _send_progress_text(progress_node_id, "Stage 1/5 - Preparing models and input...")
         return build_trellis_graph(
             image, settings, seed=seed, remove_background=remove_background, cache_mode=cache_mode,
             cache_key=key,
+            progress_node_id=progress_node_id,
+            preview_target=preview_target,
         )
 
 
@@ -303,6 +354,43 @@ class _DevNode:
             node_id=cls.__name__, display_name=cls.__name__, category="ComfyColab/3D/Internal",
             is_dev_only=True, inputs=inputs, outputs=outputs,
         )
+
+
+class ComfyColab3DProgressCheckpoint(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.AnyType.Input("value"),
+                io.String.Input("progress_node_id"),
+                io.Int.Input("completed"),
+                io.Int.Input("total"),
+                io.String.Input("status"),
+                io.AnyType.Input("wait_for", optional=True),
+            ],
+            [io.AnyType.Output()],
+        )
+
+    @classmethod
+    async def execute(
+        cls,
+        value,
+        progress_node_id,
+        completed,
+        total,
+        status,
+        wait_for=None,
+    ):
+        del wait_for
+        _send_progress_text(progress_node_id, status)
+        api = importlib.import_module("comfy_api.latest").ComfyAPI()
+        await api.execution.set_progress(
+            value=float(completed),
+            max_value=float(total),
+            node_id=progress_node_id,
+        )
+        return _io().NodeOutput(value)
 
 
 class ComfyColab3DImageOpaqueMask(_DevNode):
@@ -700,6 +788,7 @@ class ComfyColab3DUltraShapeWorker(_DevNode):
 NODE_CLASS_MAPPINGS = {
     "ComfyColabTrellisImageTo3D": ComfyColabTrellisImageTo3D,
     "ComfyColabUltraShapeRefine": ComfyColabUltraShapeRefine,
+    "ComfyColab3DProgressCheckpoint": ComfyColab3DProgressCheckpoint,
     "ComfyColab3DImageOpaqueMask": ComfyColab3DImageOpaqueMask,
     "ComfyColab3DPathToFile3D": ComfyColab3DPathToFile3D,
     "ComfyColab3DTrimeshToFile3D": ComfyColab3DTrimeshToFile3D,

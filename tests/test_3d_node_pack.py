@@ -156,7 +156,11 @@ class FakeIO:
     class ComfyNode:
         pass
 
-    Image = Mask = Combo = Int = Boolean = File3DGLB = String = PortFactory()
+    Image = Mask = Combo = Int = Boolean = File3DGLB = String = AnyType = PortFactory()
+
+    class Hidden:
+        unique_id = "UNIQUE_ID"
+        prompt = "PROMPT"
 
     @staticmethod
     def Custom(name):
@@ -179,9 +183,13 @@ class Link:
 class GraphNode:
     def __init__(self, index, class_type, inputs):
         self.index, self.class_type, self.inputs = index, class_type, inputs
+        self.override_display_id = None
 
     def out(self, index):
         return Link(self.index, index)
+
+    def set_override_display_id(self, node_id):
+        self.override_display_id = node_id
 
 
 class GraphBuilder:
@@ -197,7 +205,13 @@ class GraphBuilder:
         return node
 
     def finalize(self):
-        return [{"class_type": node.class_type, "inputs": node.inputs} for node in self.nodes]
+        result = []
+        for node in self.nodes:
+            item = {"class_type": node.class_type, "inputs": node.inputs}
+            if node.override_display_id is not None:
+                item["override_display_id"] = node.override_display_id
+            result.append(item)
+        return result
 
 
 class ThreeDNodePackTests(unittest.TestCase):
@@ -241,6 +255,7 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(public, ["ComfyColabTrellisImageTo3D", "ComfyColabUltraShapeRefine"])
         trellis, ultra = schemas[:2]
         self.assertEqual(trellis.display_name, "ComfyColab TRELLIS.2 — Image to 3D")
+        self.assertIn("early untextured geometry preview", trellis.description)
         self.assertEqual(ultra.display_name, "ComfyColab UltraShape — Refine Geometry")
         self.assertEqual(trellis.outputs[0]["name"], "model_3d")
         self.assertEqual(ultra.outputs[0]["name"], "refined_model_3d")
@@ -268,8 +283,8 @@ class ThreeDNodePackTests(unittest.TestCase):
             "Trellis2RemoveBackground",
             "Trellis2GetConditioning",
             "Trellis2ImageToShape",
-            "Trellis2ShapeToTexturedMesh",
             "Trellis2ProcessMesh",
+            "Trellis2ShapeToTexturedMesh",
             "Trellis2RasterizePBR",
             "ComfyColab3DTrimeshToFile3D",
         ])
@@ -277,11 +292,173 @@ class ThreeDNodePackTests(unittest.TestCase):
         shape = result.expand[3]["inputs"]
         self.assertEqual(shape["ss_sampling_steps"], 12)
         self.assertEqual(shape["shape_sampling_steps"], 12)
-        processed = result.expand[5]["inputs"]
+        processed = result.expand[4]["inputs"]
         self.assertEqual(processed["remesh"], "off")
         self.assertIs(processed["remesh.fill_holes"], True)
         self.assertEqual(processed["remesh.fill_holes_perimeter"], 0.03)
         self.assertNotIsInstance(processed["remesh"], dict)
+
+    def test_trellis_facade_reports_stages_and_previews_shape_before_texturing(self):
+        package = load_package()
+        nodes = sys.modules.get("comfycolab_3d_test.nodes") or __import__(
+            "comfycolab_3d_test.nodes", fromlist=["*"]
+        )
+        facade = nodes.NODE_CLASS_MAPPINGS["ComfyColabTrellisImageTo3D"]
+        facade.hidden = types.SimpleNamespace(
+            unique_id="2",
+            prompt={
+                "2": {"class_type": "ComfyColabTrellisImageTo3D", "inputs": {}},
+                "3": {
+                    "class_type": "Preview3DAdvanced",
+                    "inputs": {
+                        "model_3d": ["2", 0],
+                        "viewport_state": {"camera_info": {"position": [0, 0, 3]}},
+                        "width": 1024,
+                        "height": 768,
+                    },
+                },
+            },
+        )
+        try:
+            with mock.patch.object(nodes, "_send_progress_text") as send_progress_text:
+                result = facade.execute(object(), quality="1024 — Quality", seed=7)
+        finally:
+            del facade.hidden
+
+        send_progress_text.assert_called_once_with(
+            "2", "Stage 1/5 - Preparing models and input..."
+        )
+
+        node_ids = [item["class_type"] for item in result.expand]
+        self.assertEqual(node_ids.count("ComfyColab3DProgressCheckpoint"), 5)
+        self.assertIn("ComfyColab3DNeutralMeshToFile3D", node_ids)
+        self.assertIn("Preview3DAdvanced", node_ids)
+        checkpoints = [
+            item["inputs"]
+            for item in result.expand
+            if item["class_type"] == "ComfyColab3DProgressCheckpoint"
+        ]
+        self.assertEqual(
+            [
+                (item["completed"], item["total"], item["status"])
+                for item in checkpoints
+            ],
+            [
+                (1, 5, "Stage 2/5 - Generating 3D shape..."),
+                (2, 5, "Stage 3/5 - Building geometry preview..."),
+                (3, 5, "Stage 4/5 - Geometry preview ready; generating texture..."),
+                (4, 5, "Stage 5/5 - Baking PBR material and final GLB..."),
+                (5, 5, "Complete - 3D model ready"),
+            ],
+        )
+
+        preview_index = node_ids.index("Preview3DAdvanced")
+        texture_index = node_ids.index("Trellis2ShapeToTexturedMesh")
+        self.assertLess(preview_index, texture_index)
+        self.assertEqual(result.expand[preview_index]["override_display_id"], "3")
+        preview_inputs = result.expand[preview_index]["inputs"]
+        self.assertIn("model_3d", preview_inputs)
+        self.assertNotIn("model_file", preview_inputs)
+        self.assertEqual(preview_inputs["width"], 1024)
+        self.assertEqual(preview_inputs["height"], 768)
+        self.assertEqual(
+            preview_inputs["viewport_state"],
+            {"camera_info": {"position": [0, 0, 3]}},
+        )
+
+        texture = result.expand[texture_index]
+        checkpoint = result.expand[texture["inputs"]["shape_slat"].node_id]
+        self.assertEqual(
+            checkpoint["inputs"]["status"],
+            "Stage 4/5 - Geometry preview ready; generating texture...",
+        )
+
+    def test_trellis_early_preview_preserves_standard_preview_contract(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        facade = nodes.NODE_CLASS_MAPPINGS["ComfyColabTrellisImageTo3D"]
+        facade.hidden = types.SimpleNamespace(
+            unique_id="2",
+            prompt={
+                "2": {"class_type": "ComfyColabTrellisImageTo3D", "inputs": {}},
+                "90": {
+                    "class_type": "Preview3D",
+                    "inputs": {"model_file": ["2", 0], "camera_info": "camera"},
+                },
+            },
+        )
+        try:
+            result = facade.execute(object(), quality="512 — Fast", seed=7)
+        finally:
+            del facade.hidden
+        preview = next(item for item in result.expand if item["class_type"] == "Preview3D")
+        self.assertEqual(preview["override_display_id"], "90")
+        self.assertEqual(preview["inputs"]["camera_info"], "camera")
+        self.assertIn("model_file", preview["inputs"])
+        self.assertNotIn("model_3d", preview["inputs"])
+
+    def test_trellis_progress_without_a_viewer_does_not_export_preview_glb(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        facade = nodes.NODE_CLASS_MAPPINGS["ComfyColabTrellisImageTo3D"]
+        facade.hidden = types.SimpleNamespace(
+            unique_id="2",
+            prompt={"2": {"class_type": "ComfyColabTrellisImageTo3D", "inputs": {}}},
+        )
+        try:
+            result = facade.execute(object(), quality="512 — Fast", seed=7)
+        finally:
+            del facade.hidden
+        node_ids = [item["class_type"] for item in result.expand]
+        self.assertEqual(node_ids.count("ComfyColab3DProgressCheckpoint"), 5)
+        self.assertNotIn("ComfyColab3DNeutralMeshToFile3D", node_ids)
+        stage4 = next(
+            item
+            for item in result.expand
+            if item["class_type"] == "ComfyColab3DProgressCheckpoint"
+            and item["inputs"]["completed"] == 3
+        )
+        self.assertIn("wait_for", stage4["inputs"])
+
+    def test_progress_checkpoint_reports_text_and_native_progress_on_facade(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        latest = sys.modules["comfy_api.latest"]
+        set_progress = mock.AsyncMock()
+        latest.ComfyAPI = lambda: types.SimpleNamespace(
+            execution=types.SimpleNamespace(set_progress=set_progress)
+        )
+        send_progress_text = mock.Mock()
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = types.SimpleNamespace(
+            PromptServer=types.SimpleNamespace(
+                instance=types.SimpleNamespace(send_progress_text=send_progress_text)
+            )
+        )
+        try:
+            result = asyncio.run(
+                nodes.ComfyColab3DProgressCheckpoint.execute(
+                    "value",
+                    "2",
+                    3,
+                    5,
+                    "Stage 4/5 - Geometry preview ready; generating texture...",
+                )
+            )
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+        self.assertEqual(result.values, ("value",))
+        send_progress_text.assert_called_once_with(
+            "Stage 4/5 - Geometry preview ready; generating texture...", "2"
+        )
+        set_progress.assert_awaited_once_with(
+            value=3.0,
+            max_value=5.0,
+            node_id="2",
+        )
 
     def test_ultrashape_geometry_only_graph_masks_background_and_applies_face_target(self):
         load_package()

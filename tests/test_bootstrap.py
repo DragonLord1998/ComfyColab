@@ -375,7 +375,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap.subprocess,
                 "Popen",
                 side_effect=[Process(101), Process(202)],
-            ), mock.patch.object(
+            ) as popen, mock.patch.object(
                 remote_bootstrap, "stop_managed_process"
             ), mock.patch.object(
                 remote_bootstrap,
@@ -396,7 +396,20 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
             )
             self.assertEqual(payload["ultrashapePatch"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
+            self.assertEqual(
+                payload["comfyEnvTimeoutPatch"],
+                remote_bootstrap.COMFY_ENV_TIMEOUT_PATCH_ID,
+            )
+            self.assertEqual(
+                payload["isolatedCallTimeoutSeconds"],
+                remote_bootstrap.COMFY_ENV_CALL_TIMEOUT_SECONDS,
+            )
             self.assertEqual(payload["environmentCacheProfile"], "combined-test-cache")
+            comfy_environment = popen.call_args_list[0].kwargs["env"]
+            self.assertEqual(
+                comfy_environment["COMFY_ENV_CALL_TIMEOUT"],
+                str(remote_bootstrap.COMFY_ENV_CALL_TIMEOUT_SECONDS),
+            )
             self.assertEqual(stopped, [202])
 
     def test_failed_tunnel_start_cleans_both_managed_processes(self) -> None:
@@ -530,7 +543,9 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "run",
                 side_effect=lambda command, cwd=None: commands.append((command, cwd)),
-            ), mock.patch.object(remote_bootstrap, "install_ultrashape_overlay"):
+            ), mock.patch.object(remote_bootstrap, "install_ultrashape_overlay"), mock.patch.object(
+                remote_bootstrap, "patch_comfyenv_call_timeout"
+            ) as timeout_patch:
                 remote_bootstrap.install_dependencies()
 
             self.assertEqual(commands[0][1], comfy_dir)
@@ -543,6 +558,62 @@ class BootstrapRenderingTests(unittest.TestCase):
                 commands[3],
                 ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
             )
+            timeout_patch.assert_called_once_with()
+
+    def test_comfyenv_timeout_patch_is_exact_idempotent_and_cache_preserving(self) -> None:
+        source = (
+            "import os\n"
+            "def proxy(worker):\n"
+            "    try:\n"
+            "        return worker.call_method(\n"
+            "                    timeout=600.0,\n"
+            "        )\n"
+            "            except (RuntimeError, ConnectionError):\n"
+            "                raise\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "metadata.py"
+            metadata.write_text(source, encoding="utf-8")
+            self.assertEqual(
+                remote_bootstrap.patch_comfyenv_call_timeout(
+                    metadata,
+                    installed_version=remote_bootstrap.COMFY_ENV_VERSION,
+                ),
+                remote_bootstrap.COMFY_ENV_TIMEOUT_PATCH_ID,
+            )
+            patched = metadata.read_text(encoding="utf-8")
+            self.assertIn(
+                'timeout=float(os.environ.get("COMFY_ENV_CALL_TIMEOUT", "600.0"))',
+                patched,
+            )
+            self.assertIn(
+                "except (RuntimeError, ConnectionError, TimeoutError):",
+                patched,
+            )
+            self.assertNotIn("force_download", patched)
+            self.assertNotIn("unlink", patched)
+            self.assertEqual(
+                remote_bootstrap.patch_comfyenv_call_timeout(
+                    metadata,
+                    installed_version=remote_bootstrap.COMFY_ENV_VERSION,
+                ),
+                remote_bootstrap.COMFY_ENV_TIMEOUT_PATCH_ID,
+            )
+
+    def test_comfyenv_timeout_patch_rejects_version_and_source_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "metadata.py"
+            metadata.write_text("timeout=601.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "unexpected comfy-env version"):
+                remote_bootstrap.patch_comfyenv_call_timeout(
+                    metadata,
+                    installed_version="0.3.90",
+                )
+            with self.assertRaisesRegex(RuntimeError, "drifted or partially patched"):
+                remote_bootstrap.patch_comfyenv_call_timeout(
+                    metadata,
+                    installed_version=remote_bootstrap.COMFY_ENV_VERSION,
+                )
 
     def test_trellis_cache_profile_is_versioned_and_checksum_pinned(self) -> None:
         cache = remote_bootstrap.TRELLIS_CACHE
@@ -978,6 +1049,8 @@ class BootstrapRenderingTests(unittest.TestCase):
                 side_effect=RuntimeError("bad cache"),
             ), mock.patch.object(remote_bootstrap, "run") as run, mock.patch.object(
                 remote_bootstrap, "install_ultrashape_overlay"
+            ), mock.patch.object(
+                remote_bootstrap, "patch_comfyenv_call_timeout"
             ):
                 remote_bootstrap.install_dependencies()
             self.assertFalse(install_hash.exists())

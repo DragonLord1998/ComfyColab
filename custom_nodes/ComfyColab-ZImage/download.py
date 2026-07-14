@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import shutil
 import time
@@ -12,6 +13,8 @@ from typing import Callable
 
 ProgressCallback = Callable[[int, int | None], None]
 CHUNK_SIZE = 4 * 1024 * 1024
+DEFAULT_ATTEMPTS = 5
+RETRYABLE_HTTP_CODES = frozenset({401, 403, 408, 416, 425, 429, 500, 502, 503, 504})
 
 
 class DownloadError(RuntimeError):
@@ -42,13 +45,20 @@ def _verified(path: Path, expected_sha256: str) -> bool:
     return True
 
 
-def _request(url: str, offset: int) -> urllib.request.Request:
+def _request(
+    url: str,
+    offset: int,
+    *,
+    include_auth: bool = True,
+) -> urllib.request.Request:
     headers = {
         "Accept-Encoding": "identity",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "User-Agent": "ComfyColab/0.1",
     }
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    if token:
+    if token and include_auth:
         headers["Authorization"] = f"Bearer {token}"
     if offset:
         headers["Range"] = f"bytes={offset}-"
@@ -62,8 +72,10 @@ def download_file(
     expected_sha256: str,
     force: bool = False,
     progress: ProgressCallback | None = None,
-    attempts: int = 3,
+    attempts: int = DEFAULT_ATTEMPTS,
 ) -> Path:
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
     destination.parent.mkdir(parents=True, exist_ok=True)
     marker = destination.with_suffix(destination.suffix + ".sha256")
     partial = destination.with_suffix(destination.suffix + ".part")
@@ -79,10 +91,16 @@ def download_file(
         marker.unlink(missing_ok=True)
 
     last_error: Exception | None = None
+    include_auth = bool(
+        os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    )
     for attempt in range(1, attempts + 1):
         offset = partial.stat().st_size if partial.exists() else 0
         try:
-            with urllib.request.urlopen(_request(url, offset), timeout=120) as response:
+            with urllib.request.urlopen(
+                _request(url, offset, include_auth=include_auth),
+                timeout=120,
+            ) as response:
                 status = getattr(response, "status", 200) or 200
                 resumed = offset > 0 and status == 206
                 if offset and not resumed:
@@ -99,11 +117,27 @@ def download_file(
                 mode = "ab" if resumed else "wb"
                 completed = offset
                 with partial.open(mode) as output:
-                    while chunk := response.read(CHUNK_SIZE):
-                        output.write(chunk)
-                        completed += len(chunk)
-                        if progress:
-                            progress(completed, total)
+                    try:
+                        while chunk := response.read(CHUNK_SIZE):
+                            output.write(chunk)
+                            completed += len(chunk)
+                            if progress:
+                                progress(completed, total)
+                    except http.client.IncompleteRead as error:
+                        if error.partial:
+                            output.write(error.partial)
+                            completed += len(error.partial)
+                            if progress:
+                                progress(completed, total)
+                        raise DownloadError(
+                            f"Connection closed early for {destination.name} "
+                            f"at {completed} of {total or 'unknown'} bytes."
+                        ) from error
+                if total is not None and completed < total:
+                    raise DownloadError(
+                        f"Connection closed early for {destination.name} "
+                        f"at {completed} of {total} bytes."
+                    )
 
             actual_sha256 = sha256_file(partial)
             if actual_sha256 != expected_sha256:
@@ -118,7 +152,12 @@ def download_file(
                 encoding="ascii",
             )
             return destination
-        except (OSError, urllib.error.URLError, DownloadError) as error:
+        except (
+            OSError,
+            http.client.IncompleteRead,
+            urllib.error.URLError,
+            DownloadError,
+        ) as error:
             if (
                 isinstance(error, urllib.error.HTTPError)
                 and error.code == 416
@@ -131,8 +170,27 @@ def download_file(
                     encoding="ascii",
                 )
                 return destination
+            if isinstance(error, urllib.error.HTTPError):
+                if error.code == 416:
+                    # The server rejected the retained range and the partial is
+                    # not already complete. Restart once from a clean offset.
+                    partial.unlink(missing_ok=True)
+                if error.code not in RETRYABLE_HTTP_CODES:
+                    raise DownloadError(
+                        f"Unable to download {destination.name}: HTTP {error.code} "
+                        f"is not retryable ({error.reason})."
+                    ) from error
+                if error.code in {401, 403} and include_auth:
+                    # All bundled artifacts are public. A stale/invalid Colab HF
+                    # token can turn an otherwise public download into a 403, so
+                    # retry anonymously before giving up.
+                    include_auth = False
             last_error = error
             if attempt < attempts:
-                time.sleep(2 ** (attempt - 1))
+                time.sleep(min(2 ** attempt, 30))
 
-    raise DownloadError(f"Unable to download {destination.name}: {last_error}")
+    partial_note = f" Partial data was kept at {partial}." if partial.exists() else ""
+    raise DownloadError(
+        f"Unable to download {destination.name} after {attempts} attempts: "
+        f"{last_error}.{partial_note}"
+    )
