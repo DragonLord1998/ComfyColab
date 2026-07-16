@@ -294,27 +294,47 @@ class BootstrapRenderingTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "requires revision"):
                     remote_bootstrap.apply_pinned_patch(repository, specification)
 
-    def test_install_node_pack_links_image_and_3d_facades(self) -> None:
+    def test_install_node_pack_links_all_first_party_facades(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repository = root / "repo"
             image_source = repository / "custom_nodes" / "ComfyColab-ZImage"
             three_d_source = repository / "custom_nodes" / "ComfyColab-3D"
+            triposplat_source = repository / "custom_nodes" / "ComfyColab-Triposplat"
             image_source.mkdir(parents=True)
             three_d_source.mkdir(parents=True)
+            triposplat_source.mkdir(parents=True)
             image_target = root / "custom_nodes" / "ComfyColab-ZImage"
             three_d_target = root / "custom_nodes" / "ComfyColab-3D"
+            triposplat_target = root / "custom_nodes" / "ComfyColab-Triposplat"
             image_target.mkdir(parents=True)
             three_d_target.mkdir(parents=True)
+            triposplat_target.mkdir(parents=True)
             with mock.patch.multiple(
                 remote_bootstrap,
                 REPO_DIR=repository,
                 NODE_TARGET=image_target,
                 NODE_3D_TARGET=three_d_target,
+                NODE_TRIPOSPLAT_TARGET=triposplat_target,
             ):
                 remote_bootstrap.install_node_pack()
             self.assertEqual(image_target.resolve(), image_source.resolve())
             self.assertEqual(three_d_target.resolve(), three_d_source.resolve())
+            self.assertEqual(triposplat_target.resolve(), triposplat_source.resolve())
+
+    def test_triposplat_core_support_requires_native_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            comfy = Path(directory)
+            for relative_path, symbols in remote_bootstrap.TRIPOSPLAT_CORE_REQUIREMENTS.items():
+                path = comfy / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(symbols), encoding="utf-8")
+            with mock.patch.object(remote_bootstrap, "COMFY_DIR", comfy):
+                remote_bootstrap.validate_triposplat_core_support()
+                missing_path = comfy / "comfy_extras" / "nodes_triposplat.py"
+                missing_path.write_text("TripoSplatConditioning\n", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "native TripoSplat"):
+                    remote_bootstrap.validate_triposplat_core_support()
 
     def test_awaiting_combined_cache_falls_back_to_trellis_profile(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -359,9 +379,12 @@ class BootstrapRenderingTests(unittest.TestCase):
                 ULTRASHAPE_DIR=root / "UltraShape-1.0",
                 NODE_TARGET=root / "node",
                 NODE_3D_TARGET=root / "node-3d",
+                NODE_TRIPOSPLAT_TARGET=root / "node-triposplat",
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
+                remote_bootstrap, "validate_triposplat_core_support"
+            ), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
             ), mock.patch.object(
                 remote_bootstrap,
@@ -402,6 +425,8 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(payload["trellisCommit"], "abc123")
             self.assertEqual(payload["geometryCommit"], "abc123")
             self.assertEqual(payload["ultrashapeCommit"], "abc123")
+            self.assertEqual(payload["triposplatCoreRef"], remote_bootstrap.COMFY_REF)
+            self.assertTrue(payload["triposplatCoreReady"])
             self.assertEqual(payload["trellisPatch"], remote_bootstrap.TRELLIS_PATCH_ID)
             self.assertEqual(
                 payload["trellisCategoryPatch"],
@@ -454,9 +479,12 @@ class BootstrapRenderingTests(unittest.TestCase):
                 ULTRASHAPE_DIR=root / "UltraShape-1.0",
                 NODE_TARGET=root / "node",
                 NODE_3D_TARGET=root / "node-3d",
+                NODE_TRIPOSPLAT_TARGET=root / "node-triposplat",
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
+                remote_bootstrap, "validate_triposplat_core_support"
+            ), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
             ), mock.patch.object(
                 remote_bootstrap,

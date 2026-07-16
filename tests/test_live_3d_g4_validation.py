@@ -84,6 +84,41 @@ def minimal_glb(path: Path, *, textured: bool = True) -> None:
     path.write_bytes(payload)
 
 
+def minimal_3dgs_ply(path: Path, *, vertices: int = 2) -> None:
+    properties = [
+        ("float", "x"),
+        ("float", "y"),
+        ("float", "z"),
+        ("float", "f_dc_0"),
+        ("float", "f_dc_1"),
+        ("float", "f_dc_2"),
+        ("float", "opacity"),
+        ("float", "scale_0"),
+        ("float", "scale_1"),
+        ("float", "scale_2"),
+        ("float", "rot_0"),
+        ("float", "rot_1"),
+        ("float", "rot_2"),
+        ("float", "rot_3"),
+    ]
+    header = [
+        "ply",
+        "format binary_little_endian 1.0",
+        f"element vertex {vertices}",
+        *[f"property {kind} {name}" for kind, name in properties],
+        "end_header",
+    ]
+    row = struct.pack(
+        "<" + "f" * len(properties),
+        0.0, 1.0, 2.0,
+        0.1, 0.2, 0.3,
+        0.9,
+        -3.0, -3.0, -3.0,
+        1.0, 0.0, 0.0, 0.0,
+    )
+    path.write_bytes(("\n".join(header) + "\n").encode("ascii") + row * vertices)
+
+
 def stage_binary(node_id: str, text: str) -> bytes:
     encoded_node = node_id.encode("utf-8")
     return (
@@ -304,6 +339,22 @@ class Live3DG4ValidationTests(unittest.TestCase):
         )
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["3", 0])
 
+    def test_triposplat_fast_prompt_uses_file3d_ply_preview_and_save(self) -> None:
+        spec = self.module.CASES["triposplat_fast_65k"]
+        prompt = self.module.build_prompt(spec, options(seed=123), "input.png", "splat-run")
+        self.assertEqual(prompt["1"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["2"]["class_type"], "ComfyColabTripoSplatImageToGaussianSplat")
+        self.assertEqual(prompt["2"]["inputs"]["image"], ["1", 0])
+        self.assertEqual(prompt["2"]["inputs"]["quality"], "Fast — 65K")
+        self.assertEqual(prompt["2"]["inputs"]["seed"], 123)
+        self.assertEqual(prompt["2"]["inputs"]["remove_background"], True)
+        self.assertEqual(prompt["2"]["inputs"]["enable_sampling_preview"], True)
+        self.assertEqual(prompt["2"]["inputs"]["output_format"], "ply")
+        self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 1])
+        self.assertEqual(prompt["91"]["class_type"], "SaveGLB")
+        self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 1])
+        self.assertIn("splat-run-triposplat_fast_65k", prompt["91"]["inputs"]["filename_prefix"])
+
     def test_advanced_prompt_uses_hexadecimal_adapter_cache_key(self) -> None:
         spec = self.module.CASES["advanced_trellis_workflow"]
         prompt = self.module.build_prompt(spec, options(), "input.png", "advanced-run")
@@ -334,6 +385,30 @@ class Live3DG4ValidationTests(unittest.TestCase):
         info["Preview3D"]["input"]["required"]["model_file"][0] = "STRING"
         with self.assertRaisesRegex(RuntimeError, "does not accept"):
             self.module.check_object_info(api, prompt, "2")
+
+    def test_triposplat_object_info_proves_file3d_preview_and_save_compatibility(self) -> None:
+        spec = self.module.CASES["triposplat_fast_65k"]
+        prompt = self.module.build_prompt(spec, options(), "input.png", "splat-run")
+        info = {node["class_type"]: {"output": []} for node in prompt.values()}
+        info["ComfyColabTripoSplatImageToGaussianSplat"]["output"] = [
+            "SPLAT",
+            "FILE_3D_SPLAT_ANY",
+        ]
+        info["Preview3D"]["input"] = {
+            "required": {"model_file": ["STRING,FILE_3D_SPLAT_ANY,FILE_3D", {}]}
+        }
+        info["SaveGLB"]["input"] = {
+            "required": {"mesh": ["MESH,FILE_3D_SPLAT_ANY,FILE_3D", {}]}
+        }
+        api = mock.Mock()
+        api.get.return_value = info
+        proof = self.module.check_object_info(api, prompt, "2", spec)
+        self.assertEqual(proof["outputType"], "FILE_3D_SPLAT_ANY")
+        self.assertEqual(proof["saveNodeType"], "SaveGLB")
+        self.assertEqual(proof["saveInput"], "mesh")
+        info["ComfyColabTripoSplatImageToGaussianSplat"]["output"] = ["SPLAT"]
+        with self.assertRaisesRegex(RuntimeError, "did not expose FILE_3D_SPLAT_ANY"):
+            self.module.check_object_info(api, prompt, "2", spec)
 
     def test_shape_metrics_require_actual_resolution_and_reject_downgrade(self) -> None:
         spec = self.module.CASES["trellis_1536_cascade"]
@@ -429,6 +504,91 @@ class Live3DG4ValidationTests(unittest.TestCase):
             self.assertTrue(record["embeddedTextureValidated"])
             with self.assertRaisesRegex(ValueError, "UV accessor"):
                 self.module.inspect_glb(neutral, require_textured=True)
+
+    def test_3dgs_ply_inspection_requires_binary_little_endian_and_gaussian_properties(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ply = root / "splat.ply"
+            minimal_3dgs_ply(ply, vertices=3)
+            record = self.module.inspect_3dgs_ply(ply)
+            self.assertEqual(record["artifactKind"], "3dgs-ply")
+            self.assertEqual(record["gaussianCount"], 3)
+            self.assertEqual(record["format"], "binary_little_endian")
+            self.assertTrue(record["plyValidated"])
+            self.assertIn("f_dc_0", record["properties"])
+            bad = root / "bad.ply"
+            bad.write_bytes(ply.read_bytes().replace(b"property float opacity\n", b""))
+            with self.assertRaisesRegex(ValueError, "required 3DGS properties"):
+                self.module.inspect_3dgs_ply(bad)
+
+    def test_triposplat_run_wires_file3d_save_and_records_ply_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            splat = output / "saved.ply"
+            minimal_3dgs_ply(splat, vertices=4)
+            history = {
+                "status": {"completed": True},
+                "outputs": {
+                    "91": {
+                        "3d": [
+                            {"filename": "saved.ply", "subfolder": "", "type": "output"}
+                        ]
+                    }
+                },
+            }
+            args = options(
+                base_url="http://127.0.0.1:8188",
+                comfy_root=root,
+                comfy_log=root / "comfy.log",
+                timeout=60.0,
+                vram_interval=0.01,
+            )
+            recorder = mock.Mock()
+            spec = self.module.CASES["triposplat_fast_65k"]
+            with mock.patch.object(
+                self.module,
+                "check_object_info",
+                return_value={"previewNode": "90", "saveNode": "91"},
+            ) as object_info, mock.patch.object(
+                self.module,
+                "queue_prompt",
+                return_value="prompt-splat",
+            ), mock.patch.object(
+                self.module,
+                "wait_prompt",
+                return_value=history,
+            ), mock.patch.object(
+                self.module,
+                "changed_artifacts",
+                return_value=[splat.resolve()],
+            ), mock.patch.object(
+                self.module,
+                "read_settled_log_since",
+                return_value=("", 0),
+            ), mock.patch.object(self.module.VramSampler, "sample", return_value=4096):
+                result = self.module.run_prompt_once(
+                    spec,
+                    args,
+                    "run-splat",
+                    "input.png",
+                    recorder,
+                )
+            object_info.assert_called_once()
+            self.assertEqual(result["glb"]["path"], str(splat.resolve()))
+            self.assertEqual(result["glb"]["gaussianCount"], 4)
+            self.assertTrue(result["previewSaveProof"]["saveArtifactValidated"])
+            benchmark = self.module.benchmark_from(
+                spec,
+                1.25,
+                result["peakVramBytes"],
+                result["glb"],
+                "",
+            )
+            self.assertEqual(benchmark["gaussianCount"], 4)
+            self.assertEqual(benchmark["outputFormat"], "ply")
+            self.assertEqual(benchmark["plySha256"], result["glb"]["sha256"])
 
     def test_detached_launch_builds_run_subcommand_and_persists_pid(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

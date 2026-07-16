@@ -12,7 +12,7 @@ terminal.
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
-- Two simple 3D nodes for TRELLIS.2 generation and UltraShape refinement
+- Simple 3D nodes for TRELLIS.2, TripoSplat, and UltraShape
 - The complete advanced TRELLIS.2 and GeometryPack node suites
 - On-demand model downloads with checksums and resume support
 - A public Cloudflare URL for the ComfyUI interface
@@ -173,10 +173,12 @@ In ComfyUI, search for:
 
 - **ComfyColab TRELLIS.2 — Image to 3D**
 - **ComfyColab UltraShape — Refine Geometry**
+- **ComfyColab TripoSplat — Image to Gaussian Splat**
 
-Both output a native GLB `File3D`, so their result connects directly to
-**Preview 3D & Animation** and **Save 3D Model**. The two facades are the only
-normal-search ComfyColab 3D nodes; their adapters remain development-only.
+TRELLIS.2 and UltraShape output native GLB `File3D` results, so they
+connect directly to **Preview 3D & Animation** and **Save 3D Model**. TripoSplat
+outputs a native ComfyUI `SPLAT` plus a splat `FILE_3D`. The three facades are the
+only normal-search ComfyColab 3D nodes; their adapters remain development-only.
 
 ### TRELLIS.2 — Image to 3D
 
@@ -206,6 +208,33 @@ ComfyColab does not rerun at 1408, 1280, 1152, or 1024 behind your back.
 `remove_background=Auto` uses the pinned TRELLIS BiRefNet node. `Off` supplies
 an all-foreground mask. The advanced TRELLIS inputs use `0` for their preset
 value, except `max_tokens`, whose visible default is `49152`.
+
+### TripoSplat — Image to Gaussian Splat
+
+Connect one ComfyUI `IMAGE`, choose a quality preset, and run the node. The
+presets are `Fast — 65K`, `Balanced — 131K`, and `Quality — 262K`. The default
+is `Quality — 262K`; `Fast — 65K` is the safest first live test.
+
+The `SPLAT` output is ComfyUI's native in-memory Gaussian splat output. The
+`model_3d` output is a native splat `FILE_3D` written as `ply`, `spz`, or
+`ksplat`. Use `ply` for the broadest Gaussian-splat interoperability and full
+spherical-harmonic data, `spz` for a compact splat file, and `ksplat` for
+viewers that expect the KIRI/ksplat format.
+
+TripoSplat uses native ComfyUI TripoSplat support from ComfyUI v0.23.0+ and the
+ComfyUI revision pinned by ComfyColab. The first uncached run downloads about
+3.78 GB of public model files from the official `VAST-AI/TripoSplat` Hugging
+Face repository into the runtime's normal ComfyUI model folders; no API token
+is required for those public assets. The official project is
+[`VAST-AI-Research/TripoSplat`](https://github.com/VAST-AI-Research/TripoSplat)
+and the official model repository is
+[`VAST-AI/TripoSplat`](https://huggingface.co/VAST-AI/TripoSplat). The official
+TripoSplat source and weights are MIT licensed.
+
+Local contract and workflow tests can verify the node schema, graph expansion,
+download logic, presets, and file-format choices. They do not prove live Colab
+GPU execution, runtime memory behavior, or output quality; those claims require
+a real live G4 run that produces and validates a non-empty splat artifact.
 
 ### UltraShape — Refine Geometry
 

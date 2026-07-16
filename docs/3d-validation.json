@@ -9,6 +9,7 @@
     "trellis": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
     "geometry": "c67199de05705642258e727fa118f412877b4ebf",
     "ultrashape": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
+    "triposplat": "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974",
     "cubvh": "757b913bfbf19ed65e3a379d159391a8e29efa0f",
     "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
     "comfyEnv": "0.3.89"
@@ -16,7 +17,8 @@
   "patches": {
     "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
     "trellisCategory": "trellis2-advanced-categories-v1",
-    "ultrashape": "ultrashape-inference-compat-v3"
+    "ultrashape": "ultrashape-inference-compat-v3",
+    "triposplat": "pending-live-g4"
   },
   "gates": {
     "trellis_512_textured_glb": {"status": "pending", "evidence": null},
@@ -28,6 +30,7 @@
     "ultrashape_512_refinement": {"status": "pending", "evidence": null},
     "ultrashape_1024_run_1": {"status": "pending", "evidence": null},
     "ultrashape_1024_run_2": {"status": "pending", "evidence": null},
+    "triposplat_fast_65k_file3d_ply": {"status": "pending", "evidence": null},
     "full_workflow_hard_surface": {"status": "pending", "evidence": null},
     "full_workflow_organic": {"status": "pending", "evidence": null},
     "full_workflow_thin": {"status": "pending", "evidence": null},
@@ -45,6 +48,7 @@
     "ultrashape_384": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
     "ultrashape_512": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
     "ultrashape_1024_run_1": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
-    "ultrashape_1024_run_2": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false}
+    "ultrashape_1024_run_2": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
+    "triposplat_fast_65k": {"status": "pending", "quality": "Fast \u2014 65K", "gaussianCount": null, "runtimeSeconds": null, "peakVramBytes": null, "plyBytes": null, "plySha256": null, "plyValidated": false, "file3dValidated": false, "outputFormat": "ply", "modelRevision": "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974"}
   }
 }

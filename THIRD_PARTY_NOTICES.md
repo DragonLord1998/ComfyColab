@@ -24,6 +24,20 @@ of UltraShape training and unused mesh-postprocessing modules and threads a
 seeded generator through surface sampling. It does not alter the model
 architecture or weights.
 
+## TripoSplat
+
+- Official source: <https://github.com/VAST-AI-Research/TripoSplat>
+- Official model: <https://huggingface.co/VAST-AI/TripoSplat>
+- License: MIT
+- Native ComfyUI support: ComfyUI v0.23.0+ and the ComfyUI revision pinned by
+  ComfyColab
+
+ComfyColab uses the native TripoSplat and Gaussian-splat nodes from pinned
+ComfyUI. It does not redistribute TripoSplat source files or weights in this
+Git repository. The first uncached run downloads about 3.78 GB of public model
+assets from the official Hugging Face repository into the active runtime's
+ComfyUI model folders.
+
 ## DINOv2 Large
 
 - Model: <https://huggingface.co/facebook/dinov2-large>
