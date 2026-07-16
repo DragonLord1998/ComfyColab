@@ -1,0 +1,128 @@
+{
+  "id": "d5cf0f72-3b4d-42a1-9f2e-47f22db18b0c",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [-620, 60],
+      "size": [315, 314],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
+        {"name": "upload", "type": "IMAGEUPLOAD", "widget": {"name": "upload"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 2,
+      "type": "ComfyColabTripoSplatImageToGaussianSplat",
+      "pos": [-180, 20],
+      "size": [430, 300],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1},
+        {"name": "quality", "type": "COMBO", "widget": {"name": "quality"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "remove_background", "type": "BOOLEAN", "widget": {"name": "remove_background"}, "link": null},
+        {"name": "sampling_steps", "type": "INT", "widget": {"name": "sampling_steps"}, "link": null},
+        {"name": "guidance_scale", "type": "FLOAT", "widget": {"name": "guidance_scale"}, "link": null},
+        {"name": "enable_sampling_preview", "type": "BOOLEAN", "widget": {"name": "enable_sampling_preview"}, "link": null},
+        {"name": "output_format", "type": "COMBO", "widget": {"name": "output_format"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "splat", "type": "SPLAT", "links": [2]},
+        {"name": "model_3d", "type": "FILE_3D_SPLAT_ANY", "links": [5]}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabTripoSplatImageToGaussianSplat"},
+      "widgets_values": ["Quality — 262K", 0, true, 20, 3.0, true, "ply"]
+    },
+    {
+      "id": 3,
+      "type": "RenderSplat",
+      "pos": [330, -140],
+      "size": [300, 180],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "splat", "type": "SPLAT", "link": 2}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [3]}
+      ],
+      "properties": {"Node name for S&R": "RenderSplat"},
+      "widgets_values": []
+    },
+    {
+      "id": 4,
+      "type": "CreateVideo",
+      "pos": [710, -140],
+      "size": [320, 180],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 3}
+      ],
+      "outputs": [
+        {"name": "VIDEO", "type": "VIDEO", "links": [4]}
+      ],
+      "properties": {"Node name for S&R": "CreateVideo"},
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "SaveVideo",
+      "pos": [1090, -140],
+      "size": [300, 100],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "video", "type": "VIDEO", "link": 4},
+        {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "SaveVideo"},
+      "widgets_values": ["3d/ComfyColab_TripoSplat_preview"]
+    },
+    {
+      "id": 6,
+      "type": "Preview3D",
+      "pos": [330, 160],
+      "size": [420, 540],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "model_file", "type": "STRING,FILE_3D_SPLAT_ANY,FILE_3D", "link": 5}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "Preview3D"},
+      "widgets_values": [""]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 2, 0, 3, 0, "SPLAT"],
+    [3, 3, 0, 4, 0, "IMAGE"],
+    [4, 4, 0, 5, 0, "VIDEO"],
+    [5, 2, 1, 6, 0, "FILE_3D_SPLAT_ANY"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {"workflowRendererVersion": "LG"},
+  "version": 0.4
+}

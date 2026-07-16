@@ -47,6 +47,9 @@ ULTRASHAPE_SETTINGS_EVENT = re.compile(
 ULTRASHAPE_WORKER_SETTINGS_EVENT = re.compile(
     r"COMFYCOLAB_ULTRASHAPE_WORKER_SETTINGS=(?P<payload>\{[^\n]+\})"
 )
+TRIPOSPLAT_MODEL_REVISION = (
+    "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974"
+)
 FIVE_STAGE_TEXTS = (
     "Stage 1/5 - Preparing models and input...",
     "Stage 2/5 - Generating 3D shape...",
@@ -147,6 +150,10 @@ CASES: dict[str, CaseSpec] = {
     "ultrashape_1024_run_2": CaseSpec(
         "ultrashape_1024_run_2", "ultrashape", "ultrashape_1024_run_2",
         "ultrashape_1024_run_2", actual_resolution=1024, detail="Ultra", octree_resolution=0,
+    ),
+    "triposplat_fast_65k": CaseSpec(
+        "triposplat_fast_65k", "triposplat", "triposplat_fast_65k_file3d_ply",
+        "triposplat_fast_65k", actual_resolution=65536, quality="Fast — 65K",
     ),
     "full_workflow_hard_surface": CaseSpec(
         "full_workflow_hard_surface", "full", "full_workflow_hard_surface",
@@ -557,11 +564,40 @@ def ultra_inputs(spec: CaseSpec, model_node: str, image_node: str, args: argpars
     }
 
 
+def triposplat_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "image": [image_node, 0],
+        "quality": spec.quality,
+        "seed": args.seed,
+        "remove_background": True,
+        "sampling_steps": args.sampling_steps or 20,
+        "guidance_scale": 3.0,
+        "enable_sampling_preview": True,
+        "output_format": "ply",
+    }
+
+
 def add_preview_and_save(prompt: dict[str, Any], source: str, prefix: str) -> None:
     prompt["90"] = {"class_type": "Preview3D", "inputs": {"model_file": [source, 0]}}
     prompt["91"] = {
         "class_type": "SaveGLB",
         "inputs": {"mesh": [source, 0], "filename_prefix": prefix},
+    }
+
+
+def add_preview_and_file3d_save(
+    prompt: dict[str, Any],
+    source: str,
+    output_index: int,
+    prefix: str,
+) -> None:
+    prompt["90"] = {
+        "class_type": "Preview3D",
+        "inputs": {"model_file": [source, output_index]},
+    }
+    prompt["91"] = {
+        "class_type": "SaveGLB",
+        "inputs": {"mesh": [source, output_index], "filename_prefix": prefix},
     }
 
 
@@ -607,13 +643,22 @@ def build_prompt(
             "inputs": ultra_inputs(spec, "2", "1", args, cache_mode),
         }
         output_node = "3"
+    elif spec.kind == "triposplat":
+        prompt["2"] = {
+            "class_type": "ComfyColabTripoSplatImageToGaussianSplat",
+            "inputs": triposplat_inputs(spec, "1", args),
+        }
+        output_node = "2"
     elif spec.kind == "advanced":
         prompt.update(build_advanced_nodes(args))
         output_node = "9"
     else:
         raise ValueError(f"Case {spec.name} does not use a ComfyUI prompt")
     prefix = f"3d/validation/{run_id}-{spec.name}"
-    add_preview_and_save(prompt, output_node, prefix)
+    if spec.kind == "triposplat":
+        add_preview_and_file3d_save(prompt, output_node, 1, prefix)
+    else:
+        add_preview_and_save(prompt, output_node, prefix)
     return prompt
 
 
@@ -654,7 +699,35 @@ def required_image(spec: CaseSpec) -> bool:
     return spec.kind not in {"probe"}
 
 
-def check_object_info(api: ApiClient, prompt: dict[str, Any], source_node: str) -> dict[str, Any]:
+def output_index_for(spec: CaseSpec) -> int:
+    return 1 if spec.kind == "triposplat" else 0
+
+
+def expected_file3d_type_for(spec: CaseSpec) -> str:
+    return "FILE_3D_SPLAT_ANY" if spec.kind == "triposplat" else "FILE_3D_GLB"
+
+
+def save_node_contract_for(spec: CaseSpec) -> tuple[str, str]:
+    return ("SaveGLB", "mesh")
+
+
+def _accepted_type(info: dict[str, Any], node_type: str, input_name: str) -> Any:
+    value = (
+        info.get(node_type, {})
+        .get("input", {})
+        .get("required", {})
+        .get(input_name)
+    )
+    return value[0] if isinstance(value, list) and value else value
+
+
+def check_object_info(
+    api: ApiClient,
+    prompt: dict[str, Any],
+    source_node: str,
+    spec: CaseSpec | None = None,
+) -> dict[str, Any]:
+    spec = spec or CASES["trellis_512"]
     info = api.get("/object_info")
     required = {value["class_type"] for value in prompt.values()}
     missing = sorted(node for node in required if node not in info)
@@ -662,20 +735,23 @@ def check_object_info(api: ApiClient, prompt: dict[str, Any], source_node: str) 
         raise RuntimeError(f"ComfyUI is missing required nodes: {', '.join(missing)}")
     facade_type = prompt[source_node]["class_type"]
     facade_outputs = info.get(facade_type, {}).get("output", [])
-    preview_input = info.get("Preview3D", {}).get("input", {}).get("required", {}).get("model_file")
-    save_input = info.get("SaveGLB", {}).get("input", {}).get("required", {}).get("mesh")
-    preview_type = preview_input[0] if isinstance(preview_input, list) and preview_input else preview_input
-    save_type = save_input[0] if isinstance(save_input, list) and save_input else save_input
-    output_type = facade_outputs[0] if facade_outputs else None
-    if output_type != "FILE_3D_GLB":
-        raise RuntimeError(f"{facade_type} did not expose FILE_3D_GLB (got {output_type!r})")
-    for label, accepted in (("Preview3D", preview_type), ("SaveGLB", save_type)):
-        if "FILE_3D_GLB" not in str(accepted):
-            raise RuntimeError(f"{label} does not accept FILE_3D_GLB (got {accepted!r})")
-    if prompt["90"]["inputs"]["model_file"] != [source_node, 0]:
+    expected_type = expected_file3d_type_for(spec)
+    output_index = output_index_for(spec)
+    save_node, save_input = save_node_contract_for(spec)
+    preview_type = _accepted_type(info, "Preview3D", "model_file")
+    save_type = _accepted_type(info, save_node, save_input)
+    output_type = facade_outputs[output_index] if len(facade_outputs) > output_index else None
+    if output_type != expected_type:
+        raise RuntimeError(f"{facade_type} did not expose {expected_type} (got {output_type!r})")
+    for label, accepted in (("Preview3D", preview_type), (save_node, save_type)):
+        if expected_type not in str(accepted):
+            raise RuntimeError(f"{label} does not accept {expected_type} (got {accepted!r})")
+    if prompt["90"]["inputs"]["model_file"] != [source_node, output_index]:
         raise RuntimeError("Preview3D is not connected to the facade output")
-    if prompt["91"]["inputs"]["mesh"] != [source_node, 0]:
-        raise RuntimeError("SaveGLB is not connected to the facade output")
+    if prompt["91"]["class_type"] != save_node:
+        raise RuntimeError(f"{save_node} is not present as the explicit save node")
+    if prompt["91"]["inputs"][save_input] != [source_node, output_index]:
+        raise RuntimeError(f"{save_node} is not connected to the facade output")
     return {
         "facade": facade_type,
         "outputType": output_type,
@@ -683,6 +759,8 @@ def check_object_info(api: ApiClient, prompt: dict[str, Any], source_node: str) 
         "saveAcceptedType": save_type,
         "previewNode": "90",
         "saveNode": "91",
+        "saveNodeType": save_node,
+        "saveInput": save_input,
     }
 
 
@@ -826,39 +904,58 @@ def output_snapshot(output_root: Path) -> dict[Path, tuple[int, int]]:
     result: dict[Path, tuple[int, int]] = {}
     if not output_root.exists():
         return result
-    for path in output_root.rglob("*.glb"):
-        try:
-            stat = path.stat()
-            result[path.resolve()] = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            pass
+    for suffix in ("*.glb", "*.ply"):
+        for path in output_root.rglob(suffix):
+            try:
+                stat = path.stat()
+                result[path.resolve()] = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                pass
     return result
 
 
-def changed_glbs(before: dict[Path, tuple[int, int]], output_root: Path) -> list[Path]:
+def changed_artifacts(
+    before: dict[Path, tuple[int, int]],
+    output_root: Path,
+    *,
+    suffixes: tuple[str, ...],
+) -> list[Path]:
     after = output_snapshot(output_root)
+    wanted = tuple(item.lower() for item in suffixes)
     return sorted(
-        (path for path, value in after.items() if before.get(path) != value),
+        (
+            path
+            for path, value in after.items()
+            if before.get(path) != value and path.suffix.lower() in wanted
+        ),
         key=lambda item: after[item][0],
     )
+
+
+def changed_glbs(before: dict[Path, tuple[int, int]], output_root: Path) -> list[Path]:
+    return changed_artifacts(before, output_root, suffixes=(".glb",))
 
 
 def history_output_paths(
     history: dict[str, Any],
     node_id: str,
     output_root: Path,
+    *,
+    suffixes: tuple[str, ...] = (".glb",),
 ) -> list[Path]:
     node_output = (history.get("outputs") or {}).get(str(node_id), {})
     paths: list[Path] = []
+    wanted = tuple(item.lower() for item in suffixes)
     for entries in node_output.values() if isinstance(node_output, dict) else []:
         if not isinstance(entries, list):
             continue
         for entry in entries:
-            if not isinstance(entry, dict) or not str(entry.get("filename", "")).lower().endswith(".glb"):
+            filename = str(entry.get("filename", ""))
+            if not isinstance(entry, dict) or not filename.lower().endswith(wanted):
                 continue
             if entry.get("type") != "output":
                 continue
-            path = output_root / str(entry.get("subfolder") or "") / str(entry["filename"])
+            path = output_root / str(entry.get("subfolder") or "") / filename
             paths.append(path.resolve())
     return paths
 
@@ -1163,6 +1260,109 @@ def inspect_glb(
     }
 
 
+_PLY_SCALAR_TYPES = {
+    "char": ("b", 1),
+    "int8": ("b", 1),
+    "uchar": ("B", 1),
+    "uint8": ("B", 1),
+    "short": ("h", 2),
+    "int16": ("h", 2),
+    "ushort": ("H", 2),
+    "uint16": ("H", 2),
+    "int": ("i", 4),
+    "int32": ("i", 4),
+    "uint": ("I", 4),
+    "uint32": ("I", 4),
+    "float": ("f", 4),
+    "float32": ("f", 4),
+    "double": ("d", 8),
+    "float64": ("d", 8),
+}
+_PLY_REQUIRED_GROUPS = {
+    "position": ("x", "y", "z"),
+    "dc": ("f_dc_0", "f_dc_1", "f_dc_2"),
+    "opacity": ("opacity",),
+    "scale": ("scale_0", "scale_1", "scale_2"),
+    "rotation": ("rot_0", "rot_1", "rot_2", "rot_3"),
+}
+
+
+def inspect_3dgs_ply(path: Path) -> dict[str, Any]:
+    payload = path.read_bytes()
+    if not payload:
+        raise ValueError("PLY artifact is empty")
+    marker = b"end_header\n"
+    header_end = payload.find(marker)
+    if header_end < 0:
+        raise ValueError("PLY header is missing end_header")
+    header_end += len(marker)
+    header = payload[:header_end].decode("ascii", "strict").splitlines()
+    if len(header) < 3 or header[0] != "ply":
+        raise ValueError("PLY header is invalid")
+    if header[1] != "format binary_little_endian 1.0":
+        raise ValueError("PLY must be binary_little_endian 1.0")
+    vertex_count: int | None = None
+    vertex_properties: list[tuple[str, str]] = []
+    current_element: str | None = None
+    for line in header[2:]:
+        parts = line.split()
+        if not parts:
+            continue
+        if parts[0] == "element":
+            current_element = parts[1] if len(parts) > 1 else None
+            if current_element == "vertex":
+                if len(parts) != 3:
+                    raise ValueError("PLY vertex element is malformed")
+                vertex_count = int(parts[2])
+        elif parts[0] == "property" and current_element == "vertex":
+            if len(parts) != 3 or parts[1] == "list":
+                raise ValueError("PLY vertex properties must be scalar")
+            if parts[1] not in _PLY_SCALAR_TYPES:
+                raise ValueError(f"PLY vertex property {parts[2]} has unsupported type {parts[1]}")
+            vertex_properties.append((parts[1], parts[2]))
+    if vertex_count is None or vertex_count <= 0:
+        raise ValueError("PLY vertex count must be positive")
+    names = [name for _kind, name in vertex_properties]
+    missing = {
+        group: [name for name in required if name not in names]
+        for group, required in _PLY_REQUIRED_GROUPS.items()
+    }
+    missing = {group: values for group, values in missing.items() if values}
+    if missing:
+        raise ValueError(f"PLY lacks required 3DGS properties: {missing}")
+    row_bytes = sum(_PLY_SCALAR_TYPES[kind][1] for kind, _name in vertex_properties)
+    expected_bytes = header_end + vertex_count * row_bytes
+    if len(payload) < expected_bytes:
+        raise ValueError("PLY vertex payload is truncated")
+    first_vertex: dict[str, float] = {}
+    offset = header_end
+    for kind, name in vertex_properties:
+        code, width = _PLY_SCALAR_TYPES[kind]
+        value = struct.unpack_from("<" + code, payload, offset)[0]
+        offset += width
+        first_vertex[name] = float(value)
+    for name in ("x", "y", "z", "opacity"):
+        value = first_vertex[name]
+        if not math.isfinite(value):
+            raise ValueError(f"PLY property {name} has a non-finite value")
+    return {
+        "path": str(path),
+        "sha256": sha256_file(path),
+        "bytes": path.stat().st_size,
+        "format": "binary_little_endian",
+        "artifactKind": "3dgs-ply",
+        "gaussianCount": vertex_count,
+        "vertices": vertex_count,
+        "properties": names,
+        "requiredPropertyGroups": {
+            group: list(required) for group, required in _PLY_REQUIRED_GROUPS.items()
+        },
+        "plyValidated": True,
+        "file3dValidated": True,
+        "modelRevision": TRIPOSPLAT_MODEL_REVISION,
+    }
+
+
 def read_log_since(path: Path, offset: int) -> tuple[str, int]:
     try:
         size = path.stat().st_size
@@ -1268,6 +1468,8 @@ def ultrashape_worker_settings_events(text: str) -> list[dict[str, Any]]:
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
+    if spec.kind == "triposplat":
+        return "2"
     if spec.kind in {"ultrashape", "full", "cancel"}:
         return "3"
     if spec.kind == "advanced":
@@ -1295,6 +1497,32 @@ def benchmark_from(
 ) -> dict[str, Any] | None:
     if not spec.benchmark:
         return None
+    if spec.kind == "triposplat":
+        if (
+            runtime <= 0
+            or peak_vram <= 0
+            or int(glb.get("bytes", 0)) <= 0
+            or int(glb.get("gaussianCount", 0)) <= 0
+            or glb.get("plyValidated") is not True
+            or glb.get("file3dValidated") is not True
+        ):
+            raise RuntimeError(
+                "Benchmark metrics are incomplete; runtime, peak VRAM, PLY bytes, "
+                "Gaussian count, and FILE_3D validation must be positive"
+            )
+        return {
+            "status": "passed",
+            "quality": spec.quality,
+            "gaussianCount": int(glb["gaussianCount"]),
+            "runtimeSeconds": round(runtime, 3),
+            "peakVramBytes": peak_vram,
+            "plyBytes": glb["bytes"],
+            "plySha256": glb["sha256"],
+            "plyValidated": True,
+            "file3dValidated": True,
+            "outputFormat": "ply",
+            "modelRevision": glb.get("modelRevision", TRIPOSPLAT_MODEL_REVISION),
+        }
     if runtime <= 0 or peak_vram <= 0 or int(glb.get("bytes", 0)) <= 0 or int(glb.get("faces", 0)) <= 0:
         raise RuntimeError(
             "Benchmark metrics are incomplete; runtime, peak VRAM, GLB bytes, and faces must be positive"
@@ -1372,7 +1600,7 @@ def run_prompt_once(
         cache_mode=effective_cache_mode,
     )
     source_node = source_node_for(spec)
-    proof = check_object_info(api, prompt, source_node)
+    proof = check_object_info(api, prompt, source_node, spec)
     verify_five_stages = (
         spec.kind in {"trellis", "cache"}
         and effective_cache_mode != "Use cache"
@@ -1453,9 +1681,14 @@ def run_prompt_once(
                 raise RuntimeError(
                     f"UltraShape resolved and worker settings disagree for {field}"
                 )
-    files = changed_glbs(before, output_root)
+    files = (
+        changed_artifacts(before, output_root, suffixes=(".ply",))
+        if spec.kind == "triposplat"
+        else changed_glbs(before, output_root)
+    )
     if not files:
-        raise RuntimeError("ComfyUI completed but produced no new or changed GLB")
+        expected = "PLY" if spec.kind == "triposplat" else "GLB"
+        raise RuntimeError(f"ComfyUI completed but produced no new or changed {expected}")
     if verify_five_stages:
         assert stage_verifier is not None
         stage_proof = stage_verifier.verify()
@@ -1531,14 +1764,23 @@ def run_prompt_once(
         proof["fiveStageProof"] = stage_proof
         primary = max(saved, key=lambda item: item["bytes"])
     else:
-        validated = [
-            inspect_glb(
-                path,
-                require_textured=spec.require_textured,
-                require_noncollapsed=require_geometry_evidence,
-            )
-            for path in files
-        ]
+        if spec.kind == "triposplat":
+            saved_paths = history_output_paths(history, "91", output_root, suffixes=(".ply",))
+            if not saved_paths:
+                raise RuntimeError("SaveGLB node 91 did not report a PLY output artifact")
+            changed = {path.resolve() for path in files}
+            if any(path not in changed for path in saved_paths):
+                raise RuntimeError("SaveGLB node 91 reported a PLY artifact outside this prompt")
+            validated = [inspect_3dgs_ply(path) for path in saved_paths]
+        else:
+            validated = [
+                inspect_glb(
+                    path,
+                    require_textured=spec.require_textured,
+                    require_noncollapsed=require_geometry_evidence,
+                )
+                for path in files
+            ]
         primary = max(validated, key=lambda item: item["bytes"])
     proof.update(historyCompleted=True, saveArtifactValidated=True)
     return {
@@ -1838,6 +2080,14 @@ GEOMETRY_OUTPUT_KINDS = {
 def record_has_noncollapsed_geometry(record: dict[str, Any]) -> bool:
     """Return whether a successful geometry-producing case carries semantic proof."""
 
+    if record.get("kind") == "triposplat":
+        artifact = record.get("artifact") or record.get("glb")
+        return bool(
+            isinstance(artifact, dict)
+            and artifact.get("plyValidated") is True
+            and artifact.get("file3dValidated") is True
+            and int(artifact.get("gaussianCount", 0)) > 0
+        )
     if record.get("kind") not in GEOMETRY_OUTPUT_KINDS:
         return True
     strict_outcome = (record.get("strictDefaultCapProof") or {}).get("outcome")
@@ -2071,15 +2321,24 @@ def merge_command(args: argparse.Namespace) -> int:
         isinstance(gate, dict) and gate.get("status") == "passed" and isinstance(gate.get("evidence"), str)
         for gate in template.get("gates", {}).values()
     )
-    benchmarks_passed = all(
-        isinstance(value, dict)
-        and value.get("status") == "passed"
-        and value.get("glbValidated") is True
-        and value.get("nonCollapsedGeometryValidated") is True
-        and isinstance(value.get("geometryMetrics"), dict)
-        and value["geometryMetrics"].get("nonCollapsed") is True
-        for value in template.get("benchmarks", {}).values()
-    )
+    def benchmark_passed(value: Any) -> bool:
+        if not isinstance(value, dict) or value.get("status") != "passed":
+            return False
+        if value.get("plyValidated") is True:
+            return (
+                value.get("file3dValidated") is True
+                and int(value.get("gaussianCount", 0)) > 0
+                and int(value.get("plyBytes", 0)) > 0
+                and isinstance(value.get("plySha256"), str)
+            )
+        return (
+            value.get("glbValidated") is True
+            and value.get("nonCollapsedGeometryValidated") is True
+            and isinstance(value.get("geometryMetrics"), dict)
+            and value["geometryMetrics"].get("nonCollapsed") is True
+        )
+
+    benchmarks_passed = all(benchmark_passed(value) for value in template.get("benchmarks", {}).values())
     template["runId"] = run.get("runId")
     template["status"] = "passed" if gates_passed and benchmarks_passed else "pending"
     template["completedAt"] = utc_now() if template["status"] == "passed" else None

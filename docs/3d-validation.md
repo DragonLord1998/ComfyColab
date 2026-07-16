@@ -20,6 +20,7 @@ ID, completion time, and passed-gate list for auditability.
 | GeometryPack | `c67199de05705642258e727fa118f412877b4ebf` |
 | UltraShape source | `5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66` |
 | UltraShape model | `5aeb21a7185d39f042d02b2695802f125a6f5159` |
+| TripoSplat model | `VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
 | cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
 | BiRefNet | `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4` |
@@ -28,7 +29,7 @@ ID, completion time, and passed-gate list for auditability.
 
 ## Local contract gates
 
-- [x] Exactly two public ComfyColab 3D nodes; all adapters are dev-only.
+- [x] Exactly three public ComfyColab 3D nodes; all adapters are dev-only.
 - [x] Import does not load torch, trimesh, NumPy, Pillow, or initialize CUDA.
 - [x] TRELLIS facade expands through the pinned modular node IDs and never uses
       `Trellis2ExportGLB`.
@@ -71,6 +72,7 @@ path rather than a manual 512 override.
 | UltraShape 512 smoke | 512 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 1024 run 1 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
 | UltraShape 1024 run 2 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
+| TripoSplat fast 65K | 65,536 Gaussians requested | n/a | pending | pending | pending PLY bytes/digest | pending Gaussian count | PLY / FILE_3D | pending live G4 |
 
 `Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
 `Detailed` and `Ultra` preserve their existing 1024 semantics and remain
@@ -109,6 +111,15 @@ stopped before live release proof. The machine-readable record therefore
 remains `pending`, and bootstrap continues to use the rollback TRELLIS cache
 plus the UltraShape inference overlay.
 
+TripoSplat live GPU execution is not locally proven. The `triposplat_fast_65k`
+case is now independently runnable and must use the public
+`ComfyColabTripoSplatImageToGaussianSplat` facade with one image, `Fast — 65K`,
+background removal on, sampling preview on, PLY output, native Preview3D, and
+the generic SaveGLB File3D saver. Its release evidence must include the PLY SHA-256,
+non-zero byte size, binary little-endian 3DGS property validation, Gaussian
+count, runtime, peak VRAM, and model revision. The gate remains pending until
+that evidence comes from an actual live G4 run.
+
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
 WebSocket proof before this UI behavior is counted as release evidence.
@@ -146,4 +157,7 @@ provenance.
 - [ ] Cancellation leaves no child process, partial GLB, or retained allocation
 - [ ] Existing advanced TRELLIS workflow passes the new semantic geometry gate
       (its prior structural load/execute check remains recorded)
-- [ ] Both facade outputs connect directly to Preview 3D and Save 3D Model
+- [ ] All three facade outputs connect directly to Preview 3D and Save 3D Model
+- [ ] TripoSplat fast 65K produces a structurally valid binary little-endian
+      PLY/3DGS FILE_3D artifact with digest, bytes, Gaussian count, runtime,
+      peak VRAM, revision, Preview3D, and save-node proof

@@ -55,6 +55,7 @@ TRELLIS_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-TRELLIS2"
 GEOMETRY_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-GeometryPack"
 NODE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-ZImage"
 NODE_3D_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-3D"
+NODE_TRIPOSPLAT_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-Triposplat"
 READY_PREFIX = "COMFYCOLAB_READY="
 COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
@@ -70,6 +71,18 @@ BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
+TRIPOSPLAT_CORE_REQUIREMENTS = {
+    "comfy_extras/nodes_triposplat.py": (
+        "TripoSplatPreprocessImage",
+        "TripoSplatConditioning",
+        "TripoSplatSamplingPreview",
+        "VAEDecodeTripoSplat",
+    ),
+    "comfy_extras/nodes_gaussian_splat.py": (
+        "SplatToFile3D",
+        "RenderSplat",
+    ),
+}
 ULTRASHAPE_INFERENCE_REQUIREMENTS = (
     "accelerate==1.1.1",
     "diffusers==0.30.0",
@@ -1037,6 +1050,10 @@ def install_node_pack() -> None:
     node_packs = (
         (REPO_DIR / "custom_nodes" / "ComfyColab-ZImage", NODE_TARGET),
         (REPO_DIR / "custom_nodes" / "ComfyColab-3D", NODE_3D_TARGET),
+        (
+            REPO_DIR / "custom_nodes" / "ComfyColab-Triposplat",
+            NODE_TRIPOSPLAT_TARGET,
+        ),
     )
     for source, target in node_packs:
         if not source.is_dir():
@@ -1046,6 +1063,27 @@ def install_node_pack() -> None:
         elif target.exists():
             shutil.rmtree(target)
         target.symlink_to(source, target_is_directory=True)
+
+
+def validate_triposplat_core_support() -> None:
+    """Fail before startup if the pinned ComfyUI checkout lacks native TripoSplat."""
+    missing: list[str] = []
+    for relative_path, required_symbols in TRIPOSPLAT_CORE_REQUIREMENTS.items():
+        path = COMFY_DIR / relative_path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            missing.append(relative_path)
+            continue
+        for symbol in required_symbols:
+            if symbol not in source:
+                missing.append(f"{relative_path}:{symbol}")
+    if missing:
+        raise RuntimeError(
+            "The pinned ComfyUI checkout does not provide the native TripoSplat "
+            "runtime required by ComfyColab-Triposplat. Missing: "
+            + ", ".join(missing)
+        )
 
 
 def cloudflared_path() -> Path:
@@ -1360,6 +1398,7 @@ def main() -> None:
         ULTRASHAPE_DIR,
         REPO_DIR / "patches" / "ultrashape-inference-only-imports.json",
     )
+    validate_triposplat_core_support()
     install_node_pack()
     environment_cache_profile = install_dependencies()
     invalidate_comfyenv_metadata_cache()
@@ -1448,6 +1487,8 @@ def main() -> None:
             "geometryCommit": git_commit(GEOMETRY_DIR),
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
             "birefnetModelRef": BIREFNET_MODEL_REF,
+            "triposplatCoreRef": COMFY_REF,
+            "triposplatCoreReady": True,
             "trellisPatch": trellis_patch,
             "trellisCategoryPatch": trellis_category_patch,
             "ultrashapePatch": ultrashape_patch,
