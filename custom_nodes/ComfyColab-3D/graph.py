@@ -4,7 +4,7 @@ import importlib
 from typing import Any
 
 from .cache import trellis_cache_key
-from .presets import TrellisSettings
+from .presets import Pixal3DSettings, TrellisSettings
 
 
 FORBIDDEN_TRELLIS_NODE = "Trellis2ExportGLB"
@@ -362,3 +362,62 @@ def build_ultrashape_cached_geometry_graph(
     )
     final = graph.node("ComfyColab3DNeutralMeshToFile3D", trimesh=processed.out(0))
     return _finish(graph, final.out(0))
+
+
+def build_pixal3d_graph(
+    image: Any,
+    settings: Pixal3DSettings,
+    *,
+    seed: int,
+    remove_background: str,
+    camera_fov_degrees: float,
+    keep_worker_loaded: bool,
+    cache_mode: str,
+    cache_key: str,
+    progress_node_id: str | None = None,
+):
+    graph = _builder()
+    if remove_background == "Off":
+        mask = graph.node("ComfyColab3DImageOpaqueMask", image=image)
+        prepared_image, prepared_mask = image, mask.out(0)
+    else:
+        background = graph.node("Trellis2RemoveBackground", image=image, low_vram=True)
+        prepared_image, prepared_mask = background.out(0), background.out(1)
+    worker = graph.node(
+        "ComfyColab3DPixal3DWorker",
+        image=prepared_image,
+        mask=prepared_mask,
+        pipeline_type=settings.pipeline_type,
+        seed=seed,
+        sampling_steps=settings.sampling_steps,
+        target_face_count=settings.target_face_count,
+        texture_size=settings.texture_size,
+        max_tokens=settings.max_tokens,
+        camera_fov_degrees=float(camera_fov_degrees),
+        keep_worker_loaded=keep_worker_loaded,
+        cache_mode=cache_mode,
+        cache_key=cache_key,
+    )
+    glb_path = _progress_checkpoint(
+        graph,
+        worker.out(0),
+        progress_node_id=progress_node_id,
+        completed=2,
+        total=3,
+        status="Stage 2/3 - Pixal3D worker finished; validating GLB...",
+    )
+    final = graph.node(
+        "ComfyColab3DPixal3DPathToFile3D",
+        glb_path=glb_path,
+        cache_key=cache_key,
+        cache_mode=cache_mode,
+    )
+    final_file = _progress_checkpoint(
+        graph,
+        final.out(0),
+        progress_node_id=progress_node_id,
+        completed=3,
+        total=3,
+        status="Complete - Pixal3D model ready",
+    )
+    return _finish(graph, final_file)

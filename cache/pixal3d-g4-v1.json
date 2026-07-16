@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "status": "awaiting-build",
+  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
+  "releaseTag": "",
+  "sources": {
+    "pixal3d": "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af",
+    "pixal3dModel": "0b31f9160aa400719af409098bff7936a932f726",
+    "dinov3": "3c276edd87d6f6e569ff0c4400e086807d0f3881",
+    "mogeModel": "39c4d5e957afe587e04eec59dc2bcc3be5ecd968",
+    "mogeSource": "07444410f1e33f402353b99d6ccd26bd31e469e8",
+    "naf": "37f2dfc180f2de53d98bd601109c0da0dd6b0f43",
+    "nafCheckpoint": "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f",
+    "utils3d": "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
+    "natten": "natten==0.21.6+torch2110cu128",
+    "environment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
+    "comfyEnv": "0.3.89"
+  },
+  "inputs": {
+    "environmentTomlSha256": "6e19a0cd3a26940b863a6e63c7537e9a8382f98c176eb43f40e90a3de536c01b",
+    "installHash": "cea07d87e1e6fc6b5506587b6ade76ec73b6f91cddb6395bc9ce0bdfee715515"
+  },
+  "archive": {
+    "name": "",
+    "bytes": 0,
+    "sha256": "",
+    "unpackedBytes": 0,
+    "parts": []
+  },
+  "notes": [
+    "This manifest intentionally remains awaiting-build until a live G4 build creates checksum-bound archive parts."
+  ]
+}

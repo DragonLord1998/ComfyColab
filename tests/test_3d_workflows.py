@@ -14,6 +14,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
         paths = [
             WORKFLOWS / "comfycolab_trellis_image_to_3d.json",
             WORKFLOWS / "comfycolab_ultrashape_refine.json",
+            WORKFLOWS / "comfycolab_pixal3d_image_to_3d.json",
         ]
         for path in paths:
             workflow = json.loads(path.read_text(encoding="utf-8"))
@@ -44,6 +45,28 @@ class ThreeDWorkflowTests(unittest.TestCase):
             0,
             "the bundled workflow must resolve the conservative 512 preset instead of forcing 1024",
         )
+
+    def test_pixal3d_workflow_uses_public_facade_preview3d_and_saveglb(self) -> None:
+        workflow = json.loads(
+            (WORKFLOWS / "comfycolab_pixal3d_image_to_3d.json").read_text(encoding="utf-8")
+        )
+        types = [node["type"] for node in workflow["nodes"]]
+
+        self.assertEqual(types.count("ComfyColabPixal3DImageTo3D"), 1)
+        self.assertIn("Preview3D", types)
+        self.assertIn("SaveGLB", types)
+
+        pixal = next(node for node in workflow["nodes"] if node["type"] == "ComfyColabPixal3DImageTo3D")
+        preview = next(node for node in workflow["nodes"] if node["type"] == "Preview3D")
+        save = next(node for node in workflow["nodes"] if node["type"] == "SaveGLB")
+        linked_preview_inputs = {item["name"] for item in preview["inputs"] if item.get("link") is not None}
+        linked_save_inputs = {item["name"] for item in save["inputs"] if item.get("link") is not None}
+
+        self.assertEqual(pixal["widgets_values"][0], "1024 — Stable")
+        self.assertNotIn("mode", {item["name"] for item in pixal["inputs"]})
+        self.assertNotIn("num_views", {item["name"] for item in pixal["inputs"]})
+        self.assertIn("model_file", linked_preview_inputs)
+        self.assertIn("mesh", linked_save_inputs)
 
 
 if __name__ == "__main__":

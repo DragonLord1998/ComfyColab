@@ -12,7 +12,7 @@ terminal.
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
-- Simple 3D nodes for TRELLIS.2, TripoSplat, and UltraShape
+- Simple 3D nodes for TRELLIS.2, TripoSplat, Pixal3D, and UltraShape
 - The complete advanced TRELLIS.2 and GeometryPack node suites
 - On-demand model downloads with checksums and resume support
 - A public Cloudflare URL for the ComfyUI interface
@@ -80,8 +80,9 @@ left consuming compute units.
 3. It clones tested versions of ComfyUI and ComfyUI-GGUF into `/content`.
 4. On a matching G4 runtime, it restores the checksum-verified combined 3D
    cache when available, with the existing TRELLIS.2 cache as a rollback path.
-5. It clones pinned TRELLIS.2, GeometryPack, and UltraShape sources, applies
-   revision-checked compatibility patches, and links both ComfyColab node packs.
+5. It clones pinned TRELLIS.2, GeometryPack, UltraShape, and Pixal3D sources,
+   applies revision-checked compatibility patches, and links all first-party
+   ComfyColab node packs.
 6. It starts ComfyUI and a Cloudflare quick tunnel.
 7. It prints the browser URL in your Mac terminal.
 
@@ -169,15 +170,22 @@ After updating an existing runtime, start with:
 comfycolab start --refresh
 ```
 
-In ComfyUI, search for:
+In ComfyUI, right-click the canvas and look under:
+
+```text
+ComfyColab / 3D
+```
+
+or search for:
 
 - **ComfyColab TRELLIS.2 — Image to 3D**
 - **ComfyColab UltraShape — Refine Geometry**
 - **ComfyColab TripoSplat — Image to Gaussian Splat**
+- **ComfyColab Pixal3D — Image to 3D**
 
-TRELLIS.2 and UltraShape output native GLB `File3D` results, so they
+TRELLIS.2, Pixal3D, and UltraShape output native GLB `File3D` results, so they
 connect directly to **Preview 3D & Animation** and **Save 3D Model**. TripoSplat
-outputs a native ComfyUI `SPLAT` plus a splat `FILE_3D`. The three facades are the
+outputs a native ComfyUI `SPLAT` plus a splat `FILE_3D`. The four facades are the
 only normal-search ComfyColab 3D nodes; their adapters remain development-only.
 
 ### TRELLIS.2 — Image to 3D
@@ -236,6 +244,31 @@ download logic, presets, and file-format choices. They do not prove live Colab
 GPU execution, runtime memory behavior, or output quality; those claims require
 a real live G4 run that produces and validates a non-empty splat artifact.
 
+### Pixal3D — Image to 3D
+
+Connect one image and run the public facade. This is intentionally
+single-image-only: there is no mode selector and no `num_views` control. The
+quality choices are exactly `1024 — Stable` and `1536 — Experimental`; the 1536
+tier is a live-GPU release gate and is not locally proven.
+
+Pixal3D runs in an isolated hidden worker environment instead of importing its
+runtime into the main ComfyUI process. The official source is
+`TencentARC/Pixal3D` pinned to
+`cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af`, with pinned runtime companions for
+DINOv3, MoGe, NAF, `utils3d`, and NATTEN. The first uncached run can download
+and build several multi-GB model/runtime components, so expect a long first
+download, transient Hugging Face failures, and source-build risk until a ready
+Pixal3D worker cache is published and validated.
+
+`keep_worker_loaded=true` keeps the hidden Pixal3D process resident between
+requests in the same runtime, which speeds repeated prompts but retains more
+GPU/CPU memory. Turn it off for one-shot validation or after memory pressure.
+The result cache follows the normal 3D cache controls: `Use cache` reuses a
+validated GLB for the same image/settings/source revisions, `Refresh this node`
+recomputes and overwrites the Pixal3D result, and `Disable cache` avoids result
+cache reads and writes. Every Pixal3D live G4 gate is still pending; the local
+workflow and contract tests do not prove model execution or output quality.
+
 ### UltraShape — Refine Geometry
 
 Connect a native GLB from TRELLIS (or another File3D-producing node), connect
@@ -285,6 +318,7 @@ Pipeline results are stored under:
 ```text
 /content/.comfycolab/cache/3d/
   trellis/<key>/model.glb
+  pixal3d/<key>/model.glb
   ultrashape/<key>/geometry.glb + transform.json + record.json
   texture/<key>/model.glb
 ```

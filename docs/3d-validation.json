@@ -10,6 +10,16 @@
     "geometry": "c67199de05705642258e727fa118f412877b4ebf",
     "ultrashape": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
     "triposplat": "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974",
+    "pixal3d": "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af",
+    "pixal3dModel": "TencentARC/Pixal3D@0b31f9160aa400719af409098bff7936a932f726",
+    "pixal3dDinov3": "camenduru/dinov3-vitl16-pretrain-lvd1689m@3c276edd87d6f6e569ff0c4400e086807d0f3881",
+    "pixal3dMoge": "Ruicheng/moge-2-vitl@39c4d5e957afe587e04eec59dc2bcc3be5ecd968",
+    "pixal3dNaf": "valeoai/NAF@37f2dfc180f2de53d98bd601109c0da0dd6b0f43",
+    "pixal3dMogeSource": "microsoft/MoGe@07444410f1e33f402353b99d6ccd26bd31e469e8",
+    "pixal3dNafCheckpoint": "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f",
+    "pixal3dUtils3d": "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
+    "pixal3dNatten": "natten==0.21.6+torch2110cu128",
+    "pixal3dEnvironment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
     "cubvh": "757b913bfbf19ed65e3a379d159391a8e29efa0f",
     "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
     "comfyEnv": "0.3.89"
@@ -18,7 +28,8 @@
     "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
     "trellisCategory": "trellis2-advanced-categories-v1",
     "ultrashape": "ultrashape-inference-compat-v3",
-    "triposplat": "pending-live-g4"
+    "triposplat": "pending-live-g4",
+    "pixal3d": "pixal3d-persistent-worker-v1"
   },
   "gates": {
     "trellis_512_textured_glb": {"status": "pending", "evidence": null},
@@ -31,6 +42,14 @@
     "ultrashape_1024_run_1": {"status": "pending", "evidence": null},
     "ultrashape_1024_run_2": {"status": "pending", "evidence": null},
     "triposplat_fast_65k_file3d_ply": {"status": "pending", "evidence": null},
+    "pixal3d_cold_1024_textured_glb": {"status": "pending", "evidence": null},
+    "pixal3d_object_auto_1024": {"status": "pending", "evidence": null},
+    "pixal3d_transparent_1024": {"status": "pending", "evidence": null},
+    "pixal3d_worker_reuse_1024": {"status": "pending", "evidence": null},
+    "pixal3d_cache_hit_no_inference": {"status": "pending", "evidence": null},
+    "pixal3d_cancellation_cleanup": {"status": "pending", "evidence": null},
+    "pixal3d_preview_save_glb_reader": {"status": "pending", "evidence": null},
+    "pixal3d_1536_experimental": {"status": "pending", "evidence": null},
     "full_workflow_hard_surface": {"status": "pending", "evidence": null},
     "full_workflow_organic": {"status": "pending", "evidence": null},
     "full_workflow_thin": {"status": "pending", "evidence": null},
@@ -49,6 +68,12 @@
     "ultrashape_512": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
     "ultrashape_1024_run_1": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
     "ultrashape_1024_run_2": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "glbValidated": false},
-    "triposplat_fast_65k": {"status": "pending", "quality": "Fast \u2014 65K", "gaussianCount": null, "runtimeSeconds": null, "peakVramBytes": null, "plyBytes": null, "plySha256": null, "plyValidated": false, "file3dValidated": false, "outputFormat": "ply", "modelRevision": "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974"}
+    "triposplat_fast_65k": {"status": "pending", "quality": "Fast \u2014 65K", "gaussianCount": null, "runtimeSeconds": null, "peakVramBytes": null, "plyBytes": null, "plySha256": null, "plyValidated": false, "file3dValidated": false, "outputFormat": "ply", "modelRevision": "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974"},
+    "pixal3d_cold_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "pixal3d_object_auto_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "pixal3d_transparent_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "pixal3d_worker_reuse_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "pixal3d_preview_save_glb_reader": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "pixal3d_1536_experimental": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false}
   }
 }

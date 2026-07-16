@@ -50,6 +50,9 @@ ULTRASHAPE_WORKER_SETTINGS_EVENT = re.compile(
 TRIPOSPLAT_MODEL_REVISION = (
     "VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974"
 )
+PIXAL3D_WORKER_RESULT_EVENT = re.compile(
+    r"COMFYCOLAB_PIXAL3D_RESULT=(?P<payload>\{[^\n]+\})"
+)
 FIVE_STAGE_TEXTS = (
     "Stage 1/5 - Preparing models and input...",
     "Stage 2/5 - Generating 3D shape...",
@@ -154,6 +157,46 @@ CASES: dict[str, CaseSpec] = {
     "triposplat_fast_65k": CaseSpec(
         "triposplat_fast_65k", "triposplat", "triposplat_fast_65k_file3d_ply",
         "triposplat_fast_65k", actual_resolution=65536, quality="Fast — 65K",
+    ),
+    "pixal3d_cold_1024": CaseSpec(
+        "pixal3d_cold_1024", "pixal3d", "pixal3d_cold_1024_textured_glb",
+        "pixal3d_cold_1024", "1024_cascade", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+    ),
+    "pixal3d_object_auto_1024": CaseSpec(
+        "pixal3d_object_auto_1024", "pixal3d", "pixal3d_object_auto_1024",
+        "pixal3d_object_auto_1024", "1024_cascade", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+    ),
+    "pixal3d_transparent_1024": CaseSpec(
+        "pixal3d_transparent_1024", "pixal3d", "pixal3d_transparent_1024",
+        "pixal3d_transparent_1024", "1024_cascade", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+    ),
+    "pixal3d_worker_reuse_1024": CaseSpec(
+        "pixal3d_worker_reuse_1024", "pixal3d_reuse", "pixal3d_worker_reuse_1024",
+        "pixal3d_worker_reuse_1024", "1024_cascade", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+    ),
+    "pixal3d_cache_hit_no_inference": CaseSpec(
+        "pixal3d_cache_hit_no_inference", "pixal3d_cache", "pixal3d_cache_hit_no_inference",
+        resolution="1024_cascade", actual_resolution=1024, quality="1024 — Stable",
+        texture_size=2048, require_textured=True,
+    ),
+    "pixal3d_cancellation_cleanup": CaseSpec(
+        "pixal3d_cancellation_cleanup", "pixal3d_cancel", "pixal3d_cancellation_cleanup",
+        resolution="1024_cascade", actual_resolution=1024, quality="1024 — Stable",
+        texture_size=2048,
+    ),
+    "pixal3d_preview_save_glb_reader": CaseSpec(
+        "pixal3d_preview_save_glb_reader", "pixal3d", "pixal3d_preview_save_glb_reader",
+        "pixal3d_preview_save_glb_reader", "1024_cascade", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+    ),
+    "pixal3d_1536_experimental": CaseSpec(
+        "pixal3d_1536_experimental", "pixal3d", "pixal3d_1536_experimental",
+        "pixal3d_1536_experimental", "1536_cascade", 1536, "1536 — Experimental", 4096,
+        require_textured=True,
     ),
     "full_workflow_hard_surface": CaseSpec(
         "full_workflow_hard_surface", "full", "full_workflow_hard_surface",
@@ -577,6 +620,22 @@ def triposplat_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace)
     }
 
 
+def pixal3d_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace, cache_mode: str) -> dict[str, Any]:
+    return {
+        "image": [image_node, 0],
+        "quality": spec.quality,
+        "seed": args.seed,
+        "remove_background": args.remove_background,
+        "camera_fov_degrees": getattr(args, "camera_fov_degrees", 0.0),
+        "sampling_steps": args.sampling_steps,
+        "target_face_count": args.target_face_count,
+        "texture_size": args.texture_size or spec.texture_size,
+        "max_tokens": args.max_tokens,
+        "keep_worker_loaded": getattr(args, "keep_worker_loaded", True),
+        "cache_mode": cache_mode,
+    }
+
+
 def add_preview_and_save(prompt: dict[str, Any], source: str, prefix: str) -> None:
     prompt["90"] = {"class_type": "Preview3D", "inputs": {"model_file": [source, 0]}}
     prompt["91"] = {
@@ -647,6 +706,12 @@ def build_prompt(
         prompt["2"] = {
             "class_type": "ComfyColabTripoSplatImageToGaussianSplat",
             "inputs": triposplat_inputs(spec, "1", args),
+        }
+        output_node = "2"
+    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_cancel", "pixal3d_reuse"}:
+        prompt["2"] = {
+            "class_type": "ComfyColabPixal3DImageTo3D",
+            "inputs": pixal3d_inputs(spec, "1", args, cache_mode),
         }
         output_node = "2"
     elif spec.kind == "advanced":
@@ -1414,6 +1479,7 @@ def compact_log_evidence(text: str, *, tail_bytes: int = 12_000) -> str:
     markers.extend(
         match.group(0) for match in ULTRASHAPE_WORKER_SETTINGS_EVENT.finditer(text)
     )
+    markers.extend(match.group(0) for match in PIXAL3D_WORKER_RESULT_EVENT.finditer(text))
     missing = [marker for marker in markers if marker not in tail]
     return "\n".join([*missing, tail]) if missing else tail
 
@@ -1465,10 +1531,18 @@ def ultrashape_worker_settings_events(text: str) -> list[dict[str, Any]]:
     )
 
 
+def pixal3d_worker_result_events(text: str) -> list[dict[str, Any]]:
+    return _settings_events(
+        text,
+        PIXAL3D_WORKER_RESULT_EVENT,
+        label="Pixal3D worker-result",
+    )
+
+
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
-    if spec.kind == "triposplat":
+    if spec.kind in {"triposplat", "pixal3d", "pixal3d_cache", "pixal3d_cancel", "pixal3d_reuse"}:
         return "2"
     if spec.kind in {"ultrashape", "full", "cancel"}:
         return "3"
@@ -1493,6 +1567,7 @@ def benchmark_from(
     *,
     observed_resolution: int | None = None,
     texture_size: int | None = None,
+    pixal3d_worker_result: dict[str, Any] | None = None,
     require_geometry_metrics: bool = False,
 ) -> dict[str, Any] | None:
     if not spec.benchmark:
@@ -1549,6 +1624,18 @@ def benchmark_from(
             raise RuntimeError(
                 f"TRELLIS requested {spec.actual_resolution} but actually ran {actual_resolution}; silent downgrade rejected"
             )
+    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
+        if not isinstance(pixal3d_worker_result, dict):
+            raise RuntimeError("Pixal3D completed without a machine-readable worker result")
+        actual_resolution = int(pixal3d_worker_result.get("actual_resolution", 0))
+        tokens = int(pixal3d_worker_result.get("token_count", 0))
+        if actual_resolution != spec.actual_resolution:
+            raise RuntimeError(
+                f"Pixal3D requested {spec.actual_resolution} but actually ran "
+                f"{actual_resolution}; silent downgrade rejected"
+            )
+        if tokens <= 0:
+            raise RuntimeError("Pixal3D worker result omitted a positive token count")
     else:
         if not observed_resolution:
             raise RuntimeError(
@@ -1571,8 +1658,14 @@ def benchmark_from(
         "nonCollapsedGeometryValidated": geometry_validated,
         "geometryMetrics": geometry_metrics if geometry_validated else None,
     }
-    if spec.kind == "trellis":
+    if spec.kind in {"trellis", "pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
         benchmark.update(tokens=tokens, textureSize=texture_size or spec.texture_size)
+    if spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
+        benchmark.update(
+            workerPeakVramBytes=int(pixal3d_worker_result.get("peak_vram_bytes", 0)),
+            pipelineLoadCount=int(pixal3d_worker_result.get("pipeline_load_count", 0)),
+            workerPid=int(pixal3d_worker_result.get("worker_pid", 0)),
+        )
     return benchmark
 
 
@@ -1635,12 +1728,20 @@ def run_prompt_once(
     stage_geometry_metrics = geometry_quality_events(log_text)
     resolved_ultrashape_events = ultrashape_resolved_settings_events(log_text)
     worker_ultrashape_events = ultrashape_worker_settings_events(log_text)
+    worker_pixal3d_events = pixal3d_worker_result_events(log_text)
     resolved_ultrashape_settings = (
         resolved_ultrashape_events[-1] if resolved_ultrashape_events else None
     )
     worker_ultrashape_settings = (
         worker_ultrashape_events[-1] if worker_ultrashape_events else None
     )
+    worker_pixal3d_result = worker_pixal3d_events[-1] if worker_pixal3d_events else None
+    if (
+        spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}
+        and effective_cache_mode != "Use cache"
+        and not isinstance(worker_pixal3d_result, dict)
+    ):
+        raise RuntimeError("Pixal3D live run lacked machine-readable worker result evidence")
     if (
         require_geometry_evidence
         and spec.kind in {"trellis", "cache"}
@@ -1790,10 +1891,12 @@ def run_prompt_once(
         "historyStatus": history.get("status"),
         "previewSaveProof": proof,
         "glb": primary,
+        "artifact": primary,
         "resultFiles": validated,
         "stageGeometryMetrics": stage_geometry_metrics,
         "resolvedUltraShapeSettings": resolved_ultrashape_settings,
         "workerUltraShapeSettings": worker_ultrashape_settings,
+        "workerPixal3DResult": worker_pixal3d_result,
         "logExcerpt": compact_log_evidence(log_text),
     }
 
@@ -1807,18 +1910,68 @@ def run_cache_case(
     second_markers = list(SHAPE_METRICS.finditer(second.get("logExcerpt", "")))
     if second_markers:
         raise RuntimeError("Unchanged cache rerun emitted shape inference metrics; inference was not skipped")
+    second_pixal3d_results = pixal3d_worker_result_events(second.get("logExcerpt", ""))
+    if second_pixal3d_results:
+        raise RuntimeError("Unchanged Pixal3D cache rerun emitted worker results; inference was not skipped")
     return {
         **second,
         "stageGeometryMetrics": first.get("stageGeometryMetrics", []),
+        "workerPixal3DResult": first.get("workerPixal3DResult"),
         "cacheProof": {
             "firstPromptId": first["promptId"],
             "secondPromptId": second["promptId"],
             "secondRunShapeMetricCount": 0,
+            "secondRunPixal3DWorkerResultCount": 0,
             "firstRuntimeSeconds": first["runtimeSeconds"],
             "secondRuntimeSeconds": second["runtimeSeconds"],
             "noModelInference": True,
             "freshFiveStageProof": first["previewSaveProof"].get("fiveStageProof"),
             "freshStageGeometryMetrics": first.get("stageGeometryMetrics", []),
+        },
+    }
+
+
+def run_pixal3d_reuse_case(
+    spec: CaseSpec,
+    args: argparse.Namespace,
+    run_id: str,
+    image_name: str,
+    recorder: Recorder,
+) -> dict[str, Any]:
+    first_args = argparse.Namespace(**{**vars(args), "keep_worker_loaded": True})
+    second_seed = (int(args.seed) + 1) % (2**31)
+    second_args = argparse.Namespace(
+        **{**vars(args), "seed": second_seed, "keep_worker_loaded": True}
+    )
+    first = run_prompt_once(
+        spec, first_args, run_id, image_name, recorder, cache_mode="Disable cache"
+    )
+    second = run_prompt_once(
+        spec, second_args, run_id, image_name, recorder, cache_mode="Disable cache"
+    )
+    first_result = first.get("workerPixal3DResult")
+    second_result = second.get("workerPixal3DResult")
+    if not isinstance(first_result, dict) or not isinstance(second_result, dict):
+        raise RuntimeError("Pixal3D reuse case lacked worker result evidence")
+    first_pid = int(first_result.get("worker_pid", 0))
+    second_pid = int(second_result.get("worker_pid", 0))
+    if first_pid <= 0 or first_pid != second_pid:
+        raise RuntimeError("Pixal3D reuse case relaunched the isolated worker")
+    if int(first_result.get("pipeline_load_count", 0)) != 1 or int(
+        second_result.get("pipeline_load_count", 0)
+    ) != 1:
+        raise RuntimeError("Pixal3D reuse case reloaded the pipeline")
+    return {
+        **second,
+        "reuseProof": {
+            "firstPromptId": first["promptId"],
+            "secondPromptId": second["promptId"],
+            "firstSeed": int(args.seed),
+            "secondSeed": second_seed,
+            "workerPid": first_pid,
+            "pipelineLoadCount": 1,
+            "workerReused": True,
+            "pipelineReused": True,
         },
     }
 
@@ -1998,14 +2151,22 @@ def partial_artifacts(roots: Iterable[Path]) -> list[str]:
     return sorted(found)
 
 
-def worker_pids() -> list[int]:
+def worker_pids(pattern: str = "worker/ultrashape/worker_main.py") -> list[int]:
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "worker/ultrashape/worker_main.py"], capture_output=True, text=True, timeout=5
+            ["pgrep", "-f", pattern], capture_output=True, text=True, timeout=5
         )
         return [int(line) for line in result.stdout.splitlines() if line.strip().isdigit() and int(line) != os.getpid()]
     except (FileNotFoundError, subprocess.SubprocessError, ValueError):
         return []
+
+
+def worker_pattern_for(spec: CaseSpec) -> str:
+    return (
+        "worker/pixal3d/worker_main.py"
+        if spec.kind == "pixal3d_cancel"
+        else "worker/ultrashape/worker_main.py"
+    )
 
 
 def run_cancellation_case(
@@ -2019,15 +2180,17 @@ def run_cancellation_case(
     baseline_vram = VramSampler.sample()
     prompt_id = queue_prompt(api, prompt, f"comfycolab-live3d-{run_id}-cancel")
     recorder.event("queued_for_cancellation", promptId=prompt_id)
+    worker_pattern = worker_pattern_for(spec)
+    worker_label = "Pixal3D" if spec.kind == "pixal3d_cancel" else "UltraShape"
     deadline = time.monotonic() + args.cancel_start_timeout
     started_worker = False
     while time.monotonic() < deadline:
-        if worker_pids():
+        if worker_pids(worker_pattern):
             started_worker = True
             break
         time.sleep(1)
     if not started_worker:
-        raise RuntimeError("UltraShape worker did not start before the cancellation deadline")
+        raise RuntimeError(f"{worker_label} worker did not start before the cancellation deadline")
     time.sleep(args.cancel_after)
     api.post("/interrupt")
     recorder.event("interrupt_sent", promptId=prompt_id)
@@ -2041,7 +2204,7 @@ def run_cancellation_case(
     with contextlib.suppress(Exception):
         api.post("/free", {"unload_models": True, "free_memory": True})
     time.sleep(5)
-    retained_workers = worker_pids()
+    retained_workers = worker_pids(worker_pattern)
     after_partial = set(partial_artifacts(roots))
     new_partial = sorted(after_partial - before_partial)
     final_vram = VramSampler.sample()
@@ -2074,6 +2237,9 @@ GEOMETRY_OUTPUT_KINDS = {
     "ultrashape",
     "full",
     "advanced",
+    "pixal3d",
+    "pixal3d_cache",
+    "pixal3d_reuse",
 }
 
 
@@ -2121,11 +2287,15 @@ def execute_case(args: argparse.Namespace) -> int:
             image_name = ""
         if spec.kind == "probe":
             result = run_probe_case(args)
-        elif spec.kind == "cache":
+        elif spec.kind in {"cache", "pixal3d_cache"}:
             result = run_cache_case(spec, args, run["runId"], image_name, recorder)
+        elif spec.kind == "pixal3d_reuse":
+            result = run_pixal3d_reuse_case(
+                spec, args, run["runId"], image_name, recorder
+            )
         elif spec.kind == "strict1536":
             result = run_strict_1536_default_case(spec, args, run["runId"], image_name, recorder)
-        elif spec.kind == "cancel":
+        elif spec.kind in {"cancel", "pixal3d_cancel"}:
             result = run_cancellation_case(spec, args, run["runId"], image_name, recorder)
         else:
             result = run_prompt_once(spec, args, run["runId"], image_name, recorder)
@@ -2151,6 +2321,7 @@ def execute_case(args: argparse.Namespace) -> int:
                     )
                 ),
                 texture_size=args.texture_size or spec.texture_size,
+                pixal3d_worker_result=result.get("workerPixal3DResult"),
                 require_geometry_metrics=require_geometry_evidence,
             )
         record = {
@@ -2310,7 +2481,7 @@ def merge_command(args: argparse.Namespace) -> int:
     if trellis_proof and ultra_proof:
         proof_records = sorted(
             record["evidence"] for record in passed.values()
-            if record.get("kind") in {"trellis", "advanced", "ultrashape", "full"}
+            if record.get("kind") in {"trellis", "advanced", "ultrashape", "full", "pixal3d"}
             and record.get("previewSaveProof", {}).get("saveArtifactValidated")
         )
         digest = hashlib.sha256("\n".join(proof_records).encode("utf-8")).hexdigest()
@@ -2362,6 +2533,8 @@ def add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--texture-size", type=int, default=0)
     parser.add_argument("--max-tokens", type=int, default=49152)
     parser.add_argument("--remove-background", choices=("Auto", "On", "Off"), default="Auto")
+    parser.add_argument("--camera-fov-degrees", type=float, default=0.0)
+    parser.add_argument("--keep-worker-loaded", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cache-mode", choices=("Use cache", "Refresh this node", "Disable cache"), default="Disable cache")
     parser.add_argument("--steps", type=int, default=0)
     parser.add_argument("--num-latents", type=int, default=0)

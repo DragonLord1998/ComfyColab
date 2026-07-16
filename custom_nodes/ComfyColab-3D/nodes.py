@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from .cache import (
     canonical_glb_geometry_digest,
     canonical_trimesh_digest,
     deterministic_cache_key,
+    pixal3d_cache_key,
     texture_cache_key,
     trellis_cache_key,
     ultrashape_geometry_cache_key,
@@ -27,16 +29,20 @@ from .graph import (
     TRELLIS_PATCH_ID,
     TRELLIS_WRAPPER_REF,
     build_trellis_graph,
+    build_pixal3d_graph,
     build_ultrashape_cached_geometry_graph,
     build_ultrashape_graph,
 )
 from .presets import (
     CACHE_MODES,
+    PIXAL3D_EXPERIMENTAL_PRESETS,
+    PIXAL3D_PRESETS,
     RESOLUTION_OVERRIDES,
     TRELLIS_PRESETS,
     ULTRASHAPE_EXPERIMENTAL_PRESETS,
     ULTRASHAPE_PRESETS,
     resolve_trellis_settings,
+    resolve_pixal3d_settings,
     resolve_ultrashape_settings,
 )
 from .transforms import Normalization, normalization_for
@@ -47,10 +53,13 @@ from .worker import (
     validate_geometry_cache_record,
     write_geometry_cache_record,
 )
+from .pixal3d_worker import RESULT_PREFIX, Pixal3DWorkerCommand, global_pixal3d_worker_pool
 
 ULTRASHAPE_SOURCE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
 DEFAULT_ULTRASHAPE_SOURCE = "/content/UltraShape-1.0"
 DEFAULT_ULTRASHAPE_PYTHON = str(Path.home() / ".ce/.pixi/envs/trellis2-nodes/bin/python")
+DEFAULT_PIXAL3D_SOURCE = "/content/Pixal3D"
+DEFAULT_PIXAL3D_PYTHON = str(Path.home() / ".ce/.pixi/envs/pixal3d-worker/bin/python")
 TRANSFORM_SCHEMA = "comfycolab-3d-transform-v1"
 
 
@@ -120,6 +129,22 @@ def _remove_owned_ultrashape_temp(path: str | Path) -> None:
     if (
         Path(path).name in {"refined.glb", "geometry.glb"}
         and parent.name.startswith("comfycolab-ultrashape-")
+        and parent.parent in roots
+    ):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def _remove_owned_pixal3d_temp(path: str | Path) -> None:
+    resolved = Path(path).resolve()
+    parent = resolved.parent
+    roots = {Path(tempfile.gettempdir()).resolve()}
+    try:
+        roots.add(Path(importlib.import_module("folder_paths").get_temp_directory()).resolve())
+    except (ModuleNotFoundError, AttributeError):
+        pass
+    if (
+        resolved.name == "model.glb"
+        and parent.name.startswith("comfycolab-pixal3d-")
         and parent.parent in roots
     ):
         shutil.rmtree(parent, ignore_errors=True)
@@ -352,6 +377,149 @@ class ComfyColabUltraShapeRefine:
             octree_resolution=resolved.octree_resolution, decode_chunk_size=resolved.decode_chunk_size,
             target_face_count=face_count, texture_size=resolved_texture_size,
             low_vram=low_vram_value, cache_mode=cache_mode, geometry_cache_key=geometry_key,
+        )
+
+
+class ComfyColabPixal3DImageTo3D:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id="ComfyColabPixal3DImageTo3D",
+            display_name="ComfyColab Pixal3D — Image to 3D",
+            category="ComfyColab/3D",
+            description=(
+                "Generates a textured PBR GLB from one image through the isolated, persistent "
+                "official Pixal3D worker. The first run downloads roughly 24 GB of pinned models."
+            ),
+            enable_expand=True,
+            inputs=[
+                io.Image.Input("image"),
+                io.Combo.Input(
+                    "quality", options=list(PIXAL3D_PRESETS), default="1024 — Stable"
+                ),
+                io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
+                io.Combo.Input(
+                    "remove_background",
+                    options=["Auto", "On", "Off"],
+                    default="Auto",
+                    advanced=True,
+                ),
+                io.Float.Input(
+                    "camera_fov_degrees",
+                    default=0.0,
+                    min=0.0,
+                    max=178.0,
+                    step=0.1,
+                    advanced=True,
+                    tooltip="0 uses automatic MoGe camera estimation; a positive value is manual horizontal FOV.",
+                ),
+                io.Int.Input("sampling_steps", default=0, min=0, max=100, advanced=True),
+                io.Int.Input(
+                    "target_face_count",
+                    default=0,
+                    min=0,
+                    max=2_000_000,
+                    advanced=True,
+                    tooltip="0 uses the selected quality preset; manual values must be at least 1000.",
+                ),
+                io.Int.Input(
+                    "texture_size",
+                    default=0,
+                    min=0,
+                    max=8192,
+                    advanced=True,
+                    tooltip="0 uses the selected quality preset; manual values must be at least 512.",
+                ),
+                io.Int.Input(
+                    "max_tokens",
+                    default=49_152,
+                    min=16_384,
+                    max=262_144,
+                    advanced=True,
+                ),
+                io.Boolean.Input("keep_worker_loaded", default=True, advanced=True),
+                io.Combo.Input(
+                    "cache_mode", options=list(CACHE_MODES), default="Use cache", advanced=True
+                ),
+            ],
+            outputs=[io.File3DGLB.Output("model_3d")],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        image,
+        quality="1024 — Stable",
+        seed=0,
+        remove_background="Auto",
+        camera_fov_degrees=0.0,
+        sampling_steps=0,
+        target_face_count=0,
+        texture_size=0,
+        max_tokens=49_152,
+        keep_worker_loaded=True,
+        cache_mode="Use cache",
+    ):
+        seed = int(seed)
+        fov = float(camera_fov_degrees)
+        if seed < 0 or seed > (2**31) - 1:
+            raise ValueError("Pixal3D seed must be between 0 and 2147483647")
+        if not 0.0 <= fov < 179.0:
+            raise ValueError(
+                "camera_fov_degrees must be 0 for automatic estimation or between 0 and 179"
+            )
+        if remove_background not in {"Auto", "On", "Off"}:
+            raise ValueError("remove_background must be Auto, On, or Off")
+        if cache_mode not in CACHE_MODES:
+            raise ValueError(f"Unknown Pixal3D cache mode: {cache_mode}")
+        settings = resolve_pixal3d_settings(
+            quality,
+            sampling_steps=int(sampling_steps),
+            target_face_count=int(target_face_count),
+            texture_size=int(texture_size),
+            max_tokens=int(max_tokens),
+        )
+        if quality in PIXAL3D_EXPERIMENTAL_PRESETS:
+            print(
+                "[ComfyColab 3D] Warning: Pixal3D 1536 is experimental and never silently "
+                "downgrades; insufficient tokens or memory will return a clear failure.",
+                flush=True,
+            )
+        repo_root = Path(__file__).resolve().parents[2]
+        artifacts = _load_pixal3d_artifact_provisioner(repo_root)
+        key = pixal3d_cache_key(
+            image,
+            settings=settings,
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            source_ref=artifacts.PIXAL3D_SOURCE_REF,
+            model_ref=artifacts.PIXAL3D_MODEL_REF,
+            dinov3_ref=artifacts.DINOV3_MODEL_REF,
+            moge_ref=artifacts.MOGE_MODEL_REF,
+            naf_ref=artifacts.NAF_SOURCE_REF,
+            environment_ref=artifacts.PIXAL3D_ENVIRONMENT_REF,
+        )
+        destination = cache_path(_cache_root(), "pixal3d", key)
+        if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
+            _send_progress_text(_hidden_value(cls, "unique_id"), "Complete - Loaded cached Pixal3D model")
+            return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
+        if remove_background != "Off":
+            _require_upstream_nodes({"Trellis2RemoveBackground"})
+        progress_node_id = _hidden_value(cls, "unique_id")
+        _send_progress_text(progress_node_id, "Stage 1/3 - Preparing Pixal3D input and worker...")
+        return build_pixal3d_graph(
+            image,
+            settings,
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            keep_worker_loaded=bool(keep_worker_loaded),
+            cache_mode=cache_mode,
+            cache_key=key,
+            progress_node_id=progress_node_id,
         )
 
 
@@ -763,6 +931,196 @@ def _save_reference_image(image, mask, path: Path) -> None:
     pil_image.fromarray(array).save(path)
 
 
+def _load_pixal3d_artifact_provisioner(repo_root: Path):
+    module_name = "comfycolab_pixal3d_artifacts"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    path = repo_root / "worker/pixal3d/artifacts.py"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Pixal3D artifact provisioner from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+class ComfyColab3DPixal3DWorker(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.Image.Input("image"),
+                io.Mask.Input("mask"),
+                io.String.Input("pipeline_type"),
+                io.Int.Input("seed"),
+                io.Int.Input("sampling_steps"),
+                io.Int.Input("target_face_count"),
+                io.Int.Input("texture_size"),
+                io.Int.Input("max_tokens"),
+                io.Float.Input("camera_fov_degrees"),
+                io.Boolean.Input("keep_worker_loaded"),
+                io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
+                io.String.Input("cache_key"),
+            ],
+            [io.String.Output("glb_path")],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        image,
+        mask,
+        pipeline_type,
+        seed,
+        sampling_steps,
+        target_face_count,
+        texture_size,
+        max_tokens,
+        camera_fov_degrees,
+        keep_worker_loaded=True,
+        cache_mode="Use cache",
+        cache_key="",
+    ):
+        del cache_mode, cache_key
+        repo_root = Path(__file__).resolve().parents[2]
+        input_directory = Path(tempfile.mkdtemp(prefix="comfycolab-pixal3d-input-"))
+        output_directory = _make_temp_directory("comfycolab-pixal3d-")
+        image_path = input_directory / "prepared.png"
+        output = output_directory / "model.glb"
+        metadata = output_directory / "model.json"
+        try:
+            _save_reference_image(image, mask, image_path)
+            artifact_module = _load_pixal3d_artifact_provisioner(repo_root)
+            model_management = importlib.import_module("comfy.model_management")
+            progress_bar = importlib.import_module("comfy.utils").ProgressBar(100)
+
+            def progress(event: dict) -> None:
+                model_management.throw_exception_if_processing_interrupted()
+                current = int(event.get("current", event.get("downloaded_bytes", 0)) or 0)
+                total = max(1, int(event.get("total", event.get("total_bytes", 100)) or 100))
+                progress_bar.update_absolute(current, total)
+
+            artifacts = artifact_module.ensure_pixal3d_artifacts(
+                Path(
+                    os.environ.get(
+                        "COMFYCOLAB_PIXAL3D_MODEL_ROOT",
+                        "/content/.comfycolab/models/3d/pixal3d",
+                    )
+                ),
+                progress=progress,
+            )
+            request_id = f"{os.getpid()}-{time.time_ns()}"
+            command = Pixal3DWorkerCommand(
+                python=os.environ.get("COMFYCOLAB_PIXAL3D_PYTHON", DEFAULT_PIXAL3D_PYTHON),
+                worker_script=str(repo_root / "worker/pixal3d/worker_main.py"),
+                source_dir=os.environ.get("COMFYCOLAB_PIXAL3D_SOURCE", DEFAULT_PIXAL3D_SOURCE),
+                checkpoint_dir=str(artifacts.model_dir),
+                dinov3_dir=str(artifacts.dinov3_dir),
+                moge_dir=str(artifacts.moge_dir),
+                naf_source_dir=str(artifacts.naf_source_dir),
+                naf_checkpoint=str(artifacts.naf_checkpoint),
+                image_path=str(image_path),
+                output_mesh=str(output),
+                metadata_output=str(metadata),
+                request_id=request_id,
+                seed=int(seed),
+                camera_fov_degrees=float(camera_fov_degrees),
+                texture_size=int(texture_size),
+                target_face_count=int(target_face_count),
+                pipeline_type=str(pipeline_type),
+                max_tokens=int(max_tokens),
+                inference_steps=int(sampling_steps),
+                source_ref=artifact_module.PIXAL3D_SOURCE_REF,
+                model_ref=artifact_module.PIXAL3D_MODEL_REF,
+                dinov3_ref=artifact_module.DINOV3_MODEL_REF,
+                moge_ref=artifact_module.MOGE_MODEL_REF,
+                naf_ref=artifact_module.NAF_SOURCE_REF,
+                naf_checkpoint_ref=artifact_module.NAF_CHECKPOINT_SHA256,
+                environment_ref=artifact_module.PIXAL3D_ENVIRONMENT_REF,
+                keep_worker_loaded=bool(keep_worker_loaded),
+            )
+
+            def cancelled() -> bool:
+                model_management.throw_exception_if_processing_interrupted()
+                return False
+
+            result = global_pixal3d_worker_pool().run(
+                command,
+                is_cancelled=cancelled,
+                on_progress=progress,
+            )
+            print(RESULT_PREFIX + json.dumps(result, sort_keys=True), flush=True)
+            return _io().NodeOutput(str(output))
+        except BaseException:
+            shutil.rmtree(output_directory, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(input_directory, ignore_errors=True)
+
+
+class ComfyColab3DPixal3DPathToFile3D(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.String.Input("glb_path"),
+                io.String.Input("cache_key"),
+                io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
+            ],
+            [io.File3DGLB.Output("model_3d")],
+        )
+
+    @classmethod
+    def execute(cls, glb_path, cache_key, cache_mode="Use cache"):
+        source = Path(glb_path)
+        try:
+            # Validate the facade-owned deterministic key even when result caching is disabled.
+            cache_path(_cache_root(), "pixal3d", cache_key)
+            validate_volumetric_glb(
+                source,
+                stage="Pixal3D final GLB",
+                require_material=True,
+                require_texture=True,
+                require_uv=True,
+            )
+            if cache_mode == "Disable cache":
+                published = publish_glb(source, cache_key)
+                return _io().NodeOutput(materialize_file3d(published))
+            destination = cache_path(_cache_root(), "pixal3d", cache_key)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            partial = destination.with_name(f".{destination.name}.{os.getpid()}.partial")
+            partial_metadata = destination.parent / f".metadata.json.{os.getpid()}.partial"
+            try:
+                shutil.copyfile(source, partial)
+                validate_volumetric_glb(
+                    partial,
+                    stage="Pixal3D cache candidate",
+                    require_material=True,
+                    require_texture=True,
+                    require_uv=True,
+                )
+                source_metadata = source.with_suffix(".json")
+                if source_metadata.is_file():
+                    shutil.copyfile(source_metadata, partial_metadata)
+                os.replace(partial, destination)
+                if partial_metadata.is_file():
+                    os.replace(partial_metadata, destination.parent / "metadata.json")
+            finally:
+                partial.unlink(missing_ok=True)
+                partial_metadata.unlink(missing_ok=True)
+            published = publish_glb(destination, cache_key)
+            return _io().NodeOutput(materialize_file3d(published))
+        finally:
+            _remove_owned_pixal3d_temp(source)
+
+
 def _load_artifact_provisioner(repo_root: Path):
     module_name = "comfycolab_ultrashape_artifacts"
     if module_name in sys.modules:
@@ -907,6 +1265,7 @@ class ComfyColab3DUltraShapeWorker(_DevNode):
 NODE_CLASS_MAPPINGS = {
     "ComfyColabTrellisImageTo3D": ComfyColabTrellisImageTo3D,
     "ComfyColabUltraShapeRefine": ComfyColabUltraShapeRefine,
+    "ComfyColabPixal3DImageTo3D": ComfyColabPixal3DImageTo3D,
     "ComfyColab3DProgressCheckpoint": ComfyColab3DProgressCheckpoint,
     "ComfyColab3DImageOpaqueMask": ComfyColab3DImageOpaqueMask,
     "ComfyColab3DPathToFile3D": ComfyColab3DPathToFile3D,
@@ -918,9 +1277,12 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColab3DEncodedMeshToTrimesh": ComfyColab3DEncodedMeshToTrimesh,
     "ComfyColab3DRestoreMeshTransform": ComfyColab3DRestoreMeshTransform,
     "ComfyColab3DUltraShapeWorker": ComfyColab3DUltraShapeWorker,
+    "ComfyColab3DPixal3DWorker": ComfyColab3DPixal3DWorker,
+    "ComfyColab3DPixal3DPathToFile3D": ComfyColab3DPixal3DPathToFile3D,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabTrellisImageTo3D": "ComfyColab TRELLIS.2 — Image to 3D",
     "ComfyColabUltraShapeRefine": "ComfyColab UltraShape — Refine Geometry",
+    "ComfyColabPixal3DImageTo3D": "ComfyColab Pixal3D — Image to 3D",
 }
