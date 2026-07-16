@@ -12,14 +12,18 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable
 
-from .file3d import validate_glb
 from .cache import atomic_write_bytes
+from .geometry_quality import GEOMETRY_QUALITY_SCHEMA, validate_volumetric_glb
 
 
 TRANSFORM_SCHEMA = "comfycolab-3d-transform-v1"
-GEOMETRY_CACHE_SCHEMA = "comfycolab-ultrashape-geometry-cache-v1"
+GEOMETRY_CACHE_SCHEMA = "comfycolab-ultrashape-geometry-cache-v2"
+
+
+class UltraShapeNoDecodableSurfaceError(RuntimeError):
+    """UltraShape exhausted its adaptive decode without finding a surface."""
 
 
 @dataclass(frozen=True)
@@ -117,7 +121,11 @@ def write_geometry_cache_record(
     directory = Path(directory)
     geometry = directory / "geometry.glb"
     transform = directory / "transform.json"
-    validate_glb(geometry, require_material=True)
+    metrics = validate_volumetric_glb(
+        geometry,
+        stage="UltraShape geometry cache write",
+        require_material=True,
+    )
     validate_transform_metadata(transform)
     record = {
         "schema": GEOMETRY_CACHE_SCHEMA,
@@ -127,6 +135,8 @@ def write_geometry_cache_record(
         "transform_schema": TRANSFORM_SCHEMA,
         "geometry_only": True,
         "stage": stage,
+        "geometry_quality_schema": GEOMETRY_QUALITY_SCHEMA,
+        "geometry_metrics": metrics.to_dict() if hasattr(metrics, "to_dict") else metrics,
     }
     atomic_write_bytes(
         directory / "record.json",
@@ -149,12 +159,17 @@ def validate_geometry_cache_record(
             or record.get("cache_key") != cache_key
             or record.get("transform_schema") != TRANSFORM_SCHEMA
             or record.get("geometry_only") is not True
+            or record.get("geometry_quality_schema") != GEOMETRY_QUALITY_SCHEMA
             or (required_stage is not None and record.get("stage") != required_stage)
         ):
             return False
         geometry = directory / "geometry.glb"
         transform = directory / "transform.json"
-        validate_glb(geometry, require_material=True)
+        validate_volumetric_glb(
+            geometry,
+            stage="cached UltraShape geometry",
+            require_material=True,
+        )
         validate_transform_metadata(transform)
         return (
             _sha256_file(geometry) == record.get("geometry_sha256")
@@ -206,6 +221,24 @@ def _terminate_group(process: subprocess.Popen, timeout: float = 5.0) -> None:
             except ProcessLookupError:
                 pass
             process.wait(timeout=timeout)
+
+
+def _worker_reported_error(result: dict, *, fallback_seed: int | None = None) -> RuntimeError:
+    error_type = str(result.get("error_type", ""))
+    error_code = str(result.get("error_code", ""))
+    if error_code == "no_decodable_surface" or error_type == "NoDecodableSurface":
+        resolution = result.get("octree_resolution", "unknown")
+        depth = result.get("octree_depth", "unknown")
+        preceding = result.get("preceding_active_points", "unknown")
+        seed = result.get("seed", fallback_seed if fallback_seed is not None else "unknown")
+        return UltraShapeNoDecodableSurfaceError(
+            "UltraShape could not decode a surface "
+            f"(requested_resolution={resolution}, decode_stage_resolution={depth}, "
+            f"preceding_active_points={preceding}, seed={seed}). "
+            "Use a volumetric input mesh, try the conservative 512 detail tier, or choose another seed."
+        )
+    message = str(result.get("error") or "unknown worker failure")
+    return RuntimeError(f"UltraShape worker failed: {error_type or 'RuntimeError'}: {message}")
 
 
 def run_ultrashape_worker(
@@ -263,17 +296,21 @@ def run_ultrashape_worker(
             elif line.startswith("COMFYCOLAB_RESULT="):
                 result = json.loads(line.split("=", 1)[1])
         return_code = process.wait()
+        if result and result.get("status") != "ok":
+            raise _worker_reported_error(result, fallback_seed=command.seed)
         if return_code:
             raise RuntimeError(f"UltraShape worker exited with {return_code}: {' | '.join(tail)}")
         if not result:
             raise RuntimeError("UltraShape worker exited without COMFYCOLAB_RESULT")
-        if result.get("status") != "ok":
-            raise RuntimeError(f"UltraShape worker reported failure: {result}")
         if Path(str(result.get("output_mesh", ""))).resolve() != partial.resolve():
             raise RuntimeError("UltraShape worker reported an unexpected output path")
         if Path(str(result.get("metadata_output", ""))).resolve() != partial_metadata.resolve():
             raise RuntimeError("UltraShape worker reported an unexpected metadata path")
-        validate_glb(partial, require_material=True)
+        validate_volumetric_glb(
+            partial,
+            stage="UltraShape worker output",
+            require_material=True,
+        )
         validate_transform_metadata(partial_metadata)
         output.parent.mkdir(parents=True, exist_ok=True)
         os.replace(partial, output)

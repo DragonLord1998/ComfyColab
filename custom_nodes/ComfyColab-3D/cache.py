@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
+TRELLIS_RESULT_SCHEMA = "comfycolab-trellis-result-v2"
+ULTRASHAPE_GEOMETRY_SCHEMA = "comfycolab-ultrashape-geometry-v2"
+TEXTURE_RESULT_SCHEMA = "comfycolab-texture-result-v2"
+
+
 def _stable_value(value: Any) -> Any:
     if hasattr(value, "detach") and hasattr(value, "numpy"):
         array = value.detach().cpu().contiguous().numpy()
@@ -55,6 +60,7 @@ def trellis_cache_key(
     trellis_ref: str,
     trellis_patch_id: str,
     birefnet_ref: str,
+    result_schema: str = TRELLIS_RESULT_SCHEMA,
 ) -> str:
     return deterministic_cache_key(
         "trellis",
@@ -70,6 +76,7 @@ def trellis_cache_key(
         trellis_ref=trellis_ref,
         trellis_patch_id=trellis_patch_id,
         birefnet_ref=birefnet_ref,
+        result_schema=result_schema,
     )
 
 
@@ -88,6 +95,7 @@ def ultrashape_geometry_cache_key(
     checkpoint_ref: str,
     dinov2_ref: str,
     transform_schema: str,
+    geometry_schema: str = ULTRASHAPE_GEOMETRY_SCHEMA,
 ) -> str:
     return deterministic_cache_key(
         "ultrashape",
@@ -104,6 +112,7 @@ def ultrashape_geometry_cache_key(
         checkpoint_ref=checkpoint_ref,
         dinov2_ref=dinov2_ref,
         transform_schema=transform_schema,
+        geometry_schema=geometry_schema,
     )
 
 
@@ -116,6 +125,7 @@ def texture_cache_key(
     texture_size: int,
     texture_sampling_steps: int,
     trellis_ref: str,
+    result_schema: str = TEXTURE_RESULT_SCHEMA,
 ) -> str:
     return deterministic_cache_key(
         "texture",
@@ -126,6 +136,7 @@ def texture_cache_key(
         texture_size=texture_size,
         texture_sampling_steps=texture_sampling_steps,
         trellis_ref=trellis_ref,
+        result_schema=result_schema,
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -18,7 +19,8 @@ from .cache import (
     trellis_cache_key,
     ultrashape_geometry_cache_key,
 )
-from .file3d import copy_file3d_to, export_trimesh_atomic, load_glb_trimesh, materialize_file3d, publish_glb, validate_glb
+from .file3d import copy_file3d_to, export_trimesh_atomic, load_glb_trimesh, materialize_file3d, publish_glb
+from .geometry_quality import validate_volumetric_glb, validate_volumetric_mesh
 from .graph import (
     COMFYUI_REF,
     BIREFNET_MODEL_REF,
@@ -32,6 +34,7 @@ from .presets import (
     CACHE_MODES,
     RESOLUTION_OVERRIDES,
     TRELLIS_PRESETS,
+    ULTRASHAPE_EXPERIMENTAL_PRESETS,
     ULTRASHAPE_PRESETS,
     resolve_trellis_settings,
     resolve_ultrashape_settings,
@@ -224,10 +227,14 @@ class ComfyColabUltraShapeRefine:
             display_name="ComfyColab UltraShape — Refine Geometry",
             category="ComfyColab/3D",
             enable_expand=True,
+            description=(
+                "Refines a validated volumetric GLB. Conservative is the public 512 decode tier; "
+                "Detailed and Ultra preserve the existing 1024 behavior as experimental choices."
+            ),
             inputs=[
                 io.File3DGLB.Input("model_3d"),
                 io.Image.Input("reference_image"),
-                io.Combo.Input("detail", options=list(ULTRASHAPE_PRESETS), default="Detailed"),
+                io.Combo.Input("detail", options=list(ULTRASHAPE_PRESETS), default="Conservative"),
                 io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
                 io.Boolean.Input("retexture", default=True, advanced=True),
                 io.Int.Input("steps", default=0, min=0, max=100, advanced=True),
@@ -246,7 +253,7 @@ class ComfyColabUltraShapeRefine:
 
     @classmethod
     def execute(
-        cls, model_3d, reference_image, detail="Detailed", seed=0, retexture=True, steps=0,
+        cls, model_3d, reference_image, detail="Conservative", seed=0, retexture=True, steps=0,
         num_latents=0, octree_resolution=0, decode_chunk_size=0, target_face_count=0,
         texture_size=0, low_vram="Auto", cache_mode="Use cache",
     ):
@@ -260,11 +267,33 @@ class ComfyColabUltraShapeRefine:
             detail, steps=steps, num_latents=num_latents,
             octree_resolution=octree_resolution, decode_chunk_size=decode_chunk_size,
         )
+        print(
+            "COMFYCOLAB_ULTRASHAPE_SETTINGS="
+            + json.dumps(
+                {
+                    "detail": detail,
+                    "steps": resolved.steps,
+                    "num_latents": resolved.num_latents,
+                    "octree_resolution": resolved.octree_resolution,
+                    "decode_chunk_size": resolved.decode_chunk_size,
+                    "seed": seed,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        if detail in ULTRASHAPE_EXPERIMENTAL_PRESETS or resolved.octree_resolution >= 1024:
+            print(
+                "[ComfyColab 3D] Warning: UltraShape 1024 decoding is experimental and "
+                "has not passed its two-run live release gate.",
+                flush=True,
+            )
         low_vram_value = low_vram.lower()
         face_count = target_face_count or 500_000
         resolved_texture_size = texture_size or 2048
         with tempfile.TemporaryDirectory(prefix="comfycolab-3d-facade-") as directory:
             source = copy_file3d_to(model_3d, Path(directory) / "input.glb")
+            validate_volumetric_glb(source, stage="UltraShape input GLB")
             source_digest = canonical_glb_geometry_digest(source)
         artifact_module = _load_artifact_provisioner(Path(__file__).resolve().parents[2])
         geometry_key = ultrashape_geometry_cache_key(
@@ -335,8 +364,9 @@ def _valid_cached_glb(
     if not path.exists():
         return False
     try:
-        validate_glb(
+        validate_volumetric_glb(
             path,
+            stage="cached 3D result",
             require_material=require_material or require_textured,
             require_texture=require_textured,
             require_uv=require_textured,
@@ -416,6 +446,7 @@ class ComfyColab3DPathToFile3D(_DevNode):
 
     @classmethod
     def execute(cls, glb_path, delete_source=False):
+        validate_volumetric_glb(glb_path, stage="UltraShape worker output GLB")
         key = deterministic_cache_key("published-worker-mesh", geometry=canonical_glb_geometry_digest(glb_path))
         try:
             result = materialize_file3d(publish_glb(glb_path, key))
@@ -431,15 +462,24 @@ def _export_z_up_mesh(
     *,
     require_material: bool = False,
     require_textured: bool = False,
+    stage: str = "3D export mesh",
 ) -> None:
     numpy = importlib.import_module("numpy")
     mesh = trimesh.copy()
+    validate_volumetric_mesh(mesh, stage=f"{stage} before coordinate conversion")
     mesh.apply_transform(numpy.array([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
         [0.0, -1.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]))
+    visual = getattr(mesh, "visual", None)
+    uv = getattr(visual, "uv", None)
+    if uv is not None:
+        converted_uv = uv.copy()
+        converted_uv[:, 1] = 1.0 - converted_uv[:, 1]
+        visual.uv = converted_uv
+    validate_volumetric_mesh(mesh, stage=f"{stage} after coordinate conversion")
     export_trimesh_atomic(
         mesh,
         destination,
@@ -447,6 +487,52 @@ def _export_z_up_mesh(
         require_texture=require_textured,
         require_uv=require_textured,
     )
+    validate_volumetric_glb(
+        destination,
+        stage=f"{stage} exported GLB",
+        require_material=require_material or require_textured,
+        require_texture=require_textured,
+        require_uv=require_textured,
+    )
+
+
+class ComfyColab3DValidateMesh(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.Custom("TRIMESH").Input("trimesh"),
+                io.String.Input("stage"),
+                io.Combo.Input(
+                    "analysis_mode",
+                    options=["exact", "raw"],
+                    default="exact",
+                    advanced=True,
+                ),
+            ],
+            [io.Custom("TRIMESH").Output()],
+        )
+
+    @classmethod
+    def execute(cls, trimesh, stage, analysis_mode="exact"):
+        metrics = validate_volumetric_mesh(
+            trimesh,
+            stage=stage,
+            analysis_mode=analysis_mode,
+        )
+        payload = metrics.to_dict() if hasattr(metrics, "to_dict") else metrics
+        print(
+            "COMFYCOLAB_GEOMETRY_QUALITY=" + json.dumps(payload, sort_keys=True),
+            flush=True,
+        )
+        if getattr(metrics, "is_very_thin", False):
+            print(
+                f"[ComfyColab 3D] Warning: {stage} is very thin but remains rank 3; "
+                "the mesh is accepted and should be checked from a side view.",
+                flush=True,
+            )
+        return _io().NodeOutput(trimesh)
 
 
 class ComfyColab3DTrimeshToFile3D(_DevNode):
@@ -468,8 +554,9 @@ class ComfyColab3DTrimeshToFile3D(_DevNode):
         destination = cache_path(_cache_root(), cache_stage, cache_key)
         if cache_mode == "Use cache" and destination.exists():
             try:
-                validate_glb(
+                validate_volumetric_glb(
                     destination,
+                    stage=f"cached {cache_stage} GLB",
                     require_material=cache_stage == "trellis",
                     require_texture=cache_stage == "trellis",
                     require_uv=cache_stage == "trellis",
@@ -487,6 +574,7 @@ class ComfyColab3DTrimeshToFile3D(_DevNode):
                 trimesh,
                 destination,
                 require_textured=cache_stage == "trellis",
+                stage=f"{cache_stage} final mesh",
             )
             result = materialize_file3d(publish_glb(destination, cache_key))
         finally:
@@ -509,6 +597,7 @@ class ComfyColab3DNeutralMeshToFile3D(_DevNode):
         numpy = importlib.import_module("numpy")
         trimesh_module = importlib.import_module("trimesh")
         mesh = trimesh.copy()
+        validate_volumetric_mesh(mesh, stage="neutral preview/output mesh")
         mesh.visual = trimesh_module.visual.TextureVisuals(
             uv=numpy.zeros((len(mesh.vertices), 2), dtype=numpy.float32),
             material=trimesh_module.visual.material.PBRMaterial(
@@ -523,7 +612,12 @@ class ComfyColab3DNeutralMeshToFile3D(_DevNode):
         staging = _make_temp_directory("comfycolab-ultrashape-neutral-")
         destination = staging / "geometry.glb"
         try:
-            _export_z_up_mesh(mesh, destination, require_material=True)
+            _export_z_up_mesh(
+                mesh,
+                destination,
+                require_material=True,
+                stage="neutral preview/output mesh",
+            )
             result = materialize_file3d(publish_glb(destination, key))
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -570,7 +664,12 @@ class ComfyColab3DTextureToFile3D(_DevNode):
             temporary_root = _make_temp_directory("comfycolab-3d-")
             destination = temporary_root / "model.glb"
         try:
-            _export_z_up_mesh(trimesh, destination, require_textured=True)
+            _export_z_up_mesh(
+                trimesh,
+                destination,
+                require_textured=True,
+                stage="textured refined mesh",
+            )
             result = materialize_file3d(publish_glb(destination, key))
         finally:
             if temporary_root is not None:
@@ -594,6 +693,7 @@ class ComfyColab3DGLBToTrellisMesh(_DevNode):
     @classmethod
     def execute(cls, glb_path, delete_source=False):
         try:
+            validate_volumetric_glb(glb_path, stage="refined UltraShape GLB")
             geometry_digest = canonical_glb_geometry_digest(glb_path)
             mesh = load_glb_trimesh(glb_path)
         finally:
@@ -648,6 +748,7 @@ class ComfyColab3DRestoreMeshTransform(_DevNode):
         mesh = trimesh.copy()
         center, scale = transform["center"], float(transform["scale"])
         mesh.vertices = mesh.vertices / scale + center
+        validate_volumetric_mesh(mesh, stage="restored UltraShape mesh")
         return _io().NodeOutput(mesh)
 
 
@@ -702,11 +803,12 @@ class ComfyColab3DUltraShapeWorker(_DevNode):
         decode_chunk_size, low_vram, cache_mode="Use cache", geometry_cache_key="",
     ):
         repo_root = Path(__file__).resolve().parents[2]
-        artifact_module = _load_artifact_provisioner(repo_root)
         staging = Path(tempfile.mkdtemp(prefix="comfycolab-ultrashape-input-"))
         try:
             input_mesh, image_path = staging / "input.glb", staging / "reference.png"
             copy_file3d_to(model_3d, input_mesh)
+            validate_volumetric_glb(input_mesh, stage="UltraShape worker input GLB")
+            artifact_module = _load_artifact_provisioner(repo_root)
             _save_reference_image(reference_image, reference_mask, image_path)
             key = geometry_cache_key or ultrashape_geometry_cache_key(
                 canonical_glb_geometry_digest(input_mesh),
@@ -772,7 +874,24 @@ class ComfyColab3DUltraShapeWorker(_DevNode):
                 return False
 
             try:
-                run_ultrashape_worker(command, is_cancelled=cancelled, on_progress=progress)
+                worker_result = run_ultrashape_worker(
+                    command,
+                    is_cancelled=cancelled,
+                    on_progress=progress,
+                )
+                worker_settings = worker_result.get("settings")
+                if not isinstance(worker_settings, dict):
+                    raise RuntimeError("UltraShape worker result omitted resolved settings")
+                print(
+                    "COMFYCOLAB_ULTRASHAPE_WORKER_SETTINGS="
+                    + json.dumps(worker_settings, sort_keys=True),
+                    flush=True,
+                )
+                validate_volumetric_glb(
+                    output,
+                    stage="UltraShape worker refined GLB",
+                    require_material=True,
+                )
                 write_geometry_cache_record(staging_output, key)
                 if cache_mode != "Disable cache":
                     atomic_replace_cache_directory(staging_output, cache_directory)
@@ -791,6 +910,7 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColab3DProgressCheckpoint": ComfyColab3DProgressCheckpoint,
     "ComfyColab3DImageOpaqueMask": ComfyColab3DImageOpaqueMask,
     "ComfyColab3DPathToFile3D": ComfyColab3DPathToFile3D,
+    "ComfyColab3DValidateMesh": ComfyColab3DValidateMesh,
     "ComfyColab3DTrimeshToFile3D": ComfyColab3DTrimeshToFile3D,
     "ComfyColab3DNeutralMeshToFile3D": ComfyColab3DNeutralMeshToFile3D,
     "ComfyColab3DTextureToFile3D": ComfyColab3DTextureToFile3D,

@@ -38,6 +38,12 @@ class ThreeDWorkflowTests(unittest.TestCase):
         ultra = next(node for node in workflow["nodes"] if node["type"] == "ComfyColabUltraShapeRefine")
         linked_inputs = {item["name"] for item in ultra["inputs"] if item.get("link") is not None}
         self.assertEqual(linked_inputs, {"model_3d", "reference_image"})
+        self.assertEqual(ultra["widgets_values"][0], "Conservative")
+        self.assertEqual(
+            ultra["widgets_values"][5],
+            0,
+            "the bundled workflow must resolve the conservative 512 preset instead of forcing 1024",
+        )
 
 
 if __name__ == "__main__":

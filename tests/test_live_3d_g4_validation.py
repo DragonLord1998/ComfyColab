@@ -296,7 +296,12 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["2"]["class_type"], "ComfyColab3DPathToFile3D")
         self.assertEqual(prompt["3"]["class_type"], "ComfyColabUltraShapeRefine")
         self.assertEqual(prompt["3"]["inputs"]["model_3d"], ["2", 0])
-        self.assertEqual(prompt["3"]["inputs"]["octree_resolution"], 512)
+        self.assertEqual(prompt["3"]["inputs"]["detail"], "Conservative")
+        self.assertEqual(
+            prompt["3"]["inputs"]["octree_resolution"],
+            0,
+            "the live 512 gate must exercise the preset/default path",
+        )
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["3", 0])
 
     def test_advanced_prompt_uses_hexadecimal_adapter_cache_key(self) -> None:
@@ -371,6 +376,14 @@ class Live3DG4ValidationTests(unittest.TestCase):
 
     def test_ultrashape_benchmark_rejects_resolution_override(self) -> None:
         spec = self.module.CASES["ultrashape_1024_run_1"]
+        with self.assertRaisesRegex(RuntimeError, "lacks machine-observed"):
+            self.module.benchmark_from(
+                spec,
+                1.5,
+                2048,
+                {"bytes": 123, "faces": 45},
+                "",
+            )
         with self.assertRaisesRegex(RuntimeError, "requires octree resolution 1024"):
             self.module.benchmark_from(
                 spec,
@@ -378,8 +391,30 @@ class Live3DG4ValidationTests(unittest.TestCase):
                 2048,
                 {"bytes": 123, "faces": 45},
                 "",
-                requested_resolution=512,
+                observed_resolution=512,
             )
+
+    def test_ultrashape_machine_settings_are_parsed_and_retained_in_log_evidence(self) -> None:
+        resolved = {
+            "detail": "Conservative",
+            "steps": 24,
+            "num_latents": 16384,
+            "octree_resolution": 512,
+            "decode_chunk_size": 4096,
+            "seed": 9,
+        }
+        worker = {**resolved, "low_vram": "auto"}
+        resolved_line = "COMFYCOLAB_ULTRASHAPE_SETTINGS=" + json.dumps(resolved)
+        worker_line = "COMFYCOLAB_ULTRASHAPE_WORKER_SETTINGS=" + json.dumps(worker)
+        text = resolved_line + "\n" + worker_line + "\n" + ("verbose\n" * 5000)
+        self.assertEqual(
+            self.module.ultrashape_resolved_settings_events(text),
+            [resolved],
+        )
+        self.assertEqual(self.module.ultrashape_worker_settings_events(text), [worker])
+        compacted = self.module.compact_log_evidence(text)
+        self.assertIn(resolved_line, compacted)
+        self.assertIn(worker_line, compacted)
 
     def test_glb_inspection_requires_embedded_material_texture_and_uv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

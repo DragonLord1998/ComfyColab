@@ -55,7 +55,7 @@ def _iter_accessor(
     return count, (unpack(binary, offset + item * stride) for item in range(count))
 
 
-def validate_glb(
+def _validate_glb_impl(
     path: str | Path,
     *,
     require_material: bool = False,
@@ -216,6 +216,262 @@ def validate_glb(
             ):
                 raise ValueError("GLB texture image is not embedded")
     return document
+
+
+def validate_glb(
+    path: str | Path,
+    *,
+    require_material: bool = False,
+    require_texture: bool = False,
+    require_uv: bool = False,
+) -> dict[str, Any]:
+    """Validate a GLB and normalize malformed JSON schema errors to ValueError."""
+
+    try:
+        return _validate_glb_impl(
+            path,
+            require_material=require_material,
+            require_texture=require_texture,
+            require_uv=require_uv,
+        )
+    except ValueError:
+        raise
+    except (AttributeError, IndexError, KeyError, OverflowError, struct.error, TypeError) as exc:
+        raise ValueError("GLB JSON structure is invalid") from exc
+
+
+def _read_embedded_binary_chunk(path: Path) -> bytes:
+    with path.open("rb") as stream:
+        stream.seek(12)
+        while stream.tell() < path.stat().st_size:
+            chunk_header = stream.read(8)
+            if len(chunk_header) != 8:
+                raise ValueError("GLB chunk header is truncated")
+            chunk_length, chunk_type = struct.unpack("<I4s", chunk_header)
+            payload = stream.read(chunk_length)
+            if len(payload) != chunk_length:
+                raise ValueError("GLB chunk is truncated")
+            if chunk_type == b"BIN\x00":
+                return payload
+    return b""
+
+
+_IDENTITY_MATRIX = (
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
+
+
+def _matrix_multiply(first, second):
+    return tuple(
+        tuple(
+            math.fsum(first[row][inner] * second[inner][column] for inner in range(4))
+            for column in range(4)
+        )
+        for row in range(4)
+    )
+
+
+def _node_matrix(node: dict[str, Any]):
+    if "matrix" in node:
+        values = tuple(float(value) for value in node["matrix"])
+        if len(values) != 16 or not all(math.isfinite(value) for value in values):
+            raise ValueError("GLB node matrix must contain 16 finite values")
+        # glTF serializes matrices in column-major order.
+        return tuple(
+            tuple(values[column * 4 + row] for column in range(4))
+            for row in range(4)
+        )
+
+    translation = tuple(float(value) for value in node.get("translation", (0.0, 0.0, 0.0)))
+    rotation = tuple(float(value) for value in node.get("rotation", (0.0, 0.0, 0.0, 1.0)))
+    scale = tuple(float(value) for value in node.get("scale", (1.0, 1.0, 1.0)))
+    if len(translation) != 3 or len(rotation) != 4 or len(scale) != 3:
+        raise ValueError("GLB node TRS transform has an invalid width")
+    if not all(math.isfinite(value) for value in (*translation, *rotation, *scale)):
+        raise ValueError("GLB node TRS transform must be finite")
+    x, y, z, w = rotation
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    if norm <= 0.0:
+        raise ValueError("GLB node quaternion must be non-zero")
+    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+    sx, sy, sz = scale
+    tx, ty, tz = translation
+    return (
+        ((1.0 - 2.0 * (y * y + z * z)) * sx, 2.0 * (x * y - z * w) * sy, 2.0 * (x * z + y * w) * sz, tx),
+        (2.0 * (x * y + z * w) * sx, (1.0 - 2.0 * (x * x + z * z)) * sy, 2.0 * (y * z - x * w) * sz, ty),
+        (2.0 * (x * z - y * w) * sx, 2.0 * (y * z + x * w) * sy, (1.0 - 2.0 * (x * x + y * y)) * sz, tz),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+
+
+def _scene_mesh_instances(document: dict[str, Any]) -> list[tuple[int, tuple]]:
+    meshes = document.get("meshes") or []
+    nodes = document.get("nodes") or []
+    if not nodes:
+        return [(index, _IDENTITY_MATRIX) for index in range(len(meshes))]
+
+    scenes = document.get("scenes") or []
+    if scenes:
+        scene_index = document.get("scene", 0)
+        if not isinstance(scene_index, int) or scene_index < 0 or scene_index >= len(scenes):
+            raise ValueError("GLB default scene index is invalid")
+        scene = scenes[scene_index]
+        if not isinstance(scene, dict):
+            raise ValueError("GLB scene must be an object")
+        roots = scene.get("nodes") or []
+    else:
+        children = {
+            child
+            for node in nodes
+            if isinstance(node, dict)
+            for child in (node.get("children") or [])
+            if isinstance(child, int)
+        }
+        roots = [index for index in range(len(nodes)) if index not in children]
+
+    instances: list[tuple[int, tuple]] = []
+
+    def visit(node_index: int, parent_matrix, ancestry: frozenset[int]) -> None:
+        if not isinstance(node_index, int) or node_index < 0 or node_index >= len(nodes):
+            raise ValueError("GLB scene references an invalid node")
+        if node_index in ancestry:
+            raise ValueError("GLB node graph contains a cycle")
+        node = nodes[node_index]
+        if not isinstance(node, dict):
+            raise ValueError("GLB node must be an object")
+        world_matrix = _matrix_multiply(parent_matrix, _node_matrix(node))
+        mesh_index = node.get("mesh")
+        if mesh_index is not None:
+            if not isinstance(mesh_index, int) or mesh_index < 0 or mesh_index >= len(meshes):
+                raise ValueError("GLB node references an invalid mesh")
+            instances.append((mesh_index, world_matrix))
+        next_ancestry = ancestry | {node_index}
+        for child in node.get("children") or []:
+            visit(child, world_matrix, next_ancestry)
+
+    for root in roots:
+        visit(root, _IDENTITY_MATRIX, frozenset())
+    if not instances:
+        raise ValueError("GLB default scene contains no mesh geometry")
+    return instances
+
+
+def _transform_position(position, matrix) -> tuple[float, float, float]:
+    x, y, z = position
+    transformed = tuple(
+        math.fsum((matrix[row][0] * x, matrix[row][1] * y, matrix[row][2] * z, matrix[row][3]))
+        for row in range(4)
+    )
+    if not all(math.isfinite(value) for value in transformed):
+        raise ValueError("GLB node transform produced non-finite geometry")
+    if abs(transformed[3]) <= 1.0e-300:
+        raise ValueError("GLB node transform produced an invalid homogeneous coordinate")
+    return (
+        transformed[0] / transformed[3],
+        transformed[1] / transformed[3],
+        transformed[2] / transformed[3],
+    )
+
+
+def _glb_vertex_face_data(
+    path: Path, document: dict[str, Any]
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+    """Return the baked geometry from the default GLB scene."""
+
+    binary = _read_embedded_binary_chunk(path)
+    if not binary:
+        raise ValueError("Volumetric GLB validation requires embedded mesh buffers")
+    mesh_cache: dict[int, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]] = {}
+
+    def mesh_data(mesh_index: int):
+        cached = mesh_cache.get(mesh_index)
+        if cached is not None:
+            return cached
+        mesh_vertices: list[tuple[float, float, float]] = []
+        mesh_faces: list[tuple[int, int, int]] = []
+        mesh = document["meshes"][mesh_index]
+        for primitive in mesh.get("primitives") or []:
+            attributes = primitive.get("attributes") or {}
+            position_index = int(attributes["POSITION"])
+            indices_index = int(primitive["indices"])
+            _, position_rows = _iter_accessor(document, binary, position_index)
+            primitive_vertices = [
+                (float(row[0]), float(row[1]), float(row[2])) for row in position_rows
+            ]
+            _, index_rows = _iter_accessor(document, binary, indices_index)
+            primitive_indices = [int(row[0]) for row in index_rows]
+            vertex_offset = len(mesh_vertices)
+            mesh_vertices.extend(primitive_vertices)
+            mesh_faces.extend(
+                (
+                    vertex_offset + primitive_indices[offset],
+                    vertex_offset + primitive_indices[offset + 1],
+                    vertex_offset + primitive_indices[offset + 2],
+                )
+                for offset in range(0, len(primitive_indices), 3)
+            )
+        cached = (mesh_vertices, mesh_faces)
+        mesh_cache[mesh_index] = cached
+        return cached
+
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    try:
+        instances = _scene_mesh_instances(document)
+        for mesh_index, world_matrix in instances:
+            instance_vertices, instance_faces = mesh_data(mesh_index)
+            vertex_offset = len(vertices)
+            vertices.extend(
+                _transform_position(vertex, world_matrix) for vertex in instance_vertices
+            )
+            faces.extend(
+                tuple(vertex_offset + index for index in face) for face in instance_faces
+            )
+    except ValueError:
+        raise
+    except (AttributeError, IndexError, KeyError, OverflowError, TypeError) as exc:
+        raise ValueError("GLB scene geometry structure is invalid") from exc
+    return vertices, faces
+
+
+def validate_volumetric_mesh(mesh: Any, *, stage: str):
+    """Reject dimensional collapse in a trimesh-like object."""
+
+    quality = importlib.import_module(f"{__package__}.geometry_quality")
+    return quality.validate_volumetric_mesh(mesh, stage=stage)
+
+
+def validate_volumetric_glb(
+    path: str | Path,
+    *,
+    stage: str,
+    require_material: bool = False,
+    require_texture: bool = False,
+    require_uv: bool = False,
+):
+    """Run structural GLB validation, then reject numerical planar collapse."""
+
+    path = Path(path)
+    document = validate_glb(
+        path,
+        require_material=require_material,
+        require_texture=require_texture,
+        require_uv=require_uv,
+    )
+    vertices, faces = _glb_vertex_face_data(path, document)
+    quality = importlib.import_module(f"{__package__}.geometry_quality")
+    metrics = quality.analyze_geometry(vertices, faces, stage=stage)
+    if metrics.is_numerically_collapsed:
+        reasons = ", ".join(metrics.collapse_reasons)
+        raise ValueError(
+            f"{stage} GLB geometry is numerically collapsed ({reasons}); "
+            f"PCA rank={metrics.numerical_rank}, "
+            f"smallest/largest singular ratio={metrics.smallest_to_largest_singular_ratio:.3g}"
+        )
+    return metrics
 
 
 def materialize_file3d(path: str | Path):

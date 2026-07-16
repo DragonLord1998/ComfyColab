@@ -13,7 +13,9 @@ import asyncio
 import contextlib
 import datetime as dt
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -38,6 +40,13 @@ EVENT_PREFIX = "COMFYCOLAB_LIVE3D="
 SHAPE_METRICS = re.compile(
     r"ComfyColab shape metrics:\s*(?P<tokens>\d+)\s+tokens\s+at\s+resolution\s+(?P<resolution>\d+)"
 )
+GEOMETRY_QUALITY_EVENT = re.compile(r"COMFYCOLAB_GEOMETRY_QUALITY=(?P<payload>\{[^\n]+\})")
+ULTRASHAPE_SETTINGS_EVENT = re.compile(
+    r"COMFYCOLAB_ULTRASHAPE_SETTINGS=(?P<payload>\{[^\n]+\})"
+)
+ULTRASHAPE_WORKER_SETTINGS_EVENT = re.compile(
+    r"COMFYCOLAB_ULTRASHAPE_WORKER_SETTINGS=(?P<payload>\{[^\n]+\})"
+)
 FIVE_STAGE_TEXTS = (
     "Stage 1/5 - Preparing models and input...",
     "Stage 2/5 - Generating 3D shape...",
@@ -51,6 +60,39 @@ DEFAULT_STATE_DIR = Path("/content/.comfycolab/live-3d-validation")
 DEFAULT_COMFY_ROOT = Path("/content/ComfyUI")
 DEFAULT_LOG = Path("/content/.comfycolab/comfyui.log")
 DEFAULT_BASE_URL = "http://127.0.0.1:8188"
+GEOMETRY_METRICS_SCHEMA = "comfycolab-geometry-metrics-v1"
+GEOMETRY_QUALITY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "custom_nodes"
+    / "ComfyColab-3D"
+    / "geometry_quality.py"
+)
+
+
+def _geometry_quality_module():
+    module_name = "comfycolab_live_geometry_quality"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    specification = importlib.util.spec_from_file_location(module_name, GEOMETRY_QUALITY_PATH)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"Unable to load geometry quality contract: {GEOMETRY_QUALITY_PATH}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[module_name] = module
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+_GEOMETRY_QUALITY = _geometry_quality_module()
+INTRINSIC_RANK_RELATIVE_THRESHOLD = (
+    getattr(_GEOMETRY_QUALITY, "SINGULAR_COLLAPSE_RATIO", None)
+    or getattr(_GEOMETRY_QUALITY, "_SINGULAR_COLLAPSE_RATIO")
+)
+MIN_NONDEGENERATE_FACE_RATIO = 0.0
 
 
 @dataclass(frozen=True)
@@ -64,7 +106,7 @@ class CaseSpec:
     quality: str = "512 — Fast"
     texture_size: int = 1024
     detail: str = "Fast"
-    octree_resolution: int = 384
+    octree_resolution: int = 0
     retexture: bool = False
     require_textured: bool = False
 
@@ -96,36 +138,40 @@ CASES: dict[str, CaseSpec] = {
     ),
     "ultrashape_512": CaseSpec(
         "ultrashape_512", "ultrashape", "ultrashape_512_refinement",
-        "ultrashape_512", actual_resolution=512, detail="Fast", octree_resolution=512,
+        "ultrashape_512", actual_resolution=512, detail="Conservative", octree_resolution=0,
     ),
     "ultrashape_1024_run_1": CaseSpec(
         "ultrashape_1024_run_1", "ultrashape", "ultrashape_1024_run_1",
-        "ultrashape_1024_run_1", actual_resolution=1024, detail="Detailed", octree_resolution=1024,
+        "ultrashape_1024_run_1", actual_resolution=1024, detail="Ultra", octree_resolution=0,
     ),
     "ultrashape_1024_run_2": CaseSpec(
         "ultrashape_1024_run_2", "ultrashape", "ultrashape_1024_run_2",
-        "ultrashape_1024_run_2", actual_resolution=1024, detail="Detailed", octree_resolution=1024,
+        "ultrashape_1024_run_2", actual_resolution=1024, detail="Ultra", octree_resolution=0,
     ),
     "full_workflow_hard_surface": CaseSpec(
         "full_workflow_hard_surface", "full", "full_workflow_hard_surface",
-        resolution="512", actual_resolution=512, retexture=True, require_textured=True,
+        resolution="512", actual_resolution=512, detail="Conservative", octree_resolution=0,
+        retexture=True, require_textured=True,
     ),
     "full_workflow_organic": CaseSpec(
         "full_workflow_organic", "full", "full_workflow_organic",
-        resolution="512", actual_resolution=512, retexture=True, require_textured=True,
+        resolution="512", actual_resolution=512, detail="Conservative", octree_resolution=0,
+        retexture=True, require_textured=True,
     ),
     "full_workflow_thin": CaseSpec(
         "full_workflow_thin", "full", "full_workflow_thin",
-        resolution="512", actual_resolution=512, retexture=True, require_textured=True,
+        resolution="512", actual_resolution=512, detail="Conservative", octree_resolution=0,
+        retexture=True, require_textured=True,
     ),
     "full_workflow_holed": CaseSpec(
         "full_workflow_holed", "full", "full_workflow_holed",
-        resolution="512", actual_resolution=512, retexture=True, require_textured=True,
+        resolution="512", actual_resolution=512, detail="Conservative", octree_resolution=0,
+        retexture=True, require_textured=True,
     ),
     "full_workflow_transparent_background": CaseSpec(
         "full_workflow_transparent_background", "full",
         "full_workflow_transparent_background", resolution="512", actual_resolution=512,
-        retexture=True, require_textured=True,
+        detail="Conservative", octree_resolution=0, retexture=True, require_textured=True,
     ),
     "cache_hit_no_inference": CaseSpec(
         "cache_hit_no_inference", "cache", "cache_hit_no_inference",
@@ -133,7 +179,7 @@ CASES: dict[str, CaseSpec] = {
     ),
     "cancellation_cleanup": CaseSpec(
         "cancellation_cleanup", "cancel", "cancellation_cleanup",
-        actual_resolution=1024, detail="Detailed", octree_resolution=1024,
+        actual_resolution=512, detail="Conservative", octree_resolution=0,
     ),
     "advanced_trellis_workflow": CaseSpec(
         "advanced_trellis_workflow", "advanced", "advanced_trellis_workflow",
@@ -833,11 +879,25 @@ def preview_event_paths(event: dict[str, Any], output_root: Path) -> list[Path]:
     return paths
 
 
-def classify_glb(path: Path) -> dict[str, Any]:
+def classify_glb(path: Path, *, require_noncollapsed: bool = False) -> dict[str, Any]:
     try:
-        return {**inspect_glb(path, require_textured=True), "artifactKind": "textured"}
+        return {
+            **inspect_glb(
+                path,
+                require_textured=True,
+                require_noncollapsed=require_noncollapsed,
+            ),
+            "artifactKind": "textured",
+        }
     except ValueError:
-        return {**inspect_glb(path, require_textured=False), "artifactKind": "geometry"}
+        return {
+            **inspect_glb(
+                path,
+                require_textured=False,
+                require_noncollapsed=require_noncollapsed,
+            ),
+            "artifactKind": "geometry",
+        }
 
 
 def _parse_glb(path: Path) -> tuple[dict[str, Any], bytes]:
@@ -914,13 +974,95 @@ def iter_accessor(
     return count, (unpack(binary, offset + item * stride) for item in range(count))
 
 
-def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
+def compute_geometry_metrics(
+    vertices: Iterable[tuple[float, float, float]],
+    faces: Iterable[tuple[int, int, int]],
+) -> dict[str, Any]:
+    """Adapt the shared runtime geometry contract to the live-record schema."""
+
+    quality = _GEOMETRY_QUALITY.analyze_geometry(
+        vertices,
+        faces,
+        stage="live GLB validation",
+    )
+    payload = quality.to_dict()
+    minimum = payload["bounds_min"]
+    maximum = payload["bounds_max"]
+    extents = payload["extents"]
+    diagonal = math.sqrt(math.fsum(extent * extent for extent in extents))
+    singular_values = payload["singular_values"]
+    largest_singular = singular_values[0]
+    singular_ratios = (
+        [value / largest_singular for value in singular_values]
+        if largest_singular > 0.0
+        else [0.0, 0.0, 0.0]
+    )
+    intrinsic_rank = payload["numerical_rank"]
+    surface_area = payload["surface_area"]
+    nondegenerate_faces = payload["nondegenerate_face_count"]
+    nondegenerate_ratio = payload["nondegenerate_face_ratio"]
+    checks = {
+        "hasSpatialExtent": largest_singular > 0.0,
+        "intrinsicRankThree": intrinsic_rank == 3,
+        "hasNondegenerateFaces": nondegenerate_faces > 0,
+        "positiveSurfaceArea": surface_area > 0.0,
+    }
+    return {
+        "schema": GEOMETRY_METRICS_SCHEMA,
+        "contractSchema": payload["schema"],
+        "bounds": {
+            "minimum": minimum,
+            "maximum": maximum,
+            "extents": extents,
+            "diagonal": diagonal,
+        },
+        "centeredSvd": {
+            "singularValues": singular_values,
+            "singularValueRatios": singular_ratios,
+            "relativeRankThreshold": INTRINSIC_RANK_RELATIVE_THRESHOLD,
+            "intrinsicRank": intrinsic_rank,
+        },
+        "surfaceArea": surface_area,
+        "nondegenerateFaces": nondegenerate_faces,
+        "nondegenerateFaceRatio": nondegenerate_ratio,
+        "minimumNondegenerateFaceRatio": MIN_NONDEGENERATE_FACE_RATIO,
+        "connectedComponents": payload["connected_component_count"],
+        "warnings": payload["warnings"],
+        "checks": checks,
+        "nonCollapsed": payload["passes_volumetric_validation"] and all(checks.values()),
+    }
+
+
+def require_noncollapsed_geometry(metrics: dict[str, Any], *, stage: str) -> None:
+    if metrics.get("schema") == GEOMETRY_METRICS_SCHEMA and metrics.get("nonCollapsed") is True:
+        return
+    failed = ", ".join(
+        name for name, passed in (metrics.get("checks") or {}).items() if not passed
+    ) or "geometry metrics missing"
+    svd = metrics.get("centeredSvd") or {}
+    raise ValueError(
+        f"{stage} is geometrically collapsed ({failed}); "
+        f"intrinsicRank={svd.get('intrinsicRank')}, "
+        f"singularValueRatios={svd.get('singularValueRatios')}, "
+        f"nondegenerateFaceRatio={metrics.get('nondegenerateFaceRatio')}, "
+        f"surfaceArea={metrics.get('surfaceArea')}"
+    )
+
+
+def inspect_glb(
+    path: Path,
+    *,
+    require_textured: bool,
+    require_noncollapsed: bool = False,
+) -> dict[str, Any]:
     document, binary = _parse_glb(path)
     accessors = document.get("accessors") or []
     materials = document.get("materials") or []
     textures = document.get("textures") or []
     images = document.get("images") or []
     faces = vertices = primitives = 0
+    metric_vertices: list[tuple[float, float, float]] = []
+    metric_faces: list[tuple[int, int, int]] = []
     for mesh in document.get("meshes") or []:
         for primitive in mesh.get("primitives") or []:
             primitives += 1
@@ -938,9 +1080,11 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
             if vertex_count <= 0 or index_count <= 0 or index_count % 3:
                 raise ValueError("GLB primitive has invalid vertex/index counts")
             actual_vertex_count, position_rows = iter_accessor(document, binary, position)
+            position_values = [tuple(float(value) for value in row) for row in position_rows]
             if actual_vertex_count != vertex_count or not all(
+                len(row) == 3 and
                 isinstance(value, (int, float)) and float("-inf") < float(value) < float("inf")
-                for row in position_rows for value in row
+                for row in position_values for value in row
             ):
                 raise ValueError("GLB primitive has non-finite vertices")
             actual_index_count, index_rows = iter_accessor(document, binary, indices)
@@ -954,6 +1098,16 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
                 raise ValueError("GLB primitive has out-of-range triangle indices")
             vertices += vertex_count
             faces += index_count // 3
+            vertex_offset = len(metric_vertices)
+            metric_vertices.extend(position_values)
+            metric_faces.extend(
+                (
+                    vertex_offset + index_values[index],
+                    vertex_offset + index_values[index + 1],
+                    vertex_offset + index_values[index + 2],
+                )
+                for index in range(0, len(index_values), 3)
+            )
             if require_textured:
                 uv = attributes.get("TEXCOORD_0")
                 material = primitive.get("material")
@@ -991,6 +1145,9 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
                     raise ValueError("Textured GLB image is not embedded")
     if not primitives or not binary:
         raise ValueError("GLB has no embedded mesh data")
+    geometry_metrics = compute_geometry_metrics(metric_vertices, metric_faces)
+    if require_noncollapsed:
+        require_noncollapsed_geometry(geometry_metrics, stage=f"GLB artifact {path.name}")
     return {
         "path": str(path),
         "sha256": sha256_file(path),
@@ -1001,6 +1158,8 @@ def inspect_glb(path: Path, *, require_textured: bool) -> dict[str, Any]:
         "materialCount": len(materials),
         "textureCount": len(textures),
         "embeddedTextureValidated": require_textured,
+        "geometryMetrics": geometry_metrics,
+        "nonCollapsedGeometryValidated": geometry_metrics["nonCollapsed"],
     }
 
 
@@ -1037,9 +1196,8 @@ def read_settled_log_since(
         if end != last_end:
             last_end = end
             last_change = now
-        if require_shape_marker and SHAPE_METRICS.search(text):
-            return text, end
-        if now - last_change >= settle_seconds:
+        required_marker_ready = not require_shape_marker or SHAPE_METRICS.search(text) is not None
+        if required_marker_ready and now - last_change >= settle_seconds:
             return text, end
         if now >= deadline:
             return text, end
@@ -1047,12 +1205,64 @@ def read_settled_log_since(
 
 
 def compact_log_evidence(text: str, *, tail_bytes: int = 12_000) -> str:
-    """Retain shape markers even when verbose mesh logs exceed the evidence tail."""
+    """Retain release markers even when verbose mesh logs exceed the evidence tail."""
 
     tail = text[-tail_bytes:]
     markers = [match.group(0) for match in SHAPE_METRICS.finditer(text)]
+    markers.extend(match.group(0) for match in GEOMETRY_QUALITY_EVENT.finditer(text))
+    markers.extend(match.group(0) for match in ULTRASHAPE_SETTINGS_EVENT.finditer(text))
+    markers.extend(
+        match.group(0) for match in ULTRASHAPE_WORKER_SETTINGS_EVENT.finditer(text)
+    )
     missing = [marker for marker in markers if marker not in tail]
     return "\n".join([*missing, tail]) if missing else tail
+
+
+def geometry_quality_events(text: str) -> list[dict[str, Any]]:
+    events = []
+    for match in GEOMETRY_QUALITY_EVENT.finditer(text):
+        try:
+            payload = json.loads(match.group("payload"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("ComfyUI emitted malformed geometry-quality evidence") from exc
+        if payload.get("schema") != _GEOMETRY_QUALITY.GEOMETRY_QUALITY_SCHEMA:
+            raise ValueError("ComfyUI emitted geometry-quality evidence with an unknown schema")
+        events.append(payload)
+    return events
+
+
+def _settings_events(
+    text: str,
+    pattern: re.Pattern[str],
+    *,
+    label: str,
+) -> list[dict[str, Any]]:
+    events = []
+    for match in pattern.finditer(text):
+        try:
+            payload = json.loads(match.group("payload"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"ComfyUI emitted malformed {label} evidence") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"ComfyUI emitted invalid {label} evidence")
+        events.append(payload)
+    return events
+
+
+def ultrashape_resolved_settings_events(text: str) -> list[dict[str, Any]]:
+    return _settings_events(
+        text,
+        ULTRASHAPE_SETTINGS_EVENT,
+        label="UltraShape resolved-settings",
+    )
+
+
+def ultrashape_worker_settings_events(text: str) -> list[dict[str, Any]]:
+    return _settings_events(
+        text,
+        ULTRASHAPE_WORKER_SETTINGS_EVENT,
+        label="UltraShape worker-settings",
+    )
 
 
 def source_node_for(spec: CaseSpec) -> str:
@@ -1079,14 +1289,26 @@ def benchmark_from(
     glb: dict[str, Any],
     log_text: str,
     *,
-    requested_resolution: int | None = None,
+    observed_resolution: int | None = None,
     texture_size: int | None = None,
+    require_geometry_metrics: bool = False,
 ) -> dict[str, Any] | None:
     if not spec.benchmark:
         return None
     if runtime <= 0 or peak_vram <= 0 or int(glb.get("bytes", 0)) <= 0 or int(glb.get("faces", 0)) <= 0:
         raise RuntimeError(
             "Benchmark metrics are incomplete; runtime, peak VRAM, GLB bytes, and faces must be positive"
+        )
+    geometry_metrics = glb.get("geometryMetrics")
+    geometry_validated = bool(
+        isinstance(geometry_metrics, dict)
+        and geometry_metrics.get("schema") == GEOMETRY_METRICS_SCHEMA
+        and geometry_metrics.get("nonCollapsed") is True
+        and glb.get("nonCollapsedGeometryValidated") is True
+    )
+    if require_geometry_metrics and not geometry_validated:
+        raise RuntimeError(
+            "Benchmark artifact lacks passing non-collapsed geometry metrics"
         )
     matches = list(SHAPE_METRICS.finditer(log_text))
     if spec.kind == "trellis":
@@ -1100,7 +1322,11 @@ def benchmark_from(
                 f"TRELLIS requested {spec.actual_resolution} but actually ran {actual_resolution}; silent downgrade rejected"
             )
     else:
-        actual_resolution = requested_resolution or spec.actual_resolution
+        if not observed_resolution:
+            raise RuntimeError(
+                f"{spec.name} lacks machine-observed UltraShape decode resolution"
+            )
+        actual_resolution = int(observed_resolution)
         tokens = None
         if actual_resolution != spec.actual_resolution:
             raise RuntimeError(
@@ -1114,6 +1340,8 @@ def benchmark_from(
         "glbBytes": glb["bytes"],
         "faces": glb["faces"],
         "glbValidated": True,
+        "nonCollapsedGeometryValidated": geometry_validated,
+        "geometryMetrics": geometry_metrics if geometry_validated else None,
     }
     if spec.kind == "trellis":
         benchmark.update(tokens=tokens, textureSize=texture_size or spec.texture_size)
@@ -1130,6 +1358,11 @@ def run_prompt_once(
     cache_mode: str | None = None,
 ) -> dict[str, Any]:
     api = ApiClient(args.base_url)
+    # CLI namespaces set this true. Omitting it is the explicit compatibility
+    # path for older structural-only unit fixtures that contain planar GLBs.
+    require_geometry_evidence = bool(
+        getattr(args, "require_geometry_evidence", False)
+    )
     effective_cache_mode = cache_mode or args.cache_mode
     prompt = build_prompt(
         spec,
@@ -1171,6 +1404,55 @@ def run_prompt_once(
         log_offset,
         require_shape_marker=spec.kind == "trellis",
     )
+    stage_geometry_metrics = geometry_quality_events(log_text)
+    resolved_ultrashape_events = ultrashape_resolved_settings_events(log_text)
+    worker_ultrashape_events = ultrashape_worker_settings_events(log_text)
+    resolved_ultrashape_settings = (
+        resolved_ultrashape_events[-1] if resolved_ultrashape_events else None
+    )
+    worker_ultrashape_settings = (
+        worker_ultrashape_events[-1] if worker_ultrashape_events else None
+    )
+    if (
+        require_geometry_evidence
+        and spec.kind in {"trellis", "cache"}
+        and effective_cache_mode != "Use cache"
+    ):
+        required_stages = {
+            "TRELLIS raw shape",
+            "TRELLIS processed mesh",
+            "TRELLIS rasterized mesh",
+        }
+        observed_stages = {
+            str(metrics.get("stage")) for metrics in stage_geometry_metrics
+        }
+        missing_stages = sorted(required_stages - observed_stages)
+        if missing_stages:
+            raise RuntimeError(
+                "TRELLIS live run lacked stage geometry evidence: "
+                + ", ".join(missing_stages)
+            )
+    if require_geometry_evidence and spec.kind in {"ultrashape", "full"}:
+        if not isinstance(resolved_ultrashape_settings, dict):
+            raise RuntimeError("UltraShape live run lacked resolved preset evidence")
+        if not isinstance(worker_ultrashape_settings, dict):
+            raise RuntimeError("UltraShape live run lacked worker settings evidence")
+        expected_resolution = int(spec.actual_resolution or 0)
+        for label, settings in (
+            ("resolved preset", resolved_ultrashape_settings),
+            ("worker", worker_ultrashape_settings),
+        ):
+            observed_resolution = int(settings.get("octree_resolution", 0))
+            if observed_resolution != expected_resolution:
+                raise RuntimeError(
+                    f"UltraShape {label} used octree resolution {observed_resolution}; "
+                    f"expected {expected_resolution}"
+                )
+        for field in ("steps", "num_latents", "octree_resolution", "decode_chunk_size", "seed"):
+            if resolved_ultrashape_settings.get(field) != worker_ultrashape_settings.get(field):
+                raise RuntimeError(
+                    f"UltraShape resolved and worker settings disagree for {field}"
+                )
     files = changed_glbs(before, output_root)
     if not files:
         raise RuntimeError("ComfyUI completed but produced no new or changed GLB")
@@ -1192,13 +1474,23 @@ def run_prompt_once(
         final_preview_paths = preview_event_paths(final_event, output_root)
         if any(path not in changed for path in [*early_paths, *final_preview_paths]):
             raise RuntimeError("A recorded preview did not point to a GLB from this prompt")
-        early_artifacts = [classify_glb(path) for path in early_paths]
+        early_artifacts = [
+            classify_glb(
+                path,
+                require_noncollapsed=require_geometry_evidence,
+            )
+            for path in early_paths
+        ]
         if not early_artifacts or any(
             item["artifactKind"] != "geometry" for item in early_artifacts
         ):
             raise RuntimeError("The recorded early preview was not a geometry-only GLB")
         final_previews = [
-            inspect_glb(path, require_textured=True)
+            inspect_glb(
+                path,
+                require_textured=True,
+                require_noncollapsed=require_geometry_evidence,
+            )
             for path in final_preview_paths
         ]
         if not final_previews:
@@ -1208,11 +1500,24 @@ def run_prompt_once(
             raise RuntimeError("SaveGLB node 91 did not report an output artifact")
         if any(path not in changed for path in saved_paths):
             raise RuntimeError("SaveGLB node 91 reported an artifact outside this prompt")
-        saved = [inspect_glb(path, require_textured=True) for path in saved_paths]
+        saved = [
+            inspect_glb(
+                path,
+                require_textured=True,
+                require_noncollapsed=require_geometry_evidence,
+            )
+            for path in saved_paths
+        ]
         current_paths = dict.fromkeys(
             [*early_paths, *final_preview_paths, *saved_paths]
         )
-        validated = [classify_glb(path) for path in current_paths]
+        validated = [
+            classify_glb(
+                path,
+                require_noncollapsed=require_geometry_evidence,
+            )
+            for path in current_paths
+        ]
         stage_proof["checks"].update(
             earlyGeometryArtifactValidated=True,
             finalTexturedArtifactValidated=True,
@@ -1227,7 +1532,11 @@ def run_prompt_once(
         primary = max(saved, key=lambda item: item["bytes"])
     else:
         validated = [
-            inspect_glb(path, require_textured=spec.require_textured)
+            inspect_glb(
+                path,
+                require_textured=spec.require_textured,
+                require_noncollapsed=require_geometry_evidence,
+            )
             for path in files
         ]
         primary = max(validated, key=lambda item: item["bytes"])
@@ -1240,6 +1549,9 @@ def run_prompt_once(
         "previewSaveProof": proof,
         "glb": primary,
         "resultFiles": validated,
+        "stageGeometryMetrics": stage_geometry_metrics,
+        "resolvedUltraShapeSettings": resolved_ultrashape_settings,
+        "workerUltraShapeSettings": worker_ultrashape_settings,
         "logExcerpt": compact_log_evidence(log_text),
     }
 
@@ -1255,6 +1567,7 @@ def run_cache_case(
         raise RuntimeError("Unchanged cache rerun emitted shape inference metrics; inference was not skipped")
     return {
         **second,
+        "stageGeometryMetrics": first.get("stageGeometryMetrics", []),
         "cacheProof": {
             "firstPromptId": first["promptId"],
             "secondPromptId": second["promptId"],
@@ -1263,6 +1576,7 @@ def run_cache_case(
             "secondRuntimeSeconds": second["runtimeSeconds"],
             "noModelInference": True,
             "freshFiveStageProof": first["previewSaveProof"].get("fiveStageProof"),
+            "freshStageGeometryMetrics": first.get("stageGeometryMetrics", []),
         },
     }
 
@@ -1328,7 +1642,10 @@ def run_strict_1536_default_case(
     files = changed_glbs(before, output_root)
     if not files:
         raise RuntimeError("Successful strict 1536 run produced no GLB")
-    validated = [inspect_glb(path, require_textured=True) for path in files]
+    validated = [
+        inspect_glb(path, require_textured=True, require_noncollapsed=True)
+        for path in files
+    ]
     marker = markers[-1] if markers else None
     if not marker or marker["resolution"] != 1536:
         raise RuntimeError("Successful strict 1536 run did not emit a genuine 1536 shape marker")
@@ -1508,6 +1825,35 @@ def run_cancellation_case(
     }
 
 
+GEOMETRY_OUTPUT_KINDS = {
+    "trellis",
+    "cache",
+    "strict1536",
+    "ultrashape",
+    "full",
+    "advanced",
+}
+
+
+def record_has_noncollapsed_geometry(record: dict[str, Any]) -> bool:
+    """Return whether a successful geometry-producing case carries semantic proof."""
+
+    if record.get("kind") not in GEOMETRY_OUTPUT_KINDS:
+        return True
+    strict_outcome = (record.get("strictDefaultCapProof") or {}).get("outcome")
+    if record.get("kind") == "strict1536" and strict_outcome == "actionable-error":
+        return True
+    glb = record.get("glb")
+    metrics = glb.get("geometryMetrics") if isinstance(glb, dict) else None
+    return bool(
+        isinstance(glb, dict)
+        and glb.get("nonCollapsedGeometryValidated") is True
+        and isinstance(metrics, dict)
+        and metrics.get("schema") == GEOMETRY_METRICS_SCHEMA
+        and metrics.get("nonCollapsed") is True
+    )
+
+
 def execute_case(args: argparse.Namespace) -> int:
     spec = CASES[args.case]
     state_dir = Path(args.state_dir).resolve()
@@ -1533,6 +1879,14 @@ def execute_case(args: argparse.Namespace) -> int:
             result = run_cancellation_case(spec, args, run["runId"], image_name, recorder)
         else:
             result = run_prompt_once(spec, args, run["runId"], image_name, recorder)
+        candidate_record = {"kind": spec.kind, **result}
+        require_geometry_evidence = bool(
+            getattr(args, "require_geometry_evidence", False)
+        )
+        if require_geometry_evidence and not record_has_noncollapsed_geometry(candidate_record):
+            raise RuntimeError(
+                f"{spec.name} completed without passing non-collapsed geometry evidence"
+            )
         benchmark = None
         if spec.benchmark:
             benchmark = benchmark_from(
@@ -1541,8 +1895,13 @@ def execute_case(args: argparse.Namespace) -> int:
                 int(result["peakVramBytes"]),
                 result["glb"],
                 result.get("logExcerpt", ""),
-                requested_resolution=args.octree_resolution or spec.octree_resolution,
+                observed_resolution=(
+                    (result.get("workerUltraShapeSettings") or {}).get(
+                        "octree_resolution"
+                    )
+                ),
                 texture_size=args.texture_size or spec.texture_size,
+                require_geometry_metrics=require_geometry_evidence,
             )
         record = {
             "schema": CASE_SCHEMA,
@@ -1599,7 +1958,7 @@ def launch_case(args: argparse.Namespace) -> int:
     if current.get("status") in {"launching", "running"} and pid_is_running(current.get("pid")):
         raise RuntimeError(f"Case {args.case} is already running as PID {current['pid']}")
     argv = [sys.executable, str(Path(__file__).resolve()), "run"]
-    excluded = {"command", "func"}
+    excluded = {"command", "func", "require_geometry_evidence"}
     for name, value in vars(args).items():
         if name in excluded or value is None or value is False:
             continue
@@ -1675,9 +2034,14 @@ def merge_command(args: argparse.Namespace) -> int:
         raise RuntimeError(f"Validation template has the wrong schema: {template_path}")
     run = read_json(state_dir / "run.json", {})
     passed: dict[str, dict[str, Any]] = {}
+    # Parser-created CLI namespaces always enable semantic evidence. Direct
+    # callers that omit this field retain the legacy structural-fixture path.
+    require_geometry_evidence = bool(getattr(args, "require_geometry_evidence", False))
     for name in CASES:
         record = read_json(state_dir / "cases" / name / "record.json")
         if isinstance(record, dict) and record.get("status") == "passed" and record.get("runId") == run.get("runId"):
+            if require_geometry_evidence and not record_has_noncollapsed_geometry(record):
+                continue
             passed[name] = record
             gate = record.get("gate")
             if gate in template.get("gates", {}):
@@ -1708,7 +2072,12 @@ def merge_command(args: argparse.Namespace) -> int:
         for gate in template.get("gates", {}).values()
     )
     benchmarks_passed = all(
-        isinstance(value, dict) and value.get("status") == "passed" and value.get("glbValidated") is True
+        isinstance(value, dict)
+        and value.get("status") == "passed"
+        and value.get("glbValidated") is True
+        and value.get("nonCollapsedGeometryValidated") is True
+        and isinstance(value.get("geometryMetrics"), dict)
+        and value["geometryMetrics"].get("nonCollapsed") is True
         for value in template.get("benchmarks", {}).values()
     )
     template["runId"] = run.get("runId")
@@ -1720,6 +2089,7 @@ def merge_command(args: argparse.Namespace) -> int:
 
 
 def add_run_options(parser: argparse.ArgumentParser) -> None:
+    parser.set_defaults(require_geometry_evidence=True)
     parser.add_argument("--case", choices=sorted(CASES), required=True)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -1769,7 +2139,7 @@ def parser() -> argparse.ArgumentParser:
     merge.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     merge.add_argument("--template", type=Path, default=Path("docs/3d-validation.json"))
     merge.add_argument("--output", type=Path, default=Path("docs/3d-validation.json"))
-    merge.set_defaults(func=merge_command)
+    merge.set_defaults(func=merge_command, require_geometry_evidence=True)
     listing = commands.add_parser("list-cases", help="List independently runnable validation cases.")
     listing.set_defaults(func=lambda _args: print("\n".join(sorted(CASES))) or 0)
     return root

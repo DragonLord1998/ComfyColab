@@ -21,6 +21,18 @@ text and progress while its hidden expansion runs. If its output is connected
 to Preview 3D, the same viewer receives a neutral untextured mesh after the
 shape-processing stage, then the final textured GLB when the full graph ends.
 Use the facade's expand control when individual upstream nodes need inspection.
+The expansion applies the pinned upstream remesh settings and inserts
+development-only semantic gates at the raw, processed, and final geometry
+boundaries. These gates use intrinsic PCA rank, not a single axis thickness,
+so rotated planes are rejected while genuinely rank-3 thin meshes remain
+valid. Current result-cache keys are schema-versioned and cached GLBs are
+revalidated before reuse.
+
+UltraShape keeps `Fast` at 512 and adds `Conservative` as the public 24-step,
+512 default. `Detailed` and `Ultra` retain experimental 1024 behavior for
+saved-workflow compatibility. Its worker rejects planar input
+before provisioning models and translates an empty adaptive decode into the
+actionable `NoDecodableSurface` domain error without retaining partial output.
 The live validation runner listens for the facade's native text/progress events
 and requires all five transitions, an early geometry-preview event, the final
 preview event, and an explicitly reported textured SaveGLB artifact. This is a

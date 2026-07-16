@@ -76,7 +76,7 @@
         {"name": "refined_model_3d", "type": "FILE_3D_GLB", "links": [4, 5]}
       ],
       "properties": {"Node name for S&R": "ComfyColabUltraShapeRefine"},
-      "widgets_values": ["Detailed", 0, true, 0, 0, 0, 0, 0, 0, "Auto", "Use cache"]
+      "widgets_values": ["Conservative", 0, true, 0, 0, 0, 0, 0, 0, "Auto", "Use cache"]
     },
     {
       "id": 4,

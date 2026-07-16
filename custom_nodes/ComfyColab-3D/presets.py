@@ -38,9 +38,12 @@ TRELLIS_PRESETS = {
 
 ULTRASHAPE_PRESETS = {
     "Fast": UltraShapeSettings(12, 8192, 2048, 512),
+    "Conservative": UltraShapeSettings(24, 16_384, 4096, 512),
     "Detailed": UltraShapeSettings(24, 16_384, 4096, 1024),
     "Ultra": UltraShapeSettings(50, 32_768, 4096, 1024),
 }
+
+ULTRASHAPE_EXPERIMENTAL_PRESETS = frozenset({"Detailed", "Ultra"})
 
 
 def resolve_trellis_settings(

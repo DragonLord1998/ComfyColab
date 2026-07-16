@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +30,17 @@ def load_transforms():
 def load_seeds():
     spec = importlib.util.spec_from_file_location("comfycolab_seed_contract", SEEDS)
     module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_worker():
+    module_name = "comfycolab_ultrashape_worker_test"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, WORKER)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
@@ -164,6 +180,57 @@ class UltraShapeWorkerCliTests(unittest.TestCase):
             self.assertIn('"status": "error"', result.stdout)
             for path in (output, partial_output, metadata, partial_metadata):
                 self.assertFalse(path.exists(), path)
+
+    def test_worker_preflight_rejects_planar_mesh(self) -> None:
+        worker = load_worker()
+        planar = SimpleNamespace(
+            vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            faces=[(0, 1, 2)],
+        )
+        with self.assertRaisesRegex(ValueError, "UltraShape input mesh.*PCA rank=2"):
+            worker._validate_volumetric_mesh(planar, stage="UltraShape input mesh")
+
+    def test_worker_emits_structured_empty_surface_error(self) -> None:
+        worker = load_worker()
+
+        class NoDecodableSurface(RuntimeError):
+            requested_resolution = 1024
+            octree_depth = 1008
+            preceding_active_points = 17
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = [
+                "--source-dir", str(root / "source"),
+                "--checkpoint", str(root / "checkpoint"),
+                "--dinov2-dir", str(root / "dino"),
+                "--input-mesh", str(root / "input.glb"),
+                "--reference-image", str(root / "image.png"),
+                "--output-mesh", str(root / "output.glb"),
+                "--metadata-output", str(root / "transform.json"),
+                "--steps", "24",
+                "--num-latents", "16384",
+                "--octree-resolution", "1024",
+                "--decode-chunk-size", "4096",
+                "--seed", "9",
+            ]
+            output = io.StringIO()
+            error_output = io.StringIO()
+            with mock.patch.object(
+                worker, "run", side_effect=NoDecodableSurface("empty")
+            ), contextlib.redirect_stdout(output), contextlib.redirect_stderr(error_output):
+                return_code = worker.main(arguments)
+        self.assertEqual(return_code, 1)
+        result_line = next(
+            line for line in output.getvalue().splitlines()
+            if line.startswith(worker.RESULT_PREFIX)
+        )
+        payload = json.loads(result_line.removeprefix(worker.RESULT_PREFIX))
+        self.assertEqual(payload["error_code"], "no_decodable_surface")
+        self.assertEqual(payload["octree_resolution"], 1024)
+        self.assertEqual(payload["octree_depth"], 1008)
+        self.assertEqual(payload["preceding_active_points"], 17)
+        self.assertEqual(payload["seed"], 9)
 
 
 if __name__ == "__main__":

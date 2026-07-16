@@ -25,7 +25,7 @@
   "patches": {
     "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
     "trellisCategory": "trellis2-advanced-categories-v1",
-    "ultrashape": "ultrashape-inference-compat-v2"
+    "ultrashape": "ultrashape-inference-compat-v3"
   },
   "liveValidation": null,
   "validation": {

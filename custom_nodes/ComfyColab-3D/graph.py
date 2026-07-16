@@ -14,6 +14,15 @@ TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 
 
+def _upstream_remesh_inputs() -> dict[str, Any]:
+    """Pinned TRELLIS workflow parity for generated shape post-processing."""
+    return {
+        "remesh": "on",
+        "remesh.remesh_band": 1.0,
+        "remesh.remove_inner_faces": True,
+    }
+
+
 def _builder():
     return importlib.import_module("comfy_execution.graph_utils").GraphBuilder()
 
@@ -121,21 +130,28 @@ def build_trellis_graph(
         total=5,
         status="Stage 3/5 - Building geometry preview...",
     )
+    raw_mesh = graph.node(
+        "ComfyColab3DValidateMesh",
+        trimesh=preview_mesh,
+        stage="TRELLIS raw shape",
+        analysis_mode="raw",
+    )
     processed = graph.node(
         "Trellis2ProcessMesh",
-        trimesh=preview_mesh,
+        trimesh=raw_mesh.out(0),
         target_face_count=settings.target_face_count,
         floater_threshold=0.001,
         weld_vertices=True,
-        **{
-            "remesh": "off",
-            "remesh.fill_holes": True,
-            "remesh.fill_holes_perimeter": 0.03,
-        },
+        **_upstream_remesh_inputs(),
+    )
+    processed_mesh = graph.node(
+        "ComfyColab3DValidateMesh",
+        trimesh=processed.out(0),
+        stage="TRELLIS processed mesh",
     )
     early_file = None
     if preview_target:
-        early_file = graph.node("ComfyColab3DNeutralMeshToFile3D", trimesh=processed.out(0))
+        early_file = graph.node("ComfyColab3DNeutralMeshToFile3D", trimesh=processed_mesh.out(0))
     if early_file is not None:
         _early_preview(graph, early_file.out(0), preview_target)
     texture_shape = _progress_checkpoint(
@@ -145,7 +161,7 @@ def build_trellis_graph(
         completed=3,
         total=5,
         status="Stage 4/5 - Geometry preview ready; generating texture...",
-        wait_for=early_file.out(0) if early_file is not None else processed.out(0),
+        wait_for=early_file.out(0) if early_file is not None else processed_mesh.out(0),
     )
     texture = graph.node(
         "Trellis2ShapeToTexturedMesh",
@@ -166,10 +182,15 @@ def build_trellis_graph(
     )
     rasterized = graph.node(
         "Trellis2RasterizePBR",
-        trimesh=processed.out(0),
+        trimesh=processed_mesh.out(0),
         voxelgrid=texture_voxelgrid,
         texture_size=settings.texture_size,
-        original_mesh=shape.out(0),
+        original_mesh=raw_mesh.out(0),
+    )
+    final_mesh = graph.node(
+        "ComfyColab3DValidateMesh",
+        trimesh=rasterized.out(0),
+        stage="TRELLIS rasterized mesh",
     )
     key = cache_key or trellis_cache_key(
         image,
@@ -183,7 +204,7 @@ def build_trellis_graph(
     )
     file_node = graph.node(
         "ComfyColab3DTrimeshToFile3D",
-        trimesh=rasterized.out(0),
+        trimesh=final_mesh.out(0),
         cache_stage="trellis",
         cache_key=key,
         cache_mode=cache_mode,

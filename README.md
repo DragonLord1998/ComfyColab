@@ -193,6 +193,12 @@ shape exists. The final textured model replaces it after PBR baking completes.
 The early preview is not a continuously updating mesh; it is the first valid
 geometry checkpoint.
 
+Generated geometry is checked after raw shape decoding, after the pinned
+upstream-parity remesh pass, and again after GLB export. A structurally valid
+but planar/collapsed mesh now stops with its stage, PCA rank, and singular-value
+ratio instead of reporting `Complete` or entering the result cache. GLB export
+also applies the upstream Z-up-to-Y-up and texture-V conversion together.
+
 When strict 1536 needs more than `max_tokens`, the node stops with the required
 token count. Raise the cap if the runtime has room, or manually choose 1024;
 ComfyColab does not rerun at 1408, 1280, 1152, or 1024 behind your back.
@@ -204,7 +210,11 @@ value, except `max_tokens`, whose visible default is `49152`.
 ### UltraShape — Refine Geometry
 
 Connect a native GLB from TRELLIS (or another File3D-producing node), connect
-the original reference image, and choose `Fast`, `Detailed`, or `Ultra`.
+the original reference image, and choose `Fast`, `Conservative`, `Detailed`,
+or `Ultra`. `Fast` keeps its existing quick 512 settings. The public
+`Conservative` default uses 24 steps at 512. `Detailed` and `Ultra` preserve
+their existing 1024 behavior and are explicitly experimental; the required
+live 512 and 1024 release runs remain pending.
 UltraShape runs in its own process group but deliberately reuses the cached
 `trellis2-nodes` Python/CUDA environment. Cancellation terminates that process
 group and removes incomplete outputs.
@@ -226,8 +236,15 @@ input GLB's orientation, position, and scale. With `retexture=false`, the node
 returns restored geometry with a neutral material and records it as
 geometry-only in its sidecar.
 
-`Detailed` and `Ultra` use provisional 1024 octree presets. Their release gate
-is two successful full G4 runs without OOM; current evidence is tracked in
+Planar input is rejected before model provisioning or worker launch. If the
+adaptive decoder finds no candidate surface points, the worker returns a
+`NoDecodableSurface` error with the requested resolution, decode-stage
+resolution, preceding active-point count, and seed; it does not continue with
+an empty grid or leave a partial/cache artifact.
+
+`Conservative` is the public 512 octree preset. `Detailed` and `Ultra` retain
+provisional 1024 behavior for saved-workflow compatibility; their release gate
+is two successful full G4 runs without OOM. Current evidence is tracked in
 [`docs/3d-validation.md`](docs/3d-validation.md). Hostile local scenarios and
 failure-cleanup evidence are tracked separately in
 [`docs/3d-ultraqa.md`](docs/3d-ultraqa.md).
@@ -243,10 +260,16 @@ Pipeline results are stored under:
   texture/<key>/model.glb
 ```
 
-`Use cache` reuses validated artifacts, `Refresh this node` recomputes all
+`Use cache` reuses structurally and volumetrically validated artifacts,
+`Refresh this node` recomputes all
 stages owned by that facade, and `Disable cache` performs no result-cache reads
 or writes. Final GLBs are published under `/content/ComfyUI/output/3d` for the
 normal ComfyUI preview/download path.
+
+The geometry/export repair uses new TRELLIS, UltraShape, and texture result
+schema versions in every key/record. Pre-fix cache entries therefore cannot be
+returned; a planar entry encountered under a current key is deleted and
+regenerated.
 
 ## Advanced TRELLIS.2 nodes
 

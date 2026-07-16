@@ -77,6 +77,18 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("trimesh.sample.sample_surface(mesh, num, seed=rng)", rendered)
         self.assertIn("normalize_scale=normalize_scale, rng=rng", rendered)
         self.assertNotIn("np.random.rand", rendered)
+        decoder = next(
+            item for item in ultrashape["files"]
+            if item["path"] == "ultrashape/models/autoencoders/volume_decoders.py"
+        )
+        decoder_patch = "\n".join(
+            line
+            for replacement in decoder["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn("class NoDecodableSurface", decoder_patch)
+        self.assertIn("if next_points.numel() == 0", decoder_patch)
+        self.assertIn("requested_resolution=requested_octree_resolution", decoder_patch)
 
     def test_trellis_category_patch_changes_categories_only(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -39,26 +39,38 @@ def write_glb(
     *,
     material: bool = True,
     textured: bool = False,
-    uv_count: int = 3,
-    uv_values=(0, 0, 1, 0, 0, 1),
+    uv_count: int | None = None,
+    uv_values=None,
     empty_primitives: bool = False,
     invalid_image_view: bool = False,
+    volumetric: bool = False,
 ):
-    positions = struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
-    indices = struct.pack("<3H", 0, 1, 2) + b"\x00\x00"
+    if volumetric:
+        position_values = (0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+        index_values = (0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3)
+    else:
+        position_values = (0, 0, 0, 1, 0, 0, 0, 1, 0)
+        index_values = (0, 1, 2)
+    positions = struct.pack(f"<{len(position_values)}f", *position_values)
+    raw_indices = struct.pack(f"<{len(index_values)}H", *index_values)
+    indices = raw_indices + b"\x00" * ((4 - len(raw_indices) % 4) % 4)
     binary = positions + indices
     buffer_views = [
         {"buffer": 0, "byteOffset": 0, "byteLength": len(positions)},
-        {"buffer": 0, "byteOffset": len(positions), "byteLength": 6},
+        {"buffer": 0, "byteOffset": len(positions), "byteLength": len(raw_indices)},
     ]
     accessors = [
-        {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
-        {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"},
+        {"bufferView": 0, "componentType": 5126, "count": len(position_values) // 3, "type": "VEC3"},
+        {"bufferView": 1, "componentType": 5123, "count": len(index_values), "type": "SCALAR"},
     ]
     attributes = {"POSITION": 0}
     primitive = {"attributes": attributes, "indices": 1}
     if textured:
-        uvs = struct.pack("<6f", *uv_values)
+        if uv_values is None:
+            uv_values = (0, 0, 1, 0, 0, 1, 1, 1) if volumetric else (0, 0, 1, 0, 0, 1)
+        if uv_count is None:
+            uv_count = len(position_values) // 3
+        uvs = struct.pack(f"<{len(uv_values)}f", *uv_values)
         uv_offset = len(binary)
         binary += uvs
         buffer_views.append({"buffer": 0, "byteOffset": uv_offset, "byteLength": len(uvs)})
@@ -268,6 +280,7 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(trellis_inputs["seed"]["max"], (2**31) - 1)
         ultra_inputs = {item["name"]: item for item in ultra.inputs}
         self.assertEqual(ultra_inputs["seed"]["max"], (2**31) - 1)
+        self.assertEqual(ultra_inputs["detail"]["default"], "Conservative")
         encoded_schema = next(schema for schema in schemas if schema.node_id == "ComfyColab3DEncodedMeshToTrimesh")
         self.assertEqual(encoded_schema.inputs[0]["io_type"], "TRELLIS2_SHAPE_LATENT")
 
@@ -283,20 +296,33 @@ class ThreeDNodePackTests(unittest.TestCase):
             "Trellis2RemoveBackground",
             "Trellis2GetConditioning",
             "Trellis2ImageToShape",
+            "ComfyColab3DValidateMesh",
             "Trellis2ProcessMesh",
+            "ComfyColab3DValidateMesh",
             "Trellis2ShapeToTexturedMesh",
             "Trellis2RasterizePBR",
+            "ComfyColab3DValidateMesh",
             "ComfyColab3DTrimeshToFile3D",
         ])
         self.assertNotIn("Trellis2ExportGLB", node_ids)
         shape = result.expand[3]["inputs"]
         self.assertEqual(shape["ss_sampling_steps"], 12)
         self.assertEqual(shape["shape_sampling_steps"], 12)
-        processed = result.expand[4]["inputs"]
-        self.assertEqual(processed["remesh"], "off")
-        self.assertIs(processed["remesh.fill_holes"], True)
-        self.assertEqual(processed["remesh.fill_holes_perimeter"], 0.03)
+        processed = result.expand[5]["inputs"]
+        self.assertEqual(processed["remesh"], "on")
+        self.assertEqual(processed["remesh.remesh_band"], 1.0)
+        self.assertIs(processed["remesh.remove_inner_faces"], True)
         self.assertNotIsInstance(processed["remesh"], dict)
+
+    def test_mesh_gate_rejects_planar_stage_before_downstream_nodes(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        planar = types.SimpleNamespace(
+            vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            faces=[(0, 1, 2)],
+        )
+        with self.assertRaisesRegex(ValueError, "TRELLIS raw shape.*PCA rank=2"):
+            nodes.ComfyColab3DValidateMesh.execute(planar, "TRELLIS raw shape")
 
     def test_trellis_facade_reports_stages_and_previews_shape_before_texturing(self):
         package = load_package()
@@ -508,6 +534,19 @@ class ThreeDNodePackTests(unittest.TestCase):
         normalized = transforms.apply_normalization(asymmetric, transform)
         extent = max(max(row[axis] for row in normalized) - min(row[axis] for row in normalized) for axis in range(3))
         self.assertAlmostEqual(extent, 0.99999, places=7)
+
+        fast = presets.resolve_ultrashape_settings("Fast")
+        conservative = presets.resolve_ultrashape_settings("Conservative")
+        detailed = presets.resolve_ultrashape_settings("Detailed")
+        ultra = presets.resolve_ultrashape_settings("Ultra")
+        self.assertEqual(fast.octree_resolution, 512)
+        self.assertEqual(conservative.octree_resolution, 512)
+        self.assertEqual(detailed.octree_resolution, 1024)
+        self.assertEqual(ultra.octree_resolution, 1024)
+        self.assertEqual(
+            presets.ULTRASHAPE_EXPERIMENTAL_PRESETS,
+            {"Detailed", "Ultra"},
+        )
         inverted = transforms.invert_normalization(normalized, transform)
         for expected, actual in zip(asymmetric, inverted):
             for expected_value, actual_value in zip(expected, actual):
@@ -541,6 +580,99 @@ class ThreeDNodePackTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"complete")
             self.assertEqual(list(target.parent.glob("*.partial")), [])
 
+    def test_cache_schema_versions_change_result_keys(self):
+        load_package()
+        cache = importlib.import_module("comfycolab_3d_test.cache")
+        settings = types.SimpleNamespace(
+            resolution="512", sampling_steps=10, target_face_count=200_000,
+            texture_size=1024, max_tokens=49_152,
+        )
+        inputs = dict(
+            settings=settings, seed=0, remove_background="Auto",
+            comfyui_ref="comfy", trellis_ref="trellis",
+            trellis_patch_id="patch", birefnet_ref="birefnet",
+        )
+        current = cache.trellis_cache_key("image", **inputs)
+        legacy = cache.trellis_cache_key(
+            "image", **inputs, result_schema="comfycolab-trellis-result-v1"
+        )
+        self.assertNotEqual(current, legacy)
+        self.assertEqual(cache.TRELLIS_RESULT_SCHEMA, "comfycolab-trellis-result-v2")
+        self.assertEqual(
+            cache.ULTRASHAPE_GEOMETRY_SCHEMA,
+            "comfycolab-ultrashape-geometry-v2",
+        )
+
+    def test_planar_cached_result_is_invalidated(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "planar.glb"
+            write_glb(path, textured=True)
+            self.assertFalse(nodes._valid_cached_glb(path, require_textured=True))
+            self.assertFalse(path.exists())
+
+    def test_scene_transform_is_baked_before_volumetric_validation(self):
+        load_package()
+        file3d = importlib.import_module("comfycolab_3d_test.file3d")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            flattened = root / "flattened.glb"
+            write_glb(flattened, volumetric=True)
+            rewrite_glb_document(
+                flattened,
+                lambda document: document.update(
+                    nodes=[{"mesh": 0, "scale": [1.0, 1.0, 0.0]}],
+                    scenes=[{"nodes": [0]}],
+                    scene=0,
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "numerically collapsed"):
+                file3d.validate_volumetric_glb(flattened, stage="flattened scene")
+
+            assembly = root / "assembly.glb"
+            write_glb(assembly)
+            rewrite_glb_document(
+                assembly,
+                lambda document: document.update(
+                    nodes=[
+                        {"mesh": 0},
+                        {"mesh": 0, "translation": [0.0, 0.0, 1.0]},
+                    ],
+                    scenes=[{"nodes": [0, 1]}],
+                    scene=0,
+                ),
+            )
+            metrics = file3d.validate_volumetric_glb(assembly, stage="scene assembly")
+            self.assertEqual(metrics.numerical_rank, 3)
+
+    def test_malformed_glb_schema_becomes_cache_miss_instead_of_attribute_error(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        worker = importlib.import_module("comfycolab_3d_test.worker")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trellis_path = root / "trellis.glb"
+            write_glb(trellis_path, textured=True, volumetric=True)
+            rewrite_glb_document(
+                trellis_path,
+                lambda document: document["meshes"][0].update(primitives=["bad"]),
+            )
+            self.assertFalse(nodes._valid_cached_glb(trellis_path, require_textured=True))
+            self.assertFalse(trellis_path.exists())
+
+            key = "c" * 64
+            cache_dir = root / key
+            cache_dir.mkdir()
+            write_glb(cache_dir / "geometry.glb", volumetric=True)
+            write_transform_metadata(cache_dir / "transform.json")
+            worker.write_geometry_cache_record(cache_dir, key)
+            rewrite_glb_document(
+                cache_dir / "geometry.glb",
+                lambda document: document["meshes"][0].update(primitives=["bad"]),
+            )
+            self.assertFalse(worker.validate_geometry_cache_record(cache_dir, key))
+
     def test_ultrashape_geometry_cache_record_and_refresh_rollback_are_atomic(self):
         load_package()
         worker = importlib.import_module("comfycolab_3d_test.worker")
@@ -549,7 +681,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             key = "b" * 64
             destination = root / key
             destination.mkdir()
-            write_glb(destination / "geometry.glb")
+            write_glb(destination / "geometry.glb", volumetric=True)
             write_transform_metadata(destination / "transform.json")
             worker.write_geometry_cache_record(destination, key)
             self.assertTrue(worker.validate_geometry_cache_record(destination, key))
@@ -851,6 +983,72 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertTrue(nodes.DEFAULT_ULTRASHAPE_PYTHON.endswith("/.ce/.pixi/envs/trellis2-nodes/bin/python"))
         self.assertEqual(nodes.ULTRASHAPE_SOURCE_REF, "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66")
 
+    def test_export_flips_texture_v_once_without_mutating_input(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+
+        class Column(list):
+            def __rsub__(self, value):
+                return [value - item for item in self]
+
+        class UVArray:
+            def __init__(self, rows):
+                self.rows = [list(row) for row in rows]
+
+            def copy(self):
+                return UVArray(self.rows)
+
+            def __getitem__(self, key):
+                row_selector, column = key
+                self.assert_full_slice(row_selector)
+                return Column(row[column] for row in self.rows)
+
+            def __setitem__(self, key, values):
+                row_selector, column = key
+                self.assert_full_slice(row_selector)
+                for row, value in zip(self.rows, values):
+                    row[column] = value
+
+            @staticmethod
+            def assert_full_slice(value):
+                if not isinstance(value, slice) or value != slice(None):
+                    raise AssertionError("expected a full UV row slice")
+
+        class Mesh:
+            def __init__(self, uv):
+                self.visual = types.SimpleNamespace(uv=uv)
+                self.vertices = [(0, 0, 0), (1, 0, 0), (0, 1, 1)]
+                self.faces = [(0, 1, 2)]
+                self.transforms = []
+
+            def copy(self):
+                return Mesh(self.visual.uv.copy())
+
+            def apply_transform(self, matrix):
+                self.transforms.append(matrix)
+
+        source = Mesh(UVArray([(0.1, 0.25), (0.5, 0.75), (0.9, 0.0)]))
+        fake_numpy = types.SimpleNamespace(array=lambda value: value)
+        real_import = nodes.importlib.import_module
+
+        def import_module(name):
+            return fake_numpy if name == "numpy" else real_import(name)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            nodes.importlib, "import_module", side_effect=import_module
+        ), mock.patch.object(nodes, "validate_volumetric_mesh"), mock.patch.object(
+            nodes, "validate_volumetric_glb"
+        ), mock.patch.object(nodes, "export_trimesh_atomic") as export:
+            nodes._export_z_up_mesh(
+                source,
+                Path(directory) / "mesh.glb",
+                require_textured=True,
+            )
+
+        exported = export.call_args.args[0]
+        self.assertEqual([row[1] for row in source.visual.uv.rows], [0.25, 0.75, 0.0])
+        self.assertEqual([row[1] for row in exported.visual.uv.rows], [0.75, 0.25, 1.0])
+
     def test_temporary_cleanup_cannot_delete_an_arbitrary_parent(self):
         load_package()
         nodes = importlib.import_module("comfycolab_3d_test.nodes")
@@ -892,7 +1090,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             },
         ):
             destination = cache.cache_path(Path(directory) / "cache", "trellis", key)
-            write_glb(destination, textured=True)
+            write_glb(destination, textured=True, volumetric=True)
             with mock.patch.object(
                 nodes, "build_trellis_graph", side_effect=AssertionError("cache hit expanded graph")
             ):
@@ -978,15 +1176,15 @@ class ThreeDNodePackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source.glb"
-            write_glb(source)
+            write_glb(source, volumetric=True)
             geometry_key = cache.ultrashape_geometry_cache_key(
                 "source-geometry",
                 image,
-                detail="Detailed",
+                detail="Conservative",
                 seed=5,
                 steps=24,
                 num_latents=16_384,
-                octree_resolution=1024,
+                octree_resolution=512,
                 decode_chunk_size=4096,
                 low_vram="auto",
                 worker_ref=nodes.ULTRASHAPE_SOURCE_REF,
@@ -995,7 +1193,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 transform_schema=nodes.TRANSFORM_SCHEMA,
             )
             geometry_path = cache.cache_path(root / "cache", "ultrashape", geometry_key, "geometry.glb")
-            write_glb(geometry_path)
+            write_glb(geometry_path, volumetric=True)
             write_transform_metadata(geometry_path.parent / "transform.json")
             worker = importlib.import_module("comfycolab_3d_test.worker")
             worker.write_geometry_cache_record(geometry_path.parent, geometry_key)
@@ -1009,7 +1207,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 trellis_ref="9b878516f2dc2fd873f4f6cceadba403dd12d83e",
             )
             texture_path = cache.cache_path(root / "cache", "texture", texture_key)
-            write_glb(texture_path, textured=True)
+            write_glb(texture_path, textured=True, volumetric=True)
 
             def geometry_digest(path):
                 return "refined-geometry" if Path(path) == geometry_path else "source-geometry"
@@ -1028,7 +1226,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 nodes, "build_ultrashape_graph", side_effect=AssertionError("cache hit expanded graph")
             ):
                 result = nodes.ComfyColabUltraShapeRefine.execute(
-                    source, image, detail="Detailed", seed=5,
+                    source, image, detail="Conservative", seed=5,
                 )
         self.assertEqual(result.values[0][1], "glb")
         self.assertTrue(result.values[0][0].endswith(f"{texture_key}.glb"))
@@ -1047,15 +1245,15 @@ class ThreeDNodePackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source.glb"
-            write_glb(source)
+            write_glb(source, volumetric=True)
             key = cache.ultrashape_geometry_cache_key(
                 "source-geometry",
                 image,
-                detail="Detailed",
+                detail="Conservative",
                 seed=5,
                 steps=24,
                 num_latents=16_384,
-                octree_resolution=1024,
+                octree_resolution=512,
                 decode_chunk_size=4096,
                 low_vram="auto",
                 worker_ref=nodes.ULTRASHAPE_SOURCE_REF,
@@ -1064,7 +1262,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 transform_schema=nodes.TRANSFORM_SCHEMA,
             )
             geometry = cache.cache_path(root / "cache", "ultrashape", key, "geometry.glb")
-            write_glb(geometry)
+            write_glb(geometry, volumetric=True)
             write_transform_metadata(geometry.parent / "transform.json")
             worker.write_geometry_cache_record(geometry.parent, key)
             with mock.patch.dict(
@@ -1079,7 +1277,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 nodes, "build_ultrashape_graph", side_effect=AssertionError("model graph expanded")
             ):
                 result = nodes.ComfyColabUltraShapeRefine.execute(
-                    source, image, detail="Detailed", seed=5, retexture=False
+                    source, image, detail="Conservative", seed=5, retexture=False
                 )
             self.assertIs(result, sentinel)
             cached_graph.assert_called_once_with(str(geometry), target_face_count=500_000)
@@ -1119,19 +1317,27 @@ class ThreeDNodePackTests(unittest.TestCase):
             )
 
             def copy_input(_model, destination):
-                write_glb(Path(destination))
+                write_glb(Path(destination), volumetric=True)
                 return Path(destination)
 
             def run_worker(command, **_kwargs):
                 observed["command"] = command
                 observed["workdir"] = Path(command.input_mesh).parent
                 self.assertTrue(cache_file.exists(), "refresh must preserve the old cache until success")
-                write_glb(Path(command.output_mesh))
+                write_glb(Path(command.output_mesh), volumetric=True)
                 write_transform_metadata(Path(command.metadata_output))
                 return {
                     "status": "ok",
                     "output_mesh": command.output_mesh,
                     "metadata_output": command.metadata_output,
+                    "settings": {
+                        "steps": command.steps,
+                        "num_latents": command.num_latents,
+                        "octree_resolution": command.octree_resolution,
+                        "decode_chunk_size": command.decode_chunk_size,
+                        "seed": command.seed,
+                        "low_vram": command.low_vram,
+                    },
                 }
 
             model_management = types.SimpleNamespace(throw_exception_if_processing_interrupted=lambda: None)
@@ -1163,6 +1369,27 @@ class ThreeDNodePackTests(unittest.TestCase):
             self.assertTrue(observed["command"].python.endswith("/.ce/.pixi/envs/trellis2-nodes/bin/python"))
             self.assertEqual(Path(observed["command"].metadata_output).name, "transform.json")
 
+    def test_ultrashape_worker_rejects_planar_input_before_artifact_loading(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+
+        def copy_planar(_model, destination):
+            write_glb(Path(destination))
+            return Path(destination)
+
+        with mock.patch.object(
+            nodes, "copy_file3d_to", side_effect=copy_planar
+        ), mock.patch.object(
+            nodes,
+            "_load_artifact_provisioner",
+            side_effect=AssertionError("planar input reached artifact loading"),
+        ):
+            with self.assertRaisesRegex(ValueError, "UltraShape worker input GLB.*PCA rank=2"):
+                nodes.ComfyColab3DUltraShapeWorker.execute(
+                    "input.glb", object(), object(), "Detailed", 3, 24,
+                    16_384, 512, 4096, "auto", "Disable cache",
+                )
+
     def test_worker_contract_parses_progress_and_atomically_promotes_output(self):
         load_package()
         worker = importlib.import_module("comfycolab_3d_test.worker")
@@ -1184,7 +1411,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                     self.argv, self.kwargs = argv, kwargs
                     output = Path(argv[argv.index("--output-mesh") + 1])
                     metadata_output = Path(argv[argv.index("--metadata-output") + 1])
-                    write_glb(output)
+                    write_glb(output, volumetric=True)
                     write_transform_metadata(metadata_output)
                     self.stdout = stdio.StringIO(
                         'COMFYCOLAB_PROGRESS={"stage":"decode","current":1,"total":2}\n'
@@ -1244,6 +1471,51 @@ class ThreeDNodePackTests(unittest.TestCase):
             self.assertFalse(metadata.exists())
             self.assertFalse(metadata.with_suffix(".json.partial").exists())
 
+    def test_worker_translates_empty_surface_result_to_domain_error(self):
+        load_package()
+        worker = importlib.import_module("comfycolab_3d_test.worker")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.glb"
+            metadata = Path(directory) / "result.json"
+            command = worker.UltraShapeCommand(
+                python="cached-python", worker_script="worker_main.py", source_dir="source",
+                checkpoint="checkpoint", dinov2_dir="dinov2", input_mesh="input.glb",
+                reference_image="image.png", output_mesh=str(destination),
+                metadata_output=str(metadata), steps=24, num_latents=16384,
+                octree_resolution=1024, decode_chunk_size=4096, seed=9, low_vram="auto",
+            )
+
+            class EmptySurfaceProcess:
+                pid = 99999
+
+                def __init__(self, _argv, **_kwargs):
+                    self.stdout = stdio.StringIO(
+                        'COMFYCOLAB_RESULT={"status":"error",'
+                        '"error_type":"NoDecodableSurface",'
+                        '"error_code":"no_decodable_surface",'
+                        '"octree_resolution":1024,"octree_depth":5,'
+                        '"preceding_active_points":17,"seed":9}\n'
+                    )
+
+                def poll(self):
+                    return 1
+
+                def wait(self, timeout=None):
+                    return 1
+
+            with self.assertRaisesRegex(
+                worker.UltraShapeNoDecodableSurfaceError,
+                "requested_resolution=1024.*decode_stage_resolution=5.*"
+                "preceding_active_points=17.*seed=9.*conservative 512",
+            ):
+                worker.run_ultrashape_worker(
+                    command,
+                    popen_factory=EmptySurfaceProcess,
+                    poll_interval=0.001,
+                )
+            self.assertFalse(destination.exists())
+            self.assertFalse(metadata.exists())
+
     def test_worker_rejects_zero_exit_without_machine_result(self):
         load_package()
         worker = importlib.import_module("comfycolab_3d_test.worker")
@@ -1262,7 +1534,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 pid = 99999
 
                 def __init__(self, argv, **kwargs):
-                    write_glb(Path(argv[argv.index("--output-mesh") + 1]))
+                    write_glb(Path(argv[argv.index("--output-mesh") + 1]), volumetric=True)
                     self.stdout = stdio.StringIO("looks successful but has no result sentinel\n")
 
                 def poll(self):

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -30,6 +31,32 @@ RESULT_PREFIX = "COMFYCOLAB_RESULT="
 ULTRASHAPE_CHECKPOINT_SHA256 = (
     "c96ae010c4169597fd0006dcb08056bf6104a1fca249b10fed7ddded324c3f0f"
 )
+GEOMETRY_QUALITY_PATH = (
+    SCRIPT_DIR.parents[1] / "custom_nodes" / "ComfyColab-3D" / "geometry_quality.py"
+)
+
+
+def _geometry_quality_module():
+    module_name = "comfycolab_ultrashape_geometry_quality"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    specification = importlib.util.spec_from_file_location(module_name, GEOMETRY_QUALITY_PATH)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"Unable to load geometry quality contract: {GEOMETRY_QUALITY_PATH}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[module_name] = module
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _validate_volumetric_mesh(mesh, *, stage: str) -> dict[str, object]:
+    metrics = _geometry_quality_module().validate_volumetric_mesh(mesh, stage=stage)
+    return metrics.to_dict()
 
 
 def emit_progress(stage: str, current: int, total: int, **details: Any) -> None:
@@ -109,11 +136,13 @@ def _validate_output_mesh(path: Path) -> dict[str, object]:
     mesh, _ = _load_flattened_mesh(path)
     if path.stat().st_size < 20:
         raise ValueError("UltraShape output GLB is unexpectedly small.")
+    geometry_quality = _validate_volumetric_mesh(mesh, stage="UltraShape refined output")
     return {
         "bytes": path.stat().st_size,
         "vertices": int(len(mesh.vertices)),
         "faces": int(len(mesh.faces)),
         "bounds": mesh.bounds.tolist(),
+        "geometry_quality": geometry_quality,
     }
 
 
@@ -185,6 +214,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     emit_progress("prepare", 0, 1)
 
     input_mesh, scene_transforms = _load_flattened_mesh(args.input_mesh)
+    input_geometry_quality = _validate_volumetric_mesh(
+        input_mesh,
+        stage="UltraShape input mesh",
+    )
     transform = normalization_from_bounds(
         input_mesh.bounds[0], input_mesh.bounds[1], normalize_scale=args.normalize_scale
     )
@@ -196,7 +229,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         temp_root = Path(directory)
         canonical_input = temp_root / "canonical-input.glb"
         input_mesh.export(str(canonical_input), file_type="glb")
-        emit_progress("prepare", 1, 1, vertices=len(input_mesh.vertices), faces=len(input_mesh.faces))
+        emit_progress(
+            "prepare",
+            1,
+            1,
+            vertices=len(input_mesh.vertices),
+            faces=len(input_mesh.faces),
+            geometry_quality=input_geometry_quality,
+        )
 
         torch, config, pipeline, loader, voxelize_from_point, low_vram = _configure_ultrashape(args)
         from PIL import Image
@@ -278,6 +318,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 "low_vram": low_vram,
             },
             "validation": validation,
+            "input_geometry_quality": input_geometry_quality,
             "peak_vram_bytes": peak_vram,
             "runtime_seconds": time.monotonic() - started_at,
         }
@@ -327,7 +368,24 @@ def main(argv: list[str] | None = None) -> int:
                 output.with_name(f"{output.stem}.partial{output.suffix}").unlink(missing_ok=True)
             else:
                 output.with_suffix(output.suffix + ".partial").unlink(missing_ok=True)
-        emit_result(status="error", error=str(error), error_type=type(error).__name__)
+        error_details = {
+            "status": "error",
+            "error": str(error),
+            "error_type": type(error).__name__,
+        }
+        if type(error).__name__ == "NoDecodableSurface":
+            error_details.update(
+                error_code="no_decodable_surface",
+                octree_resolution=int(
+                    getattr(error, "requested_resolution", args.octree_resolution)
+                ),
+                octree_depth=int(getattr(error, "octree_depth", -1)),
+                preceding_active_points=int(
+                    getattr(error, "preceding_active_points", 0)
+                ),
+                seed=int(args.seed),
+            )
+        emit_result(**error_details)
         traceback.print_exc()
         return 1
     finally:
@@ -345,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         metadata_output=str(args.metadata_output),
         runtime_seconds=result["runtime_seconds"],
         peak_vram_bytes=result["peak_vram_bytes"],
+        settings=result["settings"],
     )
     return 0
 

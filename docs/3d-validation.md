@@ -43,27 +43,48 @@ ID, completion time, and passed-gate list for auditability.
 - [x] Cache use, refresh, disable, corruption recovery, and atomic writes pass.
 - [x] Asymmetric Y-up/Z-up and normalization round trips preserve handedness,
       orientation, position, and scale.
-- [x] `scripts/check.sh` passes: 134 tests on 2026-07-15.
+- [x] XY and rotated planes fail the semantic gate; a very thin rank-3 box
+      passes it. Cache keys and UltraShape geometry records carry bumped schema
+      versions, and legacy planar results are not reusable.
+- [x] Pinned TRELLIS processing uses remesh on, band 1, and inner-face removal;
+      GLB export flips texture V exactly once.
+- [x] UltraShape empty adaptive decoding becomes `NoDecodableSurface` and
+      cleans all partial outputs. `Conservative` resolves to 512; `Detailed`
+      and `Ultra` retain explicit experimental 1024 behavior.
+- [x] `scripts/check.sh` passes: 163 tests on 2026-07-15.
 
 ## Live G4 benchmark table
 
 Do not fill a row from requested settings alone. Record the actual shape
 resolution and token count emitted by the patched runtime, validate the GLB,
-and retain only the metrics/JSON record—not benchmark GLBs—in Git.
+and retain only the metrics/JSON record—not benchmark GLBs—in Git. UltraShape
+rows require matching machine-readable resolved-preset and worker settings;
+the 512 row sends `octree_resolution=0` so it proves the `Conservative` preset
+path rather than a manual 512 override.
 
 | Pipeline | Actual resolution | Tokens | Runtime | Peak VRAM | GLB bytes | Faces | Texture | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| TRELLIS fast | 512 | 3,964 | 29.06 s | 4,190,109,696 B | 13,623,892 | 195,999 | 1024 | passed |
-| TRELLIS quality cascade | 1024 | 18,945 | 96.49 s | 5,320,474,624 B | 37,959,968 | 488,148 | 2048 | passed |
+| TRELLIS fast | 512 | 3,964 | 29.06 s | 4,190,109,696 B | 13,623,892 | 195,999 | 1024 | prior structural pass; semantic rerun pending |
+| TRELLIS quality cascade | 1024 | 18,945 | 96.49 s | 5,320,474,624 B | 37,959,968 | 488,148 | 2048 | prior structural pass; semantic rerun pending |
 | TRELLIS maximum cascade | incomplete | 50,145 observed at default cap | n/a | n/a | n/a | n/a | n/a | Colab backend disappeared during the genuine 1536 retry; no GLB recorded |
 | UltraShape 384 smoke | 384 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 512 smoke | 512 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 1024 run 1 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
 | UltraShape 1024 run 2 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
 
-`Detailed` and `Ultra` may remain wired to provisional 1024 settings only after
-the two 1024 rows pass without OOM. Until then the UI must identify them as
-experimental or use a proven lower octree setting.
+`Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
+`Detailed` and `Ultra` preserve their existing 1024 semantics and remain
+experimental until both 1024 rows pass without OOM or empty-surface decoding.
+The 384 override and 512 rows also remain live release gates; selecting a 512
+default is not recorded as live proof.
+
+The supplied failure used TRELLIS 512 with 41 steps, 25,000 target faces,
+50,193 max tokens, background removal on, and cache use. Its fresh regression
+matrix must include those exact values plus preset defaults with cache disabled
+and refreshed. Each raw, processed, and final artifact must record bounds,
+intrinsic rank/singular ratios, connected components, nondegenerate-face ratio,
+and surface area. The original dog source image is required for that live gate;
+the screenshot alone is not a lossless replacement.
 
 The default 1536 path separately passed the strict no-downgrade gate: this
 input required 50,145 tokens with a 49,152 cap, and returned an actionable error
@@ -76,8 +97,9 @@ Also proven on the same live G4 run:
 
 - PyTorch 2.11.0 + CUDA 12.8 on SM120, cubvh's CUDA distance kernel,
   UltraShape imports, TRELLIS surface loading, and bootstrap regression probes.
-- The preserved advanced modular TRELLIS workflow produced a validated textured
-  GLB after its category move.
+- The preserved advanced modular TRELLIS workflow previously produced a
+  structurally validated textured GLB after its category move; it now needs a
+  fresh semantic-geometry rerun.
 - TRELLIS facade and advanced-workflow GLBs connected directly to Preview 3D
   and Save 3D.
 
@@ -90,6 +112,11 @@ plus the UltraShape inference overlay.
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
 WebSocket proof before this UI behavior is counted as release evidence.
+
+After deploying this repair, old result keys are intentionally unreachable.
+`Use cache` revalidates current entries semantically; `Refresh this node` is the
+recommended first diagnostic rerun and `Disable cache` is required for release
+evidence.
 
 ## Publishing the combined environment cache
 
@@ -117,5 +144,6 @@ provenance.
 - [ ] Transparent/background-removal input
 - [ ] Unchanged rerun proves cache hits and performs no model inference
 - [ ] Cancellation leaves no child process, partial GLB, or retained allocation
-- [x] Existing advanced TRELLIS workflows still load and execute
+- [ ] Existing advanced TRELLIS workflow passes the new semantic geometry gate
+      (its prior structural load/execute check remains recorded)
 - [ ] Both facade outputs connect directly to Preview 3D and Save 3D Model

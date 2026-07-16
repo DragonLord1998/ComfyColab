@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "patch_id": "ultrashape-inference-compat-v2",
+  "patch_id": "ultrashape-inference-compat-v3",
   "revision": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
   "files": [
     {
@@ -125,6 +125,58 @@
             "        surface, mesh = load_surface_sharpegde(mesh, num_points=num_uniform_points, ",
             "            num_sharp_points=num_sharp_points, normalize_scale=normalize_scale, rng=rng)"
           ]
+        }
+      ]
+    },
+    {
+      "path": "ultrashape/models/autoencoders/volume_decoders.py",
+      "before_sha256": "a81ceea7b44b52506dbd1f786e733d223ffd1705daa4ba4a7c8a438f12341381",
+      "after_sha256": "f628afdbf09e6c11936ad0845697ab0224d0bf7c6ae2f2c8a633b0b1392c5a3c",
+      "replacements": [
+        {
+          "before_lines": [
+            "from ...utils import logger"
+          ],
+          "after_lines": [
+            "from ...utils import logger",
+            "",
+            "class NoDecodableSurface(RuntimeError):",
+            "    def __init__(self, *, octree_depth, requested_resolution, preceding_active_points):",
+            "        self.octree_depth = int(octree_depth)",
+            "        self.requested_resolution = int(requested_resolution)",
+            "        self.preceding_active_points = int(preceding_active_points)",
+            "        super().__init__(",
+            "            \"UltraShape found no decodable surface points \"",
+            "            f\"(octree_depth={self.octree_depth}, \"",
+            "            f\"requested_resolution={self.requested_resolution}, \"",
+            "            f\"preceding_active_points={self.preceding_active_points})\"",
+            "        )"
+          ]
+        },
+        {
+          "before_lines": [
+            "        resolutions = []"
+          ],
+          "after_lines": [
+            "        requested_octree_resolution = int(octree_resolution)",
+            "        resolutions = []"
+          ],
+          "occurrences": 2
+        },
+        {
+          "before_lines": [
+            "            next_points = torch.stack(nidx, dim=1)"
+          ],
+          "after_lines": [
+            "            next_points = torch.stack(nidx, dim=1)",
+            "            if next_points.numel() == 0:",
+            "                raise NoDecodableSurface(",
+            "                    octree_depth=octree_depth_now,",
+            "                    requested_resolution=requested_octree_resolution,",
+            "                    preceding_active_points=cidx_x.numel(),",
+            "                )"
+          ],
+          "occurrences": 2
         }
       ]
     }
