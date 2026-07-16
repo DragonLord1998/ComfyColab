@@ -24,6 +24,27 @@ of UltraShape training and unused mesh-postprocessing modules and threads a
 seeded generator through surface sampling. It does not alter the model
 architecture or weights.
 
+## Pixal3D
+
+- Official source: <https://github.com/TencentARC/Pixal3D>
+- Pinned source revision: `cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af`
+- Hugging Face model: <https://huggingface.co/TencentARC/Pixal3D>
+- Pinned model revision: `0b31f9160aa400719af409098bff7936a932f726`
+- DINOv3 companion model: <https://huggingface.co/camenduru/dinov3-vitl16-pretrain-lvd1689m>
+- Pinned DINOv3 revision: `3c276edd87d6f6e569ff0c4400e086807d0f3881`
+- MoGe companion model: <https://huggingface.co/Ruicheng/moge-2-vitl>
+- Pinned MoGe model revision: `39c4d5e957afe587e04eec59dc2bcc3be5ecd968`
+- Pinned NAF source revision: `37f2dfc180f2de53d98bd601109c0da0dd6b0f43`
+
+Pixal3D is installed at runtime in an isolated worker environment. ComfyColab
+does not redistribute Pixal3D weights, DINOv3 weights, MoGe weights, NAF
+assets, `utils3d`, or NATTEN wheels in this Git repository. The first uncached
+runtime may download/build several multi-GB components. Review the upstream
+project, model, and package licenses before using Pixal3D commercially or in a
+hosted service. The current Hugging Face model metadata also flags access as
+disallowed in the EU; ComfyColab does not bypass repository gating or regional
+terms, and users must comply with the model repository's current access rules.
+
 ## DINOv2 Large
 
 - Model: <https://huggingface.co/facebook/dinov2-large>

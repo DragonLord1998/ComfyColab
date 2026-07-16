@@ -20,6 +20,9 @@ ID, completion time, and passed-gate list for auditability.
 | GeometryPack | `c67199de05705642258e727fa118f412877b4ebf` |
 | UltraShape source | `5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66` |
 | UltraShape model | `5aeb21a7185d39f042d02b2695802f125a6f5159` |
+| Pixal3D source | `cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af` |
+| Pixal3D model | `0b31f9160aa400719af409098bff7936a932f726` |
+| Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
 | cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
 | BiRefNet | `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4` |
@@ -28,7 +31,7 @@ ID, completion time, and passed-gate list for auditability.
 
 ## Local contract gates
 
-- [x] Exactly two public ComfyColab 3D nodes; all adapters are dev-only.
+- [x] Exactly three public ComfyColab 3D nodes; all adapters are dev-only.
 - [x] Import does not load torch, trimesh, NumPy, Pillow, or initialize CUDA.
 - [x] TRELLIS facade expands through the pinned modular node IDs and never uses
       `Trellis2ExportGLB`.
@@ -51,7 +54,10 @@ ID, completion time, and passed-gate list for auditability.
 - [x] UltraShape empty adaptive decoding becomes `NoDecodableSurface` and
       cleans all partial outputs. `Conservative` resolves to 512; `Detailed`
       and `Ultra` retain explicit experimental 1024 behavior.
-- [x] `scripts/check.sh` passes: 163 tests on 2026-07-15.
+- [x] Pixal3D local workflow and prompt construction are single-image-only,
+      expose `1024 — Stable` and `1536 — Experimental`, and include no
+      `mode` or `num_views` input. This is local contract coverage only.
+- [x] `scripts/check.sh` passes: 188 tests on 2026-07-16.
 
 ## Live G4 benchmark table
 
@@ -71,6 +77,12 @@ path rather than a manual 512 override.
 | UltraShape 512 smoke | 512 requested | n/a | pending | pending | pending | pending | geometry only | pending live G4 |
 | UltraShape 1024 run 1 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
 | UltraShape 1024 run 2 | 1024 requested | n/a | pending | pending | pending | pending | geometry only | release gate |
+| Pixal3D cold 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3D object auto 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3D transparent 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3D worker reuse 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3D preview/save GLB reader | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3D 1536 experimental | 1536 requested | n/a | pending | pending | pending | pending | 4096 requested | pending live G4 |
 
 `Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
 `Detailed` and `Ultra` preserve their existing 1024 semantics and remain
@@ -109,6 +121,14 @@ stopped before live release proof. The machine-readable record therefore
 remains `pending`, and bootstrap continues to use the rollback TRELLIS cache
 plus the UltraShape inference overlay.
 
+Pixal3D live GPU execution is not locally proven. Its isolated hidden worker,
+official pinned `TencentARC/Pixal3D` source, first-download/build behavior,
+cache-hit inference suppression, `keep_worker_loaded` reuse behavior,
+cancellation cleanup, 1024 output quality, 1536 experimental output quality,
+Preview3D compatibility, and SaveGLB compatibility are all pending live G4
+gates. Do not promote the Pixal3D worker cache or mark any Pixal3D gate passed
+from local workflow JSON or unit tests alone.
+
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
 WebSocket proof before this UI behavior is counted as release evidence.
@@ -146,4 +166,9 @@ provenance.
 - [ ] Cancellation leaves no child process, partial GLB, or retained allocation
 - [ ] Existing advanced TRELLIS workflow passes the new semantic geometry gate
       (its prior structural load/execute check remains recorded)
-- [ ] Both facade outputs connect directly to Preview 3D and Save 3D Model
+- [ ] All three facade outputs connect directly to Preview 3D and Save 3D Model
+- [ ] Pixal3D cold 1024 first run completes from official pinned sources
+- [ ] Pixal3D worker reuse with `keep_worker_loaded=true` avoids relaunch
+- [ ] Pixal3D cache hit performs no worker inference
+- [ ] Pixal3D cancellation leaves no worker process, partial GLB, or retained allocation
+- [ ] Pixal3D 1536 experimental completes without silent downgrade

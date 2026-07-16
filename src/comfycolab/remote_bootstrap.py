@@ -46,6 +46,7 @@ CONTENT = Path("/content")
 COMFY_DIR = CONTENT / "ComfyUI"
 REPO_DIR = CONTENT / "ComfyColab"
 ULTRASHAPE_DIR = CONTENT / "UltraShape-1.0"
+PIXAL3D_DIR = CONTENT / "Pixal3D"
 STATE_DIR = CONTENT / ".comfycolab"
 STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
@@ -65,8 +66,50 @@ TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
 TRELLIS_CATEGORY_PATCH_ID = "trellis2-advanced-categories-v1"
 ULTRASHAPE_PATCH_ID = "ultrashape-inference-compat-v3"
 COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
+PIXAL3D_CACHE_MANIFEST = "pixal3d-g4-v1.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
+PIXAL3D_REF = "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af"
+PIXAL3D_MODEL_REPO = "TencentARC/Pixal3D"
+PIXAL3D_MODEL_REF = "0b31f9160aa400719af409098bff7936a932f726"
+PIXAL3D_DINOV3_MODEL_REPO = "camenduru/dinov3-vitl16-pretrain-lvd1689m"
+PIXAL3D_DINOV3_MODEL_REF = "3c276edd87d6f6e569ff0c4400e086807d0f3881"
+PIXAL3D_MOGE_MODEL_REPO = "Ruicheng/moge-2-vitl"
+PIXAL3D_MOGE_MODEL_REF = "39c4d5e957afe587e04eec59dc2bcc3be5ecd968"
+PIXAL3D_MOGE_SOURCE_REF = "07444410f1e33f402353b99d6ccd26bd31e469e8"
+PIXAL3D_NAF_REF = "37f2dfc180f2de53d98bd601109c0da0dd6b0f43"
+PIXAL3D_NAF_REPO = "valeoai/NAF"
+PIXAL3D_NAF_CHECKPOINT_SHA256 = (
+    "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
+)
+PIXAL3D_UTILS3D_WHEEL = (
+    "https://github.com/LDYang694/Storages/releases/download/"
+    "20260430/utils3d-0.0.2-py3-none-any.whl"
+)
+PIXAL3D_WORKER_ENVIRONMENT = "pixal3d-worker"
+PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1"
+PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
+PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
+PIXAL3D_NATTEN_PACKAGE = "natten==0.21.6+torch2110cu128"
+PIXAL3D_NATTEN_WHEEL_INDEX = "https://whl.natten.org"
+PIXAL3D_INFERENCE_REQUIREMENTS = (
+    f"git+https://github.com/microsoft/MoGe.git@{PIXAL3D_MOGE_SOURCE_REF}",
+    "pillow==12.0.0",
+    "imageio==2.37.2",
+    "imageio-ffmpeg==0.6.0",
+    "tqdm==4.67.1",
+    "easydict==1.13",
+    "opencv-python-headless==4.12.0.88",
+    "trimesh==4.10.1",
+    "transformers==4.57.3",
+    "zstandard==0.25.0",
+    "kornia==0.8.2",
+    "timm==1.0.22",
+    "diffusers==0.37.1",
+    "accelerate==1.13.0",
+    "plyfile==1.1.3",
+    "huggingface_hub>=0.36.0",
+)
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
@@ -115,9 +158,14 @@ TRELLIS_CACHE = {
 }
 
 
-def run(command: list[str], *, cwd: Path | None = None) -> None:
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
     print(f"[comfycolab] $ {' '.join(command)}", flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
 def clone_or_update(url: str, destination: Path, ref: str = "main") -> None:
@@ -678,6 +726,394 @@ def combined_cache_specification() -> dict[str, object] | None:
         "install_hash": str(inputs["installHash"]),
         "parts": parts,
     }
+
+
+def expected_pixal3d_sources() -> dict[str, str]:
+    return {
+        "pixal3d": PIXAL3D_REF,
+        "pixal3dModel": PIXAL3D_MODEL_REF,
+        "dinov3": PIXAL3D_DINOV3_MODEL_REF,
+        "mogeModel": PIXAL3D_MOGE_MODEL_REF,
+        "mogeSource": PIXAL3D_MOGE_SOURCE_REF,
+        "naf": PIXAL3D_NAF_REF,
+        "nafCheckpoint": PIXAL3D_NAF_CHECKPOINT_SHA256,
+        "utils3d": PIXAL3D_UTILS3D_WHEEL,
+        "natten": PIXAL3D_NATTEN_PACKAGE,
+        "environment": PIXAL3D_ENVIRONMENT_REF,
+        "comfyEnv": COMFY_ENV_VERSION,
+    }
+
+
+def pixal3d_cache_specification() -> dict[str, object] | None:
+    manifest_path = REPO_DIR / "cache" / PIXAL3D_CACHE_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if manifest.get("schema") != 1:
+        raise RuntimeError("The Pixal3D cache manifest has an unsupported schema.")
+    if manifest.get("profile") != PIXAL3D_WORKER_PROFILE:
+        raise RuntimeError("The Pixal3D cache manifest does not match the worker profile.")
+    sources = manifest.get("sources")
+    if not isinstance(sources, dict):
+        raise RuntimeError("The Pixal3D cache manifest has malformed source metadata.")
+    expected_sources = expected_pixal3d_sources()
+    if sources != {**sources, **expected_sources}:
+        raise RuntimeError("The Pixal3D cache manifest does not match pinned sources.")
+    if manifest.get("status") != "ready":
+        print(
+            "[comfycolab] Pixal3D cache is not ready; using source install "
+            f"({manifest.get('status', 'unknown')}).",
+            flush=True,
+        )
+        return None
+    archive = manifest.get("archive")
+    inputs = manifest.get("inputs")
+    if not isinstance(archive, dict) or not isinstance(inputs, dict):
+        raise RuntimeError("The ready Pixal3D cache manifest is incomplete.")
+    parts = archive.get("parts")
+    if not isinstance(parts, list) or not parts:
+        raise RuntimeError("The ready Pixal3D cache manifest has no archive parts.")
+    release_tag = str(manifest.get("releaseTag", ""))
+    if not release_tag:
+        raise RuntimeError("The ready Pixal3D cache manifest has no release tag.")
+    return {
+        "profile": str(manifest["profile"]),
+        "release_base": (
+            "https://github.com/DragonLord1998/ComfyColab/releases/download/"
+            f"{release_tag}"
+        ),
+        "archive_sha256": str(archive["sha256"]),
+        "environment_toml_sha256": str(inputs["environmentTomlSha256"]),
+        "install_hash": str(inputs["installHash"]),
+        "parts": parts,
+    }
+
+
+def pixal3d_workspace() -> Path:
+    return STATE_DIR / PIXAL3D_WORKER_ENVIRONMENT
+
+
+def pixal3d_python(workspace: Path | None = None) -> Path:
+    workspace = pixal3d_workspace() if workspace is None else workspace
+    return workspace / "venv" / "bin" / "python"
+
+
+def pixal3d_environment_toml() -> Path:
+    return REPO_DIR / "worker" / "pixal3d" / "environment.toml"
+
+
+def pixal3d_install_hash(environment_toml_sha256: str) -> str:
+    payload = {
+        "schema": 1,
+        "profile": PIXAL3D_WORKER_PROFILE,
+        "sources": expected_pixal3d_sources(),
+        "environmentTomlSha256": environment_toml_sha256,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def pixal3d_workspace_metadata_valid(
+    workspace: Path,
+    cache: dict[str, object] | None = None,
+) -> bool:
+    environment_toml = pixal3d_environment_toml()
+    if not environment_toml.is_file():
+        return False
+    environment_sha256 = sha256_file(environment_toml)
+    expected_install_hash = (
+        str(cache["install_hash"]) if cache is not None
+        else pixal3d_install_hash(environment_sha256)
+    )
+    expected_environment_sha256 = (
+        str(cache["environment_toml_sha256"]) if cache is not None
+        else environment_sha256
+    )
+    metadata = {
+        workspace / "environment.toml": expected_environment_sha256,
+    }
+    for path, expected in metadata.items():
+        if not path.is_file() or sha256_file(path) != expected:
+            return False
+    install_hash = workspace / "install.hash"
+    if (
+        not install_hash.is_file()
+        or install_hash.read_text(encoding="utf-8").strip() != expected_install_hash
+    ):
+        return False
+    return pixal3d_python(workspace).is_file()
+
+
+def safe_pixal3d_cache_member(value: str) -> bool:
+    path = PurePosixPath(value)
+    return bool(
+        path.parts
+        and not path.is_absolute()
+        and ".." not in path.parts
+        and path.parts[0] == PIXAL3D_WORKER_ENVIRONMENT
+    )
+
+
+def validate_pixal3d_archive(archive: Path) -> None:
+    result = subprocess.run(
+        ["tar", "--zstd", "-tvf", str(archive)],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    entries = result.stdout.splitlines()
+    if not entries:
+        raise RuntimeError("The Pixal3D cache archive is empty.")
+    for entry in entries:
+        fields = entry.split(maxsplit=5)
+        if len(fields) != 6:
+            raise RuntimeError(f"Malformed Pixal3D cache archive entry: {entry}")
+        kind = entry[0]
+        details = fields[5]
+        if kind == "l":
+            if " -> " not in details:
+                raise RuntimeError(f"Malformed Pixal3D cache symlink: {entry}")
+            member, target = details.rsplit(" -> ", 1)
+        elif kind == "h":
+            if " link to " not in details:
+                raise RuntimeError(f"Malformed Pixal3D cache hard link: {entry}")
+            member, target = details.rsplit(" link to ", 1)
+        elif kind in {"-", "d"}:
+            member, target = details, None
+        else:
+            raise RuntimeError(f"Unsupported Pixal3D cache archive entry: {entry}")
+
+        if not safe_pixal3d_cache_member(member):
+            raise RuntimeError(f"Unsafe Pixal3D cache archive member: {member}")
+        if target is None:
+            continue
+        target_path = PurePosixPath(target)
+        if target_path.is_absolute():
+            final_root = PurePosixPath(str(pixal3d_workspace()))
+            if target_path != final_root and final_root not in target_path.parents:
+                raise RuntimeError(f"Unsafe Pixal3D cache link target: {target}")
+        elif kind == "h":
+            if not safe_pixal3d_cache_member(target):
+                raise RuntimeError(f"Unsafe Pixal3D cache hard-link target: {target}")
+        else:
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(member), target))
+            if not safe_pixal3d_cache_member(resolved):
+                raise RuntimeError(f"Unsafe Pixal3D cache symlink target: {target}")
+
+
+def validate_pixal3d_runtime(python: Path | None = None) -> None:
+    python = pixal3d_python() if python is None else python
+    probe = (
+        "import importlib, importlib.util, json, sys, torch; "
+        "assert torch.cuda.is_available(); "
+        "assert torch.__version__ == '2.11.0+cu128'; "
+        "assert torch.version.cuda == '12.8'; "
+        "assert torch.cuda.get_device_capability() == (12, 0); "
+        "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
+        "assert x.sum().item() == 4.0; "
+        "aliases = {'flex_gemm': ('flex_gemm_ap',), 'cumesh': ('cumesh_vb',), "
+        "'o_voxel': ('o_voxel_vb_ap',)}; "
+        "[(sys.modules.setdefault(name, importlib.import_module(next(candidate for candidate in candidates "
+        "if importlib.util.find_spec(candidate) is not None))) if importlib.util.find_spec(name) is None "
+        "else None) for name, candidates in aliases.items()]; "
+        "import pixal3d, utils3d, moge, o_voxel, cumesh, flex_gemm, drtk, trimesh; "
+        "from pixal3d.pipelines import Pixal3DImageTo3DPipeline; "
+        "natten = importlib.import_module('natten'); "
+        "assert getattr(natten, 'HAS_LIBNATTEN', False); "
+        "export_glb = getattr(trimesh.Trimesh, 'export', None); "
+        "assert callable(export_glb); "
+        "print(json.dumps({'status': 'ok'}))"
+    )
+    subprocess.run(
+        [str(python), "-c", probe],
+        cwd=PIXAL3D_DIR,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=180,
+    )
+
+
+def restore_pixal3d_cache(cache: dict[str, object] | None = None) -> bool:
+    cache = pixal3d_cache_specification() if cache is None else cache
+    if cache is None:
+        return False
+    parts = cache.get("parts", [])
+    archive_sha256 = cache.get("archive_sha256", "")
+    if not parts or not archive_sha256 or not trellis_cache_compatible():
+        return False
+
+    workspace = pixal3d_workspace()
+    if pixal3d_workspace_metadata_valid(workspace, cache):
+        try:
+            validate_pixal3d_runtime(pixal3d_python(workspace))
+        except Exception:
+            pass
+        else:
+            print("[comfycolab] Reusing the verified Pixal3D worker environment.", flush=True)
+            return True
+
+    cache_dir = STATE_DIR / "environment-cache" / str(cache["profile"])
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[comfycolab] Restoring prebuilt Pixal3D cache "
+            f"({cache['profile']}, {len(parts)} part(s))...",
+            flush=True,
+        )
+        release_base = str(cache["release_base"])
+        download_jobs: list[tuple[dict[str, str], Path]] = []
+        for index, configured_part in enumerate(parts):
+            part = dict(configured_part)
+            part["url"] = f"{release_base}/{part['name']}"
+            download_jobs.append((part, cache_dir / f"part-{index:03d}"))
+        progress = CacheDownloadProgress([part for part, _ in download_jobs])
+        progress.start()
+        try:
+            with ThreadPoolExecutor(max_workers=len(download_jobs)) as executor:
+                futures = [
+                    executor.submit(download_cache_part, part, destination, progress)
+                    for part, destination in download_jobs
+                ]
+                for future in futures:
+                    future.result()
+        finally:
+            progress.stop()
+        archive = cache_dir / "pixal3d-worker-cache.tar.zst"
+        with archive.open("wb") as output:
+            for _, part_path in download_jobs:
+                with part_path.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=8 * 1024 * 1024)
+        actual_archive_sha256 = sha256_file(archive)
+        if actual_archive_sha256 != archive_sha256:
+            raise RuntimeError(
+                "Pixal3D cache checksum mismatch: "
+                f"expected {archive_sha256}, got {actual_archive_sha256}"
+            )
+        if shutil.which("zstd") is None:
+            run(["apt-get", "update", "-qq"])
+            run(["apt-get", "install", "-y", "-qq", "zstd"])
+        validate_pixal3d_archive(archive)
+        staging = cache_dir / "restore"
+        staging.mkdir()
+        run(
+            [
+                "tar",
+                "--zstd",
+                "--no-same-owner",
+                "--no-same-permissions",
+                "-xf",
+                str(archive),
+                "-C",
+                str(staging),
+            ]
+        )
+        restored_workspace = staging / PIXAL3D_WORKER_ENVIRONMENT
+        if not pixal3d_workspace_metadata_valid(restored_workspace, cache):
+            raise RuntimeError("The restored Pixal3D cache metadata is incomplete.")
+        backup = cache_dir / "previous-workspace"
+        if workspace.exists():
+            workspace.replace(backup)
+        try:
+            restored_workspace.replace(workspace)
+            validate_pixal3d_runtime(pixal3d_python(workspace))
+        except Exception:
+            shutil.rmtree(workspace, ignore_errors=True)
+            if backup.exists():
+                backup.replace(workspace)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+    except Exception:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        raise
+    else:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    print("[comfycolab] Prebuilt Pixal3D cache restored.", flush=True)
+    return True
+
+
+def install_pixal3d_source() -> str:
+    workspace = pixal3d_workspace()
+    environment_toml = pixal3d_environment_toml()
+    if not environment_toml.is_file():
+        if not PIXAL3D_DIR.exists():
+            print(
+                "[comfycolab] Pixal3D source is unavailable; skipping Pixal3D worker install.",
+                flush=True,
+            )
+            return "unavailable"
+        raise RuntimeError(f"Pixal3D environment manifest is missing: {environment_toml}")
+    environment_sha256 = sha256_file(environment_toml)
+    install_hash = pixal3d_install_hash(environment_sha256)
+    if pixal3d_workspace_metadata_valid(workspace):
+        try:
+            validate_pixal3d_runtime(pixal3d_python(workspace))
+        except Exception:
+            pass
+        else:
+            print("[comfycolab] Reusing the source-installed Pixal3D worker environment.", flush=True)
+            return "source-install"
+
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True)
+    native_base_python = (
+        Path.home() / ".ce" / ".pixi" / "envs" / "trellis2-nodes" / "bin" / "python"
+    )
+    if not native_base_python.is_file():
+        raise RuntimeError(
+            "The verified trellis2-nodes CUDA base is required before building the isolated "
+            "Pixal3D worker environment."
+        )
+    run(
+        [
+            str(native_base_python),
+            "-m",
+            "venv",
+            "--system-site-packages",
+            str(workspace / "venv"),
+        ]
+    )
+    python = pixal3d_python(workspace)
+    run([str(python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    run([str(python), "-m", "pip", "install", *PIXAL3D_INFERENCE_REQUIREMENTS])
+    run([str(python), "-m", "pip", "install", PIXAL3D_UTILS3D_WHEEL])
+    natten_env = os.environ.copy()
+    natten_env.setdefault("NATTEN_CUDA_ARCH", "120")
+    natten_env.setdefault("NATTEN_N_WORKERS", str(max(1, os.cpu_count() or 1)))
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "-f",
+            PIXAL3D_NATTEN_WHEEL_INDEX,
+            PIXAL3D_NATTEN_PACKAGE,
+        ],
+        env=natten_env,
+    )
+    shutil.copy2(environment_toml, workspace / "environment.toml")
+    (workspace / "install.hash").write_text(install_hash + "\n", encoding="utf-8")
+    validate_pixal3d_runtime(python)
+    return "source-install"
+
+
+def install_pixal3d() -> str:
+    try:
+        if restore_pixal3d_cache():
+            return PIXAL3D_WORKER_PROFILE
+    except Exception as error:
+        print(
+            f"[comfycolab] Pixal3D cache restore failed ({error}); using source install.",
+            flush=True,
+        )
+    return install_pixal3d_source()
 
 
 def restore_trellis_cache(
@@ -1344,6 +1780,11 @@ def main() -> None:
         ULTRASHAPE_REF,
     )
     clone_or_update(
+        "https://github.com/TencentARC/Pixal3D.git",
+        PIXAL3D_DIR,
+        PIXAL3D_REF,
+    )
+    clone_or_update(
         str(CONFIG["repository_url"]),
         REPO_DIR,
         str(CONFIG["repository_ref"]),
@@ -1362,6 +1803,9 @@ def main() -> None:
     )
     install_node_pack()
     environment_cache_profile = install_dependencies()
+    pixal3d_cache_profile = install_pixal3d()
+    if pixal3d_cache_profile != "unavailable":
+        validate_pixal3d_runtime()
     invalidate_comfyenv_metadata_cache()
 
     environment = os.environ.copy()
@@ -1369,6 +1813,16 @@ def main() -> None:
     environment["COMFY_ENV_CALL_TIMEOUT"] = os.environ.get(
         "COMFY_ENV_CALL_TIMEOUT", str(COMFY_ENV_CALL_TIMEOUT_SECONDS)
     )
+    environment["COMFYCOLAB_PIXAL3D_PYTHON"] = str(pixal3d_python())
+    environment["COMFYCOLAB_PIXAL3D_SOURCE"] = str(PIXAL3D_DIR)
+    environment["COMFYCOLAB_PIXAL3D_MODEL_REPO"] = PIXAL3D_MODEL_REPO
+    environment["COMFYCOLAB_PIXAL3D_MODEL_REF"] = PIXAL3D_MODEL_REF
+    environment["COMFYCOLAB_PIXAL3D_DINOV3_MODEL_REPO"] = PIXAL3D_DINOV3_MODEL_REPO
+    environment["COMFYCOLAB_PIXAL3D_DINOV3_MODEL_REF"] = PIXAL3D_DINOV3_MODEL_REF
+    environment["COMFYCOLAB_PIXAL3D_MOGE_MODEL_REPO"] = PIXAL3D_MOGE_MODEL_REPO
+    environment["COMFYCOLAB_PIXAL3D_MOGE_MODEL_REF"] = PIXAL3D_MOGE_MODEL_REF
+    environment["COMFYCOLAB_PIXAL3D_NAF_REF"] = PIXAL3D_NAF_REF
+    environment["COMFYCOLAB_PIXAL3D_ENVIRONMENT_REF"] = PIXAL3D_ENVIRONMENT_REF
     comfy: subprocess.Popen[bytes] | None = None
     tunnel: subprocess.Popen[bytes] | None = None
     ready = False
@@ -1447,13 +1901,20 @@ def main() -> None:
             "trellisCommit": git_commit(TRELLIS_DIR),
             "geometryCommit": git_commit(GEOMETRY_DIR),
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
+            "pixal3dCommit": git_commit(PIXAL3D_DIR),
             "birefnetModelRef": BIREFNET_MODEL_REF,
+            "pixal3dModelRef": PIXAL3D_MODEL_REF,
+            "pixal3dDinov3ModelRef": PIXAL3D_DINOV3_MODEL_REF,
+            "pixal3dMogeModelRef": PIXAL3D_MOGE_MODEL_REF,
+            "pixal3dNafRef": PIXAL3D_NAF_REF,
+            "pixal3dEnvironmentRef": PIXAL3D_ENVIRONMENT_REF,
             "trellisPatch": trellis_patch,
             "trellisCategoryPatch": trellis_category_patch,
             "ultrashapePatch": ultrashape_patch,
             "comfyEnvTimeoutPatch": COMFY_ENV_TIMEOUT_PATCH_ID,
             "isolatedCallTimeoutSeconds": int(environment["COMFY_ENV_CALL_TIMEOUT"]),
             "environmentCacheProfile": environment_cache_profile,
+            "pixal3dCacheProfile": pixal3d_cache_profile,
         }
         save_state(payload)
         ready = True

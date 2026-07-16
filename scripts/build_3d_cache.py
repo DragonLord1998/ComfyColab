@@ -36,6 +36,14 @@ REQUIRED_LIVE_GATES = (
     "ultrashape_512_refinement",
     "ultrashape_1024_run_1",
     "ultrashape_1024_run_2",
+    "pixal3d_cold_1024_textured_glb",
+    "pixal3d_object_auto_1024",
+    "pixal3d_transparent_1024",
+    "pixal3d_worker_reuse_1024",
+    "pixal3d_cache_hit_no_inference",
+    "pixal3d_cancellation_cleanup",
+    "pixal3d_preview_save_glb_reader",
+    "pixal3d_1536_experimental",
     "full_workflow_hard_surface",
     "full_workflow_organic",
     "full_workflow_thin",
@@ -54,6 +62,12 @@ REQUIRED_LIVE_BENCHMARKS = {
     "ultrashape_512": 512,
     "ultrashape_1024_run_1": 1024,
     "ultrashape_1024_run_2": 1024,
+    "pixal3d_cold_1024": 1024,
+    "pixal3d_object_auto_1024": 1024,
+    "pixal3d_transparent_1024": 1024,
+    "pixal3d_worker_reuse_1024": 1024,
+    "pixal3d_preview_save_glb_reader": 1024,
+    "pixal3d_1536_experimental": 1536,
 }
 
 
@@ -66,7 +80,7 @@ def sha256_file(path: Path) -> str:
 
 
 def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
-    return {
+    sources = {
         "comfy": remote_bootstrap.COMFY_REF,
         "trellis": remote_bootstrap.TRELLIS_REF,
         "geometry": remote_bootstrap.GEOMETRY_REF,
@@ -75,14 +89,46 @@ def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
         "birefnet": remote_bootstrap.BIREFNET_MODEL_REF,
         "comfyEnv": remote_bootstrap.COMFY_ENV_VERSION,
     }
+    pixal3d_sources = getattr(remote_bootstrap, "expected_pixal3d_sources", None)
+    if callable(pixal3d_sources):
+        pinned = pixal3d_sources()
+        sources.update({
+            "pixal3d": pinned["pixal3d"],
+            "pixal3dModel": (
+                f"{remote_bootstrap.PIXAL3D_MODEL_REPO}@{pinned['pixal3dModel']}"
+            ),
+            "pixal3dDinov3": (
+                f"{remote_bootstrap.PIXAL3D_DINOV3_MODEL_REPO}@{pinned['dinov3']}"
+            ),
+            "pixal3dMoge": (
+                f"{remote_bootstrap.PIXAL3D_MOGE_MODEL_REPO}@{pinned['mogeModel']}"
+            ),
+            "pixal3dMogeSource": (
+                f"microsoft/MoGe@{pinned['mogeSource']}"
+            ),
+            "pixal3dNaf": (
+                f"{remote_bootstrap.PIXAL3D_NAF_REPO}@{pinned['naf']}"
+            ),
+            "pixal3dNafCheckpoint": pinned["nafCheckpoint"],
+            "pixal3dUtils3d": pinned["utils3d"],
+            "pixal3dNatten": pinned["natten"],
+            "pixal3dEnvironment": pinned["environment"],
+        })
+    elif hasattr(remote_bootstrap, "PIXAL3D_REF"):
+        sources["pixal3d"] = remote_bootstrap.PIXAL3D_REF
+    return sources
 
 
 def expected_validation_patches(remote_bootstrap) -> dict[str, str]:
-    return {
+    patches = {
         "trellis": remote_bootstrap.TRELLIS_PATCH_ID,
         "trellisCategory": remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
         "ultrashape": remote_bootstrap.ULTRASHAPE_PATCH_ID,
     }
+    pixal3d_patch = getattr(remote_bootstrap, "PIXAL3D_PATCH_ID", None)
+    if pixal3d_patch is not None:
+        patches["pixal3d"] = pixal3d_patch
+    return patches
 
 
 def _positive_number(value: object) -> bool:
@@ -165,9 +211,14 @@ def load_live_validation_record(
             and benchmark.get("glbValidated") is True
             and all(_positive_number(benchmark.get(metric)) for metric in common_metrics)
         )
-        if valid and name.startswith("trellis_"):
+        if valid and name.startswith(("trellis_", "pixal3d_")):
             valid = _positive_number(benchmark.get("tokens")) and _positive_number(
                 benchmark.get("textureSize")
+            )
+        if valid and name.startswith("pixal3d_"):
+            valid = all(
+                _positive_number(benchmark.get(metric))
+                for metric in ("workerPeakVramBytes", "pipelineLoadCount", "workerPid")
             )
         if not valid:
             invalid_benchmarks.append(name)
@@ -304,19 +355,8 @@ def build_manifest(
             "parts": parts,
         },
         "runtime": runtime_metadata(env_python),
-        "sources": {
-            "comfy": remote_bootstrap.COMFY_REF,
-            "trellis": remote_bootstrap.TRELLIS_REF,
-            "geometry": remote_bootstrap.GEOMETRY_REF,
-            "ultrashape": remote_bootstrap.ULTRASHAPE_REF,
-            "cubvh": remote_bootstrap.ULTRASHAPE_CUBVH_REF,
-            "birefnet": remote_bootstrap.BIREFNET_MODEL_REF,
-            "comfyEnv": remote_bootstrap.COMFY_ENV_VERSION,
-        },
-        "patches": {
-            "trellis": remote_bootstrap.TRELLIS_PATCH_ID,
-            "ultrashape": remote_bootstrap.ULTRASHAPE_PATCH_ID,
-        },
+        "sources": expected_validation_sources(remote_bootstrap),
+        "patches": expected_validation_patches(remote_bootstrap),
         "inputs": {
             "pixiTomlSha256": sha256_file(workspace / "pixi.toml"),
             "pixiLockSha256": sha256_file(workspace / "pixi.lock"),

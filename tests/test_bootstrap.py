@@ -90,6 +90,102 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("if next_points.numel() == 0", decoder_patch)
         self.assertIn("requested_resolution=requested_octree_resolution", decoder_patch)
 
+    def test_pixal3d_bootstrap_runs_after_trellis_and_before_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir = root / "state"
+            calls: list[str] = []
+
+            class Process:
+                def __init__(self, pid: int):
+                    self.pid = pid
+
+            with mock.patch.multiple(
+                remote_bootstrap,
+                CONFIG={
+                    "port": 8188,
+                    "refresh": True,
+                    "colab_proxy": True,
+                    "repository_url": "https://example.test/repo.git",
+                    "repository_ref": "main",
+                },
+                STATE_DIR=state_dir,
+                STATE_FILE=state_dir / "runtime.json",
+                COMFY_LOG=state_dir / "comfy.log",
+                TUNNEL_LOG=state_dir / "tunnel.log",
+                COMFY_DIR=root / "ComfyUI",
+                REPO_DIR=root / "ComfyColab",
+                GGUF_DIR=root / "ComfyUI-GGUF",
+                TRELLIS_DIR=root / "ComfyUI-TRELLIS2",
+                GEOMETRY_DIR=root / "ComfyUI-GeometryPack",
+                ULTRASHAPE_DIR=root / "UltraShape-1.0",
+                PIXAL3D_DIR=root / "Pixal3D",
+                NODE_TARGET=root / "node",
+                NODE_3D_TARGET=root / "node-3d",
+            ), mock.patch.object(
+                remote_bootstrap, "load_state", return_value={}
+            ), mock.patch.object(
+                remote_bootstrap, "http_ready", return_value=False
+            ), mock.patch.object(
+                remote_bootstrap, "clone_or_update", side_effect=lambda *_args: calls.append("clone")
+            ), mock.patch.object(
+                remote_bootstrap, "install_node_pack", side_effect=lambda: calls.append("install_node_pack")
+            ), mock.patch.object(
+                remote_bootstrap,
+                "apply_pinned_patch",
+                side_effect=[
+                    remote_bootstrap.TRELLIS_PATCH_ID,
+                    remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+                    remote_bootstrap.ULTRASHAPE_PATCH_ID,
+                ],
+            ), mock.patch.object(
+                remote_bootstrap,
+                "install_dependencies",
+                side_effect=lambda: calls.append("install_dependencies") or "combined-test-cache",
+            ), mock.patch.object(
+                remote_bootstrap,
+                "install_pixal3d",
+                side_effect=lambda: calls.append("install_pixal3d") or "pixal3d-test-cache",
+            ), mock.patch.object(
+                remote_bootstrap,
+                "validate_pixal3d_runtime",
+                side_effect=lambda: calls.append("validate_pixal3d_runtime"),
+            ), mock.patch.object(
+                remote_bootstrap, "cloudflared_path", return_value=Path("/tmp/cloudflared")
+            ), mock.patch.object(
+                remote_bootstrap, "wait_for_comfy"
+            ), mock.patch.object(
+                remote_bootstrap, "wait_for_tunnel", side_effect=RuntimeError("no tunnel")
+            ), mock.patch.object(
+                remote_bootstrap, "request_colab_proxy_url", return_value="https://abc-8188.colab.googleusercontent.com/"
+            ), mock.patch.object(
+                remote_bootstrap, "git_commit", return_value="abc123"
+            ), mock.patch.object(
+                remote_bootstrap.subprocess, "Popen", side_effect=[Process(101), Process(202)]
+            ), mock.patch.object(
+                remote_bootstrap, "stop_managed_process"
+            ), mock.patch.object(
+                remote_bootstrap, "stop_started_process"
+            ):
+                remote_bootstrap.main()
+
+            self.assertLess(calls.index("install_dependencies"), calls.index("install_pixal3d"))
+            self.assertLess(calls.index("install_pixal3d"), calls.index("validate_pixal3d_runtime"))
+            payload = json.loads((state_dir / "runtime.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["pixal3dCommit"], "abc123")
+            self.assertEqual(payload["pixal3dCacheProfile"], "pixal3d-test-cache")
+
+    def test_pixal3d_probe_requires_import_cuda_and_file3d_export(self) -> None:
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(remote_bootstrap.subprocess, "run", return_value=completed) as run:
+            remote_bootstrap.validate_pixal3d_runtime(Path("/cached/python"))
+
+        command = run.call_args.args[0]
+        source = command[2]
+        self.assertIn("import pixal3d", source)
+        self.assertIn("torch.cuda.is_available()", source)
+        self.assertIn("export_glb", source)
+
     def test_trellis_category_patch_changes_categories_only(self) -> None:
         root = Path(__file__).resolve().parents[1]
         specification = json.loads(

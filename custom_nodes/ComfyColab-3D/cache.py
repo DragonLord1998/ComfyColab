@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 TRELLIS_RESULT_SCHEMA = "comfycolab-trellis-result-v2"
 ULTRASHAPE_GEOMETRY_SCHEMA = "comfycolab-ultrashape-geometry-v2"
 TEXTURE_RESULT_SCHEMA = "comfycolab-texture-result-v2"
+PIXAL3D_RESULT_SCHEMA = "comfycolab-pixal3d-result-v1"
 
 
 def _stable_value(value: Any) -> Any:
@@ -136,6 +138,47 @@ def texture_cache_key(
         texture_size=texture_size,
         texture_sampling_steps=texture_sampling_steps,
         trellis_ref=trellis_ref,
+        result_schema=result_schema,
+    )
+
+
+def pixal3d_cache_key(
+    image: Any,
+    *,
+    settings: Any,
+    seed: int,
+    remove_background: str,
+    camera_fov_degrees: float,
+    source_ref: str,
+    model_ref: str,
+    dinov3_ref: str,
+    moge_ref: str,
+    naf_ref: str,
+    environment_ref: str,
+    result_schema: str = PIXAL3D_RESULT_SCHEMA,
+) -> str:
+    camera_policy = (
+        "moge-auto" if float(camera_fov_degrees) <= 0.0
+        else {"manual_fov_radians": math.radians(float(camera_fov_degrees))}
+    )
+    return deterministic_cache_key(
+        "pixal3d",
+        image=image,
+        background_policy=remove_background,
+        camera_policy=camera_policy,
+        seed=seed,
+        pipeline_type=settings.pipeline_type,
+        low_vram=settings.low_vram,
+        sampling_steps=settings.sampling_steps,
+        target_face_count=settings.target_face_count,
+        texture_size=settings.texture_size,
+        max_tokens=settings.max_tokens,
+        source_ref=source_ref,
+        model_ref=model_ref,
+        dinov3_ref=dinov3_ref,
+        moge_ref=moge_ref,
+        naf_ref=naf_ref,
+        environment_ref=environment_ref,
         result_schema=result_schema,
     )
 

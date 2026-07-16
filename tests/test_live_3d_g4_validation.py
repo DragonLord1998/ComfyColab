@@ -42,6 +42,8 @@ def options(**overrides):
         "decode_chunk_size": 0,
         "low_vram": "Auto",
         "model": None,
+        "camera_fov_degrees": 0.0,
+        "keep_worker_loaded": True,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -303,6 +305,79 @@ class Live3DG4ValidationTests(unittest.TestCase):
             "the live 512 gate must exercise the preset/default path",
         )
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["3", 0])
+
+    def test_pixal3d_prompt_is_single_image_facade_with_preview_and_save(self) -> None:
+        spec = self.module.CASES["pixal3d_cold_1024"]
+        prompt = self.module.build_prompt(spec, options(), "input.png", "pixal-run")
+        self.assertEqual(prompt["1"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["2"]["class_type"], "ComfyColabPixal3DImageTo3D")
+        self.assertEqual(prompt["2"]["inputs"]["image"], ["1", 0])
+        self.assertEqual(prompt["2"]["inputs"]["quality"], "1024 — Stable")
+        self.assertEqual(prompt["2"]["inputs"]["camera_fov_degrees"], 0.0)
+        self.assertEqual(prompt["2"]["inputs"]["keep_worker_loaded"], True)
+        self.assertNotIn("mode", prompt["2"]["inputs"])
+        self.assertNotIn("num_views", prompt["2"]["inputs"])
+        self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
+        self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
+        self.assertIn("pixal-run-pixal3d_cold_1024", prompt["91"]["inputs"]["filename_prefix"])
+
+    def test_pixal3d_benchmark_requires_machine_resolution_and_tokens(self) -> None:
+        spec = self.module.CASES["pixal3d_cold_1024"]
+        glb = {"bytes": 123, "faces": 45}
+        worker = {
+            "actual_resolution": 1024,
+            "token_count": 42000,
+            "peak_vram_bytes": 1024,
+            "pipeline_load_count": 1,
+            "worker_pid": 4321,
+        }
+        benchmark = self.module.benchmark_from(
+            spec,
+            1.5,
+            2048,
+            glb,
+            "",
+            pixal3d_worker_result=worker,
+        )
+        self.assertEqual(benchmark["actualResolution"], 1024)
+        self.assertEqual(benchmark["tokens"], 42000)
+        self.assertEqual(benchmark["workerPid"], 4321)
+        with self.assertRaisesRegex(RuntimeError, "silent downgrade rejected"):
+            self.module.benchmark_from(
+                spec,
+                1.5,
+                2048,
+                glb,
+                "",
+                pixal3d_worker_result={**worker, "actual_resolution": 896},
+            )
+
+    def test_pixal3d_reuse_case_requires_same_worker_and_single_pipeline_load(self) -> None:
+        spec = self.module.CASES["pixal3d_worker_reuse_1024"]
+        first = {
+            "promptId": "first",
+            "workerPixal3DResult": {"worker_pid": 321, "pipeline_load_count": 1},
+        }
+        second = {
+            "promptId": "second",
+            "workerPixal3DResult": {"worker_pid": 321, "pipeline_load_count": 1},
+        }
+        with mock.patch.object(
+            self.module, "run_prompt_once", side_effect=[first, second]
+        ) as run:
+            result = self.module.run_pixal3d_reuse_case(
+                spec, options(seed=7), "run", "input.png", mock.Mock()
+            )
+        self.assertTrue(result["reuseProof"]["workerReused"])
+        self.assertEqual(result["reuseProof"]["secondSeed"], 8)
+        self.assertEqual(run.call_args_list[1].args[1].seed, 8)
+
+    def test_pixal3d_cancellation_matches_actual_worker_command(self) -> None:
+        spec = self.module.CASES["pixal3d_cancellation_cleanup"]
+        self.assertEqual(
+            self.module.worker_pattern_for(spec),
+            "worker/pixal3d/worker_main.py",
+        )
 
     def test_advanced_prompt_uses_hexadecimal_adapter_cache_key(self) -> None:
         spec = self.module.CASES["advanced_trellis_workflow"]

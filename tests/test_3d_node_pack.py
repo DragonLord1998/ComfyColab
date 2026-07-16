@@ -168,7 +168,8 @@ class FakeIO:
     class ComfyNode:
         pass
 
-    Image = Mask = Combo = Int = Boolean = File3DGLB = String = AnyType = PortFactory()
+    Image = Mask = Combo = Int = Float = Boolean = String = AnyType = PortFactory()
+    File3DGLB = PortFactory("FILE_3D_GLB")
 
     class Hidden:
         unique_id = "UNIQUE_ID"
@@ -255,24 +256,34 @@ class ThreeDNodePackTests(unittest.TestCase):
             else:
                 sys.modules[name] = module
 
-    def test_import_is_lazy_and_exactly_two_nodes_are_public(self):
+    def test_import_is_lazy_and_exactly_three_nodes_are_public(self):
         before = set(sys.modules)
         package = load_package()
         imported = set(sys.modules) - before
-        self.assertFalse({"torch", "trimesh", "numpy", "PIL"} & imported)
+        self.assertFalse({"torch", "trimesh", "numpy", "PIL", "diffusers"} & imported)
         extension = asyncio.run(package.comfy_entrypoint())
         node_classes = asyncio.run(extension.get_node_list())
         schemas = [node.define_schema() for node in node_classes]
         public = [schema.node_id for schema in schemas if not getattr(schema, "is_dev_only", False)]
-        self.assertEqual(public, ["ComfyColabTrellisImageTo3D", "ComfyColabUltraShapeRefine"])
-        trellis, ultra = schemas[:2]
+        self.assertEqual(
+            public,
+            [
+                "ComfyColabTrellisImageTo3D",
+                "ComfyColabUltraShapeRefine",
+                "ComfyColabPixal3DImageTo3D",
+            ],
+        )
+        trellis, ultra, pixal = schemas[:3]
         self.assertEqual(trellis.display_name, "ComfyColab TRELLIS.2 — Image to 3D")
         self.assertIn("early untextured geometry preview", trellis.description)
         self.assertEqual(ultra.display_name, "ComfyColab UltraShape — Refine Geometry")
+        self.assertEqual(pixal.display_name, "ComfyColab Pixal3D — Image to 3D")
         self.assertEqual(trellis.outputs[0]["name"], "model_3d")
         self.assertEqual(ultra.outputs[0]["name"], "refined_model_3d")
+        self.assertEqual(pixal.outputs[0]["name"], "model_3d")
         self.assertTrue(trellis.enable_expand)
         self.assertTrue(ultra.enable_expand)
+        self.assertTrue(pixal.enable_expand)
         trellis_inputs = {item["name"]: item for item in trellis.inputs}
         self.assertIn("exact_resolution", trellis_inputs)
         self.assertNotIn("resolution", trellis_inputs)
@@ -281,8 +292,194 @@ class ThreeDNodePackTests(unittest.TestCase):
         ultra_inputs = {item["name"]: item for item in ultra.inputs}
         self.assertEqual(ultra_inputs["seed"]["max"], (2**31) - 1)
         self.assertEqual(ultra_inputs["detail"]["default"], "Conservative")
+        pixal_inputs = {item["name"]: item for item in pixal.inputs}
+        self.assertEqual(pixal_inputs["quality"]["default"], "1024 — Stable")
+        self.assertEqual(
+            pixal_inputs["quality"]["options"],
+            ["1024 — Stable", "1536 — Experimental"],
+        )
+        self.assertEqual(pixal_inputs["camera_fov_degrees"]["default"], 0.0)
+        self.assertEqual(pixal_inputs["sampling_steps"]["default"], 0)
+        self.assertEqual(pixal_inputs["target_face_count"]["default"], 0)
+        self.assertEqual(pixal_inputs["texture_size"]["default"], 0)
+        self.assertEqual(pixal_inputs["max_tokens"]["default"], 49_152)
+        self.assertEqual(pixal_inputs["keep_worker_loaded"]["default"], True)
+        self.assertEqual(pixal_inputs["seed"]["max"], (2**31) - 1)
+        self.assertEqual(pixal_inputs["cache_mode"]["default"], "Use cache")
+        self.assertNotIn("mode", pixal_inputs)
+        self.assertNotIn("num_views", pixal_inputs)
         encoded_schema = next(schema for schema in schemas if schema.node_id == "ComfyColab3DEncodedMeshToTrimesh")
         self.assertEqual(encoded_schema.inputs[0]["io_type"], "TRELLIS2_SHAPE_LATENT")
+
+    def test_pixal3d_schema_outputs_native_file3d_and_uses_public_category(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        schema = nodes.ComfyColabPixal3DImageTo3D.define_schema()
+        inputs = {item["name"]: item for item in schema.inputs}
+
+        self.assertEqual(schema.category, "ComfyColab/3D")
+        self.assertFalse(getattr(schema, "is_dev_only", False))
+        self.assertEqual(schema.outputs[0]["name"], "model_3d")
+        self.assertEqual(schema.outputs[0]["io_type"], "FILE_3D_GLB")
+        self.assertEqual(list(inputs), [
+            "image",
+            "quality",
+            "seed",
+            "remove_background",
+            "camera_fov_degrees",
+            "sampling_steps",
+            "target_face_count",
+            "texture_size",
+            "max_tokens",
+            "keep_worker_loaded",
+            "cache_mode",
+        ])
+        self.assertEqual(inputs["texture_size"]["default"], 0)
+
+    def test_pixal3d_quality_preserves_1536_experimental_without_downgrade(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        sentinel = object()
+        with mock.patch.object(nodes, "build_pixal3d_graph", return_value=sentinel) as build:
+            self.assertIs(
+                nodes.ComfyColabPixal3DImageTo3D.execute(
+                    "image", quality="1536 — Experimental", cache_mode="Disable cache"
+                ),
+                sentinel,
+            )
+
+        settings = build.call_args.args[1]
+        self.assertEqual(settings.pipeline_type, "1536_cascade")
+        self.assertEqual(settings.texture_size, 4096)
+
+    def test_pixal3d_graph_receives_resolved_settings_and_passes_public_fov_to_worker(self):
+        load_package()
+        graph = importlib.import_module("comfycolab_3d_test.graph")
+        presets = importlib.import_module("comfycolab_3d_test.presets")
+        settings = presets.resolve_pixal3d_settings(
+            "1024 — Stable",
+            sampling_steps=30,
+            target_face_count=500_000,
+            texture_size=2048,
+            max_tokens=49_152,
+        )
+        result = graph.build_pixal3d_graph(
+            "image",
+            settings,
+            seed=3,
+            remove_background="Auto",
+            camera_fov_degrees=60.0,
+            keep_worker_loaded=True,
+            cache_mode="Disable cache",
+            cache_key="b" * 64,
+        )
+        worker = next(
+            item for item in result.expand if item["class_type"] == "ComfyColab3DPixal3DWorker"
+        )
+
+        self.assertEqual(worker["inputs"]["camera_fov_degrees"], 60.0)
+        self.assertEqual(worker["inputs"]["pipeline_type"], "1024_cascade")
+        self.assertEqual(worker["inputs"]["sampling_steps"], 30)
+        self.assertEqual(worker["inputs"]["target_face_count"], 500_000)
+        self.assertEqual(worker["inputs"]["texture_size"], 2048)
+        self.assertEqual(worker["inputs"]["max_tokens"], 49_152)
+
+    def test_pixal3d_cache_key_includes_model_revision_and_suppresses_worker_on_hit(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        cache = importlib.import_module("comfycolab_3d_test.cache")
+        presets = importlib.import_module("comfycolab_3d_test.presets")
+        image = "pixal-cache-image"
+        settings = presets.resolve_pixal3d_settings("1024 — Stable")
+        current = cache.pixal3d_cache_key(
+            image,
+            settings=settings,
+            seed=9,
+            remove_background="Auto",
+            camera_fov_degrees=0.0,
+            source_ref="pixal-source-a",
+            model_ref="pixal-model-a",
+            dinov3_ref="dinov3-a",
+            moge_ref="moge-a",
+            naf_ref="naf-a",
+            environment_ref="env-a",
+        )
+        changed_revision = cache.pixal3d_cache_key(
+            image,
+            settings=settings,
+            seed=9,
+            remove_background="Auto",
+            camera_fov_degrees=0.0,
+            source_ref="pixal-source-b",
+            model_ref="pixal-model-a",
+            dinov3_ref="dinov3-a",
+            moge_ref="moge-a",
+            naf_ref="naf-a",
+            environment_ref="env-a",
+        )
+        self.assertNotEqual(current, changed_revision)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            "os.environ",
+            {
+                "COMFYCOLAB_3D_CACHE": str(Path(directory) / "cache"),
+                "COMFYCOLAB_3D_OUTPUT": str(Path(directory) / "output"),
+            },
+        ):
+            destination = cache.cache_path(Path(directory) / "cache", "pixal3d", current)
+            write_glb(destination, textured=True, volumetric=True)
+            with mock.patch.object(
+                nodes,
+                "pixal3d_cache_key",
+                return_value=current,
+            ), mock.patch.object(
+                nodes,
+                "build_pixal3d_graph",
+                side_effect=AssertionError("cache hit expanded Pixal3D graph"),
+            ):
+                result = nodes.ComfyColabPixal3DImageTo3D.execute(
+                    image, quality="1024 — Stable", seed=9
+                )
+
+        self.assertEqual(result.values[0][1], "glb")
+        self.assertTrue(result.values[0][0].endswith(f"{current}.glb"))
+
+    def test_pixal3d_rejects_invalid_cached_glb_before_cache_hit(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        cache = importlib.import_module("comfycolab_3d_test.cache")
+        key = "d" * 64
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            "os.environ", {"COMFYCOLAB_3D_CACHE": str(Path(directory) / "cache")}
+        ):
+            destination = cache.cache_path(Path(directory) / "cache", "pixal3d", key)
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"not a glb")
+            with mock.patch.object(nodes, "pixal3d_cache_key", return_value=key), mock.patch.object(
+                nodes, "build_pixal3d_graph", return_value=object()
+            ) as build:
+                nodes.ComfyColabPixal3DImageTo3D.execute("image")
+
+        build.assert_called_once()
+        self.assertFalse(destination.exists())
+
+    def test_pixal3d_finalizer_rejects_path_escaping_cache_key_when_cache_disabled(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            "os.environ",
+            {
+                "COMFYCOLAB_3D_CACHE": str(Path(directory) / "cache"),
+                "COMFYCOLAB_3D_OUTPUT": str(Path(directory) / "output"),
+            },
+        ):
+            source = Path(directory) / "model.glb"
+            write_glb(source, textured=True, volumetric=True)
+            with self.assertRaisesRegex(ValueError, "Cache keys"):
+                nodes.ComfyColab3DPixal3DPathToFile3D.execute(
+                    str(source), "../escape", cache_mode="Disable cache"
+                )
+            self.assertFalse((Path(directory) / "escape.glb").exists())
 
     def test_trellis_facade_expands_to_exact_modular_nodes(self):
         package = load_package()
@@ -547,6 +744,12 @@ class ThreeDNodePackTests(unittest.TestCase):
             presets.ULTRASHAPE_EXPERIMENTAL_PRESETS,
             {"Detailed", "Ultra"},
         )
+        pixal_stable = presets.resolve_pixal3d_settings("1024 — Stable")
+        pixal_1536 = presets.resolve_pixal3d_settings("1536 — Experimental")
+        self.assertEqual(pixal_stable.pipeline_type, "1024_cascade")
+        self.assertEqual((pixal_stable.sampling_steps, pixal_stable.target_face_count, pixal_stable.texture_size), (12, 200_000, 2048))
+        self.assertEqual(pixal_1536.pipeline_type, "1536_cascade")
+        self.assertEqual(pixal_1536.texture_size, 4096)
         inverted = transforms.invert_normalization(normalized, transform)
         for expected, actual in zip(asymmetric, inverted):
             for expected_value, actual_value in zip(expected, actual):

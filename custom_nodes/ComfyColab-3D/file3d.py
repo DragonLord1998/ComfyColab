@@ -484,6 +484,8 @@ def materialize_file3d(path: str | Path):
 def publish_glb(path: str | Path, key: str) -> Path:
     source = Path(path)
     validate_glb(source)
+    if not key or Path(key).name != key or key in {".", ".."} or "\\" in key:
+        raise ValueError("Published GLB keys must be non-empty path-safe filenames")
     output_root = Path(os.environ.get("COMFYCOLAB_3D_OUTPUT", "/content/ComfyUI/output/3d"))
     output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / f"{key}.glb"

@@ -28,12 +28,14 @@ def fake_remote_bootstrap():
         TRELLIS_REF="trellis-ref",
         GEOMETRY_REF="geometry-ref",
         ULTRASHAPE_REF="ultrashape-ref",
+        PIXAL3D_REF="pixal3d-ref",
         ULTRASHAPE_CUBVH_REF="cubvh-ref",
         BIREFNET_MODEL_REF="birefnet-ref",
         COMFY_ENV_VERSION="comfy-env-version",
         TRELLIS_PATCH_ID="trellis-patch",
         TRELLIS_CATEGORY_PATCH_ID="trellis-category-patch",
         ULTRASHAPE_PATCH_ID="ultrashape-patch",
+        PIXAL3D_PATCH_ID="pixal3d-patch",
     )
 
 
@@ -55,6 +57,14 @@ def passed_validation_record(module, remote, *, profile="combined-profile"):
         }
         if name.startswith("trellis_"):
             benchmark.update(tokens=256, textureSize=512)
+        if name.startswith("pixal3d_"):
+            benchmark.update(
+                tokens=256,
+                textureSize=2048,
+                workerPeakVramBytes=1024,
+                pipelineLoadCount=1,
+                workerPid=4321,
+            )
         benchmarks[name] = benchmark
     return {
         "schema": module.LIVE_VALIDATION_SCHEMA,
@@ -199,6 +209,65 @@ class Build3DCacheTests(unittest.TestCase):
                 )
             self.assertEqual(manifest["status"], "ready")
             self.assertEqual(manifest["liveValidation"], provenance)
+
+    def test_expected_sources_and_manifest_are_revisioned_for_pixal3d(self) -> None:
+        module = load_module()
+        remote = fake_remote_bootstrap()
+        sources = module.expected_validation_sources(remote)
+        patches = module.expected_validation_patches(remote)
+
+        self.assertEqual(sources["pixal3d"], "pixal3d-ref")
+        self.assertEqual(patches["pixal3d"], "pixal3d-patch")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            validation_path = root / "validation.json"
+            record = passed_validation_record(module, remote)
+            validation_path.write_text(json.dumps(record), encoding="utf-8")
+            loaded = module.load_live_validation_record(
+                validation_path,
+                expected_profile="combined-profile",
+                remote_bootstrap=remote,
+            )
+            workspace = root / ".ce"
+            workspace.mkdir()
+            (workspace / "pixi.toml").write_text("toml", encoding="utf-8")
+            (workspace / "pixi.lock").write_text("lock", encoding="utf-8")
+            (workspace / "install.hash").write_text("install-hash\n", encoding="utf-8")
+            archive = root / "cache.tar.zst"
+            archive.write_bytes(b"archive")
+            with mock.patch.object(module, "runtime_metadata", return_value={"gpu": "G4"}):
+                manifest = module.build_manifest(
+                    template={
+                        "profile": "combined-profile",
+                        "releaseTag": "3d-cache-v3",
+                        "fallbackProfile": "3d-cache-v2",
+                    },
+                    workspace=workspace,
+                    archive=archive,
+                    parts=[],
+                    unpacked_bytes=123,
+                    live_validation=module.live_validation_provenance(validation_path, loaded),
+                    remote_bootstrap=remote,
+                )
+
+        self.assertEqual(manifest["sources"]["pixal3d"], "pixal3d-ref")
+        self.assertEqual(manifest["patches"]["pixal3d"], "pixal3d-patch")
+
+    def test_real_pixal3d_validation_source_schema_matches_checked_in_record(self) -> None:
+        module = load_module()
+        from comfycolab import remote_bootstrap
+
+        expected = module.expected_validation_sources(remote_bootstrap)
+        expected_patches = module.expected_validation_patches(remote_bootstrap)
+        record = json.loads((ROOT / "docs/3d-validation.json").read_text(encoding="utf-8"))
+        pixal_keys = {key for key in expected if key.startswith("pixal3d")}
+        self.assertTrue(pixal_keys)
+        self.assertEqual(
+            {key: record["sources"][key] for key in pixal_keys},
+            {key: expected[key] for key in pixal_keys},
+        )
+        self.assertEqual(record["patches"]["pixal3d"], expected_patches["pixal3d"])
 
 
 if __name__ == "__main__":
