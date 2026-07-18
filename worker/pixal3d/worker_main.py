@@ -27,6 +27,13 @@ PROTOCOL_VERSION = 1
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 NODE_PACK = REPO_ROOT / "custom_nodes" / "ComfyColab-3D"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from multiview import (  # noqa: E402
+    ADAPTER_NAME,
+    run_multiview_projection_fusion,
+    validate_multiview_request,
+)
 
 
 def _emit(prefix: str, payload: dict[str, Any]) -> None:
@@ -165,6 +172,7 @@ def _validate_request(request: dict[str, Any]) -> None:
     fov = request.get("camera_fov_radians")
     if fov is not None and (not math.isfinite(float(fov)) or not 0.0 < float(fov) < math.pi):
         raise ValueError("Manual Pixal3D FOV must be between 0 and pi radians")
+    validate_multiview_request(request)
 
 
 def _sha256(path: Path) -> str:
@@ -251,7 +259,7 @@ class Pixal3DRuntime:
             raise FileNotFoundError("Pinned Pixal3D model snapshot is incomplete")
         if not self.args.dinov3_dir.joinpath("config.json").is_file():
             raise FileNotFoundError("Pinned DINOv3 snapshot is incomplete")
-        if not self.args.moge_dir.joinpath("config.json").is_file():
+        if not self.args.moge_dir.joinpath("model.pt").is_file():
             raise FileNotFoundError("Pinned MoGe snapshot is incomplete")
         for config in self.official.IMAGE_COND_CONFIGS.values():
             config["model_name"] = str(self.args.dinov3_dir)
@@ -322,7 +330,7 @@ class Pixal3DRuntime:
                 "mesh_scale": 1.0,
             }
         moge = self.official.load_moge_model(
-            device="cuda", model_name=str(self.args.moge_dir)
+            device="cuda", model_name=str(self.args.moge_dir / "model.pt")
         )
         try:
             return self.official.get_camera_params_wild_moge(
@@ -406,18 +414,46 @@ class Pixal3DRuntime:
                 "rescale_t": 3.0,
             }
             emit_progress(request_id, "generate", 0, 5)
-            mesh_list, (shape_slat, _tex_slat, actual_resolution) = pipeline.run(
-                image,
-                camera_params=camera_params,
-                seed=int(request["seed"]),
-                sparse_structure_sampler_params=sampler_ss,
-                shape_slat_sampler_params=sampler_shape,
-                tex_slat_sampler_params=sampler_texture,
-                preprocess_image=False,
-                return_latent=True,
-                pipeline_type=str(request["pipeline_type"]),
-                max_num_tokens=int(request["max_tokens"]),
-            )
+            views = validate_multiview_request(request)
+            if views:
+                view_images = [
+                    _prepare_image_without_rmbg(Path(str(view["image_path"])))
+                    for view in views
+                ]
+                mesh_list, (shape_slat, _tex_slat, actual_resolution) = (
+                    run_multiview_projection_fusion(
+                        pipeline,
+                        view_images,
+                        camera_params,
+                        labels=[str(view["name"]) for view in views],
+                        seed=int(request["seed"]),
+                        sparse_structure_sampler_params=sampler_ss,
+                        shape_slat_sampler_params=sampler_shape,
+                        tex_slat_sampler_params=sampler_texture,
+                        pipeline_type=str(request["pipeline_type"]),
+                        max_num_tokens=int(request["max_tokens"]),
+                        fusion_strategy=str(
+                            request.get("fusion_strategy", "directional_softmax")
+                        ),
+                        fusion_temperature=float(
+                            request.get("fusion_temperature", 2.0)
+                        ),
+                        return_latent=True,
+                    )
+                )
+            else:
+                mesh_list, (shape_slat, _tex_slat, actual_resolution) = pipeline.run(
+                    image,
+                    camera_params=camera_params,
+                    seed=int(request["seed"]),
+                    sparse_structure_sampler_params=sampler_ss,
+                    shape_slat_sampler_params=sampler_shape,
+                    tex_slat_sampler_params=sampler_texture,
+                    preprocess_image=False,
+                    return_latent=True,
+                    pipeline_type=str(request["pipeline_type"]),
+                    max_num_tokens=int(request["max_tokens"]),
+                )
             expected_resolution = 1536 if request["pipeline_type"] == "1536_cascade" else 1024
             token_count = self._token_count(shape_slat)
             if int(actual_resolution) != expected_resolution:
@@ -493,6 +529,24 @@ class Pixal3DRuntime:
                 "validation": validation_payload,
                 "bytes": partial_output.stat().st_size,
             }
+            if views:
+                metadata["experimental_multiview"] = {
+                    "adapter": ADAPTER_NAME,
+                    "official_pixal3d_support": False,
+                    "views": [
+                        {
+                            "name": str(view["name"]),
+                            "image_path": str(Path(str(view["image_path"])).resolve()),
+                        }
+                        for view in views
+                    ],
+                    "fusion_strategy": str(
+                        request.get("fusion_strategy", "directional_softmax")
+                    ),
+                    "fusion_temperature": float(
+                        request.get("fusion_temperature", 2.0)
+                    ),
+                }
             partial_metadata.write_text(
                 json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )

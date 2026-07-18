@@ -15,6 +15,10 @@ class ThreeDWorkflowTests(unittest.TestCase):
             WORKFLOWS / "comfycolab_trellis_image_to_3d.json",
             WORKFLOWS / "comfycolab_ultrashape_refine.json",
             WORKFLOWS / "comfycolab_pixal3d_image_to_3d.json",
+            WORKFLOWS / "comfycolab_trellis2mv_to_3d.json",
+            WORKFLOWS / "comfycolab_pixal3dmv_to_3d.json",
+            WORKFLOWS / "comfycolab_skintokens_auto_rig.json",
+            WORKFLOWS / "comfycolab_cubepart_segment.json",
         ]
         for path in paths:
             workflow = json.loads(path.read_text(encoding="utf-8"))
@@ -67,6 +71,26 @@ class ThreeDWorkflowTests(unittest.TestCase):
         self.assertNotIn("num_views", {item["name"] for item in pixal["inputs"]})
         self.assertIn("model_file", linked_preview_inputs)
         self.assertIn("mesh", linked_save_inputs)
+
+    def test_new_multiview_rigging_and_segmentation_workflows_use_public_facades(self) -> None:
+        expected = {
+            "comfycolab_trellis2mv_to_3d.json": "ComfyColabTrellis2MV",
+            "comfycolab_pixal3dmv_to_3d.json": "ComfyColabPixal3DMV",
+            "comfycolab_skintokens_auto_rig.json": "ComfyColabSkinTokensAutoRig",
+            "comfycolab_cubepart_segment.json": "ComfyColabCubePartSegment",
+        }
+        for filename, facade in expected.items():
+            workflow = json.loads((WORKFLOWS / filename).read_text(encoding="utf-8"))
+            types = [node["type"] for node in workflow["nodes"]]
+            self.assertEqual(types.count(facade), 1)
+            self.assertIn("Preview3D", types)
+            self.assertIn("SaveGLB", types)
+
+        cube = json.loads(
+            (WORKFLOWS / "comfycolab_cubepart_segment.json").read_text(encoding="utf-8")
+        )
+        node = next(item for item in cube["nodes"] if item["type"] == "ComfyColabCubePartSegment")
+        self.assertFalse(node["widgets_values"][1], "example must not pre-accept research terms")
 
 
 if __name__ == "__main__":

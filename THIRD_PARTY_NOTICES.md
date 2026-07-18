@@ -59,6 +59,47 @@ hosted service. The current Hugging Face model metadata also flags access as
 disallowed in the EU; ComfyColab does not bypass repository gating or regional
 terms, and users must comply with the model repository's current access rules.
 
+The separate experimental Pixal3DMV node is a ComfyColab adapter. It is not an
+official TencentARC Pixal3D feature and uses no separately released multiview
+weights. Its projection-fusion design is inspired by the methodology in
+ReconViaGen:
+
+- Paper: <https://arxiv.org/abs/2510.23306>
+- Official source: <https://github.com/GAP-LAB-CUHK-SZ/ReconViaGen>
+
+ReconViaGen's public implementation targets its own VGGT/TRELLIS pipeline; this
+notice does not imply compatibility, endorsement, or official Pixal3D support.
+
+## SkinTokens / TokenRig
+
+- Official source: <https://github.com/VAST-AI-Research/SkinTokens>
+- Pinned source revision: `273b691d35989d71cd17ff2895fdc735097b92d1`
+- Model repository: <https://huggingface.co/VAST-AI/SkinTokens>
+- Pinned model revision: `79736cad0fd84de384d5eede659b4ebd24effe33`
+- Qwen3-0.6B configuration repository: <https://huggingface.co/Qwen/Qwen3-0.6B>
+- Pinned Qwen revision: `c1899de289a04d12100db370d81485cdf75e47ca`
+- Source and model license metadata: MIT
+
+ComfyColab downloads the source, checkpoints, and Qwen configuration at runtime
+into temporary Colab storage. The upstream runtime also starts Blender for GLB
+skin export and requires its transitive CUDA, FlashAttention, and package
+licenses.
+
+## CubePart
+
+- Official source: <https://github.com/Roblox/cube/tree/main/cubepart>
+- Pinned source revision: `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50`
+- Model repository: <https://huggingface.co/Roblox/cubepart>
+- Pinned model revision: `28431d124e77040fcaf34c0a71623ff61d35a6c0`
+- Code terms: Cube3D Research-Only RAIL-MS repository license
+- Model metadata: OpenRAIL, subject to the upstream repository terms
+
+The CubePart node is disabled until the user explicitly enables
+`accept_research_license`. ComfyColab does not redistribute its approximately
+10 GB checkpoint set and does not convert the research-only terms into a
+commercial license. The upstream method is schema-conditioned part
+decomposition; ComfyColab does not represent it as unlabeled segmentation.
+
 ## DINOv2 Large
 
 - Model: <https://huggingface.co/facebook/dinov2-large>
@@ -80,12 +121,17 @@ stored only in the checksum-pinned environment cache release.
 ## TRELLIS.2 and ComfyUI integrations
 
 - TRELLIS.2 ComfyUI wrapper: <https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2>
+- Pinned wrapper revision: `9b878516f2dc2fd873f4f6cceadba403dd12d83e`
 - GeometryPack: <https://github.com/PozzettiAndrea/ComfyUI-GeometryPack>
 - Microsoft TRELLIS.2 model: <https://huggingface.co/microsoft/TRELLIS.2-4B>
 
 The wrapper and model licenses, conditioning-model terms, and all transitive
 CUDA/package licenses remain applicable. ComfyColab preserves upstream node
 IDs and contracts and keeps the complete advanced node suites installed.
+
+The public TRELLIS2MV facade calls the wrapper's multiview node. ComfyColab's
+revision-checked patch only caches its spatial camera-blend weights once per
+sampler run; it does not change the active views or blending equation.
 
 The TRELLIS wrapper's default background-removal path uses
 `ZhengPeng7/BiRefNet`. ComfyColab pins both its weights and trusted remote code

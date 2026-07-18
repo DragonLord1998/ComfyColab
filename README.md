@@ -12,7 +12,8 @@ terminal.
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
-- Simple 3D nodes for TRELLIS.2, TripoSplat, Pixal3D, and UltraShape
+- Simple 3D nodes for TRELLIS.2, TRELLIS2MV, TripoSplat, Pixal3D,
+  experimental Pixal3DMV, UltraShape, SkinTokens rigging, and CubePart decomposition
 - The complete advanced TRELLIS.2 and GeometryPack node suites
 - On-demand model downloads with checksums and resume support
 - A public Cloudflare URL for the ComfyUI interface
@@ -80,9 +81,9 @@ left consuming compute units.
 3. It clones tested versions of ComfyUI and ComfyUI-GGUF into `/content`.
 4. On a matching G4 runtime, it restores the checksum-verified combined 3D
    cache when available, with the existing TRELLIS.2 cache as a rollback path.
-5. It clones pinned TRELLIS.2, GeometryPack, UltraShape, and Pixal3D sources,
-   applies revision-checked compatibility patches, and links all first-party
-   ComfyColab node packs.
+5. It clones pinned TRELLIS.2, GeometryPack, UltraShape, Pixal3D, SkinTokens,
+   and CubePart sources, applies revision-checked compatibility patches, and
+   links all first-party ComfyColab node packs.
 6. It starts ComfyUI and a Cloudflare quick tunnel.
 7. It prints the browser URL in your Mac terminal.
 
@@ -179,14 +180,18 @@ ComfyColab / 3D
 or search for:
 
 - **ComfyColab TRELLIS.2 — Image to 3D**
+- **ComfyColab TRELLIS2MV — Multi-View to 3D**
 - **ComfyColab UltraShape — Refine Geometry**
 - **ComfyColab TripoSplat — Image to Gaussian Splat**
 - **ComfyColab Pixal3D — Image to 3D**
+- **ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D**
+- **ComfyColab SkinTokens — Auto Rig 3D**
+- **ComfyColab CubePart — Segment 3D Parts**
 
-TRELLIS.2, Pixal3D, and UltraShape output native GLB `File3D` results, so they
-connect directly to **Preview 3D & Animation** and **Save 3D Model**. TripoSplat
-outputs a native ComfyUI `SPLAT` plus a splat `FILE_3D`. The four facades are the
-only normal-search ComfyColab 3D nodes; their adapters remain development-only.
+The mesh nodes output native GLB `File3D` results, so they connect directly to
+**Preview 3D & Animation** and **Save 3D Model**. TripoSplat outputs a native
+ComfyUI `SPLAT` plus a splat `FILE_3D`. Worker and graph adapters remain
+development-only.
 
 ### TRELLIS.2 — Image to 3D
 
@@ -216,6 +221,20 @@ ComfyColab does not rerun at 1408, 1280, 1152, or 1024 behind your back.
 `remove_background=Auto` uses the pinned TRELLIS BiRefNet node. `Off` supplies
 an all-foreground mask. The advanced TRELLIS inputs use `0` for their preset
 value, except `max_tokens`, whose visible default is `49152`.
+
+### TRELLIS2MV — Multi-View to 3D
+
+Connect four labeled horizontal views in this exact order: front, back, left,
+and right. Top and bottom are an optional pair, so the node accepts either four
+or six views. Geometry uses the pinned community
+`Trellis2MultiViewImageToShape` implementation; PBR texturing uses the front
+reference because the wrapper's released texture stage remains single-view.
+
+ComfyColab applies a revision-checked efficiency patch that computes the
+directional spatial blend weights once per diffusion run instead of rebuilding
+the same 3D weights at every step. The active cameras, softmax math, and model
+predictions are unchanged. This multiview sampler is a community extension, not
+an official Microsoft TRELLIS.2 capability claim.
 
 ### TripoSplat — Image to Gaussian Splat
 
@@ -269,6 +288,43 @@ recomputes and overwrites the Pixal3D result, and `Disable cache` avoids result
 cache reads and writes. Every Pixal3D live G4 gate is still pending; the local
 workflow and contract tests do not prove model execution or output quality.
 
+### Pixal3DMV — Experimental Multi-View to 3D
+
+Pixal3DMV accepts the same four required labeled views and optional top/bottom
+pair as TRELLIS2MV. It is an explicit experimental ComfyColab adapter, not an
+official Pixal3D mode. Inspired by ReconViaGen's multiview reconstruction
+strategy, it runs Pixal3D's own projection conditioners for each canonical
+camera and fuses view-aligned projected features before the existing Pixal3D
+samplers. It does not make a contact sheet, average output meshes, or pretend a
+batch of unrelated single-image runs is multiview inference.
+
+`Directional projection` uses spatial softmax weights so each 3D location
+favors the nearest labeled camera; `Average projection` is a diagnostic equal
+blend. Both modes average global image features and preserve the official
+single-view tensor contracts downstream. This zero-shot adapter has local
+contract tests only and remains pending a real G4 quality/VRAM validation.
+
+### SkinTokens — Auto Rig 3D
+
+Connect a GLB and run **ComfyColab SkinTokens — Auto Rig 3D** to generate a
+skeleton hierarchy and dense per-vertex skin weights with the pinned
+SkinTokens/TokenRig release. `preserve_texture=true` enables the upstream
+transfer path, while `use_postprocess` opts into its voxel skin cleanup. The
+first run provisions a separate CUDA worker environment and model artifacts;
+the documented upstream minimum is an NVIDIA GPU with at least 14 GB VRAM.
+
+### CubePart — Segment 3D Parts
+
+CubePart is schema-conditioned decomposition: provide an ordered comma- or
+newline-separated list such as `body, wheel, handle`. It returns a combined
+colored GLB, a persistent directory containing one GLB per generated part, and
+a JSON manifest. It does not perform unlabeled segment-anything inference.
+
+The source and weights carry research-oriented RAIL terms, so the node refuses
+to provision artifacts or run until `accept_research_license=true`. Review the
+upstream terms first; that switch records acceptance for the request but does
+not change or bypass the license.
+
 ### UltraShape — Refine Geometry
 
 Connect a native GLB from TRELLIS (or another File3D-producing node), connect
@@ -318,7 +374,10 @@ Pipeline results are stored under:
 ```text
 /content/.comfycolab/cache/3d/
   trellis/<key>/model.glb
+  trellis-multiview/<key>/model.glb
   pixal3d/<key>/model.glb
+  skintokens/<key>/model.glb + metadata.json
+  cubepart/<key>/parts.glb + part GLBs + manifest.json
   ultrashape/<key>/geometry.glb + transform.json + record.json
   texture/<key>/model.glb
 ```

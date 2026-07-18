@@ -24,6 +24,8 @@ ID, completion time, and passed-gate list for auditability.
 | Pixal3D source | `cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af` |
 | Pixal3D model | `0b31f9160aa400719af409098bff7936a932f726` |
 | Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1` |
+| SkinTokens source/model | `273b691d35989d71cd17ff2895fdc735097b92d1` / `VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33` |
+| CubePart source/model | `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50` / `Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
 | cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
 | BiRefNet | `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4` |
@@ -32,7 +34,8 @@ ID, completion time, and passed-gate list for auditability.
 
 ## Local contract gates
 
-- [x] Exactly four public ComfyColab 3D nodes; all adapters are dev-only.
+- [x] Exactly eight public ComfyColab 3D nodes across the mesh and TripoSplat
+      packs; graph and worker adapters are dev-only.
 - [x] Import does not load torch, trimesh, NumPy, Pillow, or initialize CUDA.
 - [x] TRELLIS facade expands through the pinned modular node IDs and never uses
       `Trellis2ExportGLB`.
@@ -58,7 +61,14 @@ ID, completion time, and passed-gate list for auditability.
 - [x] Pixal3D local workflow and prompt construction are single-image-only,
       expose `1024 — Stable` and `1536 — Experimental`, and include no
       `mode` or `num_views` input. This is local contract coverage only.
-- [x] `scripts/check.sh` passes: 188 tests on 2026-07-16.
+- [x] TRELLIS2MV and experimental Pixal3DMV expose ordered four-view inputs
+      with optional paired top/bottom views. Pixal3DMV serializes real
+      view-aligned projection fusion and never uses a contact sheet.
+- [x] SkinTokens worker protocol validates skeleton/skin bindings and cleans
+      cancelled outputs. CubePart gates provisioning on explicit research
+      license acceptance and validates ordered per-part manifests.
+- [x] `scripts/check.sh` passes: 243 tests on 2026-07-16 (two optional Pillow
+      preprocess tests skipped in the minimal local environment).
 
 ## Live G4 benchmark table
 
@@ -85,6 +95,10 @@ path rather than a manual 512 override.
 | Pixal3D worker reuse 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
 | Pixal3D preview/save GLB reader | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
 | Pixal3D 1536 experimental | 1536 requested | n/a | pending | pending | pending | pending | 4096 requested | pending live G4 |
+| TRELLIS2MV four-view | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| Pixal3DMV four-view experimental | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| SkinTokens auto-rig | n/a | n/a | pending | pending | pending rigged GLB | pending joints/skins | preserve input | pending live G4 |
+| CubePart schema decomposition | n/a | n/a | pending | pending | pending combined/per-part GLBs | pending part count | colored parts | pending live G4 |
 
 `Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
 `Detailed` and `Ultra` preserve their existing 1024 semantics and remain
@@ -140,6 +154,12 @@ Preview3D compatibility, and SaveGLB compatibility are all pending live G4
 gates. Do not promote the Pixal3D worker cache or mark any Pixal3D gate passed
 from local workflow JSON or unit tests alone.
 
+The same evidence boundary applies to the new nodes. TRELLIS2MV needs genuine
+four- and six-view GLBs, Pixal3DMV needs quality and VRAM evidence from its
+experimental four-view projection fusion, SkinTokens needs a GLB with verified
+skins/joints, and CubePart needs a combined scene plus ordered per-part GLBs.
+Local protocol/schema tests do not satisfy those gates.
+
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
 WebSocket proof before this UI behavior is counted as release evidence.
@@ -177,7 +197,7 @@ provenance.
 - [ ] Cancellation leaves no child process, partial GLB, or retained allocation
 - [ ] Existing advanced TRELLIS workflow passes the new semantic geometry gate
       (its prior structural load/execute check remains recorded)
-- [ ] All four facade outputs connect directly to Preview 3D and Save 3D Model
+- [ ] All eight public 3D outputs connect to their native preview/save nodes
 - [ ] TripoSplat fast 65K produces a structurally valid binary little-endian
       PLY/3DGS FILE_3D artifact with digest, bytes, Gaussian count, runtime,
       peak VRAM, revision, Preview3D, and save-node proof
@@ -186,3 +206,7 @@ provenance.
 - [ ] Pixal3D cache hit performs no worker inference
 - [ ] Pixal3D cancellation leaves no worker process, partial GLB, or retained allocation
 - [ ] Pixal3D 1536 experimental completes without silent downgrade
+- [ ] TRELLIS2MV four-view and six-view runs produce textured GLBs
+- [ ] Pixal3DMV four-view experimental run produces a textured GLB without a contact sheet
+- [ ] SkinTokens produces a rigged GLB with valid skin, joints, and skinned mesh nodes
+- [ ] CubePart produces a combined GLB, ordered per-part GLBs, and matching manifest

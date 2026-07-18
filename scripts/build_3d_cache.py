@@ -31,6 +31,8 @@ REQUIRED_LIVE_GATES = (
     "trellis_1024_cascade_textured_glb",
     "trellis_1536_cascade_genuine",
     "trellis_1536_default_cap_no_downgrade",
+    "trellis_multiview_4view_textured_glb",
+    "trellis_multiview_6view_textured_glb",
     "combined_environment_cuda_probes",
     "ultrashape_384_refinement",
     "ultrashape_512_refinement",
@@ -44,6 +46,9 @@ REQUIRED_LIVE_GATES = (
     "pixal3d_cancellation_cleanup",
     "pixal3d_preview_save_glb_reader",
     "pixal3d_1536_experimental",
+    "pixal3d_multiview_4view_experimental_glb",
+    "skintokens_auto_rig_glb",
+    "cubepart_schema_decomposition_glb",
     "full_workflow_hard_surface",
     "full_workflow_organic",
     "full_workflow_thin",
@@ -116,6 +121,26 @@ def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
         })
     elif hasattr(remote_bootstrap, "PIXAL3D_REF"):
         sources["pixal3d"] = remote_bootstrap.PIXAL3D_REF
+    if hasattr(remote_bootstrap, "SKINTOKENS_REF"):
+        sources.update({
+            "skinTokens": remote_bootstrap.SKINTOKENS_REF,
+            "skinTokensModel": (
+                f"{remote_bootstrap.SKINTOKENS_MODEL_REPO}@"
+                f"{remote_bootstrap.SKINTOKENS_MODEL_REF}"
+            ),
+            "skinTokensQwen": (
+                f"{remote_bootstrap.SKINTOKENS_QWEN_REPO}@"
+                f"{remote_bootstrap.SKINTOKENS_QWEN_REF}"
+            ),
+        })
+    if hasattr(remote_bootstrap, "CUBEPART_REF"):
+        sources.update({
+            "cubePart": remote_bootstrap.CUBEPART_REF,
+            "cubePartModel": (
+                f"{remote_bootstrap.CUBEPART_MODEL_REPO}@"
+                f"{remote_bootstrap.CUBEPART_MODEL_REF}"
+            ),
+        })
     return sources
 
 
@@ -128,6 +153,11 @@ def expected_validation_patches(remote_bootstrap) -> dict[str, str]:
     pixal3d_patch = getattr(remote_bootstrap, "PIXAL3D_PATCH_ID", None)
     if pixal3d_patch is not None:
         patches["pixal3d"] = pixal3d_patch
+    trellis_multiview_patch = getattr(
+        remote_bootstrap, "TRELLIS_MULTIVIEW_PATCH_ID", None
+    )
+    if trellis_multiview_patch is not None:
+        patches["trellisMultiview"] = trellis_multiview_patch
     return patches
 
 

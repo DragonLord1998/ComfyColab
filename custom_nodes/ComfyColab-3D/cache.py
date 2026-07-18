@@ -13,6 +13,10 @@ TRELLIS_RESULT_SCHEMA = "comfycolab-trellis-result-v2"
 ULTRASHAPE_GEOMETRY_SCHEMA = "comfycolab-ultrashape-geometry-v2"
 TEXTURE_RESULT_SCHEMA = "comfycolab-texture-result-v2"
 PIXAL3D_RESULT_SCHEMA = "comfycolab-pixal3d-result-v1"
+TRELLIS_MULTIVIEW_RESULT_SCHEMA = "comfycolab-trellis-multiview-result-v1"
+PIXAL3D_MULTIVIEW_RESULT_SCHEMA = "comfycolab-pixal3d-multiview-result-v1"
+SKINTOKENS_RESULT_SCHEMA = "comfycolab-skintokens-rig-result-v1"
+CUBEPART_RESULT_SCHEMA = "comfycolab-cubepart-segmentation-result-v1"
 
 
 def _stable_value(value: Any) -> Any:
@@ -77,6 +81,42 @@ def trellis_cache_key(
         comfyui_ref=comfyui_ref,
         trellis_ref=trellis_ref,
         trellis_patch_id=trellis_patch_id,
+        birefnet_ref=birefnet_ref,
+        result_schema=result_schema,
+    )
+
+
+def trellis_multiview_cache_key(
+    views: dict[str, Any],
+    *,
+    settings: Any,
+    seed: int,
+    remove_background: str,
+    front_axis: str,
+    blend_temperature: float,
+    comfyui_ref: str,
+    trellis_ref: str,
+    trellis_patch_id: str,
+    trellis_multiview_patch_id: str,
+    birefnet_ref: str,
+    result_schema: str = TRELLIS_MULTIVIEW_RESULT_SCHEMA,
+) -> str:
+    return deterministic_cache_key(
+        "trellis-multiview",
+        views=views,
+        background_policy=remove_background,
+        seed=seed,
+        resolution=settings.resolution,
+        sampling_steps=settings.sampling_steps,
+        target_face_count=settings.target_face_count,
+        texture_size=settings.texture_size,
+        max_tokens=settings.max_tokens,
+        front_axis=front_axis,
+        blend_temperature=float(blend_temperature),
+        comfyui_ref=comfyui_ref,
+        trellis_ref=trellis_ref,
+        trellis_patch_id=trellis_patch_id,
+        trellis_multiview_patch_id=trellis_multiview_patch_id,
         birefnet_ref=birefnet_ref,
         result_schema=result_schema,
     )
@@ -178,6 +218,101 @@ def pixal3d_cache_key(
         dinov3_ref=dinov3_ref,
         moge_ref=moge_ref,
         naf_ref=naf_ref,
+        environment_ref=environment_ref,
+        result_schema=result_schema,
+    )
+
+
+def pixal3d_multiview_cache_key(
+    views: dict[str, Any],
+    *,
+    settings: Any,
+    seed: int,
+    remove_background: str,
+    camera_fov_degrees: float,
+    fusion_strategy: str,
+    fusion_temperature: float,
+    source_ref: str,
+    model_ref: str,
+    dinov3_ref: str,
+    moge_ref: str,
+    naf_ref: str,
+    environment_ref: str,
+    result_schema: str = PIXAL3D_MULTIVIEW_RESULT_SCHEMA,
+) -> str:
+    camera_policy = (
+        "moge-auto-per-view" if float(camera_fov_degrees) <= 0.0
+        else {"manual_fov_radians": math.radians(float(camera_fov_degrees))}
+    )
+    return deterministic_cache_key(
+        "pixal3d-multiview",
+        views=views,
+        background_policy=remove_background,
+        camera_policy=camera_policy,
+        fusion_strategy=fusion_strategy,
+        fusion_temperature=float(fusion_temperature),
+        seed=seed,
+        pipeline_type=settings.pipeline_type,
+        low_vram=settings.low_vram,
+        sampling_steps=settings.sampling_steps,
+        target_face_count=settings.target_face_count,
+        texture_size=settings.texture_size,
+        max_tokens=settings.max_tokens,
+        source_ref=source_ref,
+        model_ref=model_ref,
+        dinov3_ref=dinov3_ref,
+        moge_ref=moge_ref,
+        naf_ref=naf_ref,
+        environment_ref=environment_ref,
+        result_schema=result_schema,
+    )
+
+
+def skintokens_cache_key(
+    source_glb: Any,
+    *,
+    preserve_texture: bool,
+    use_postprocess: bool,
+    source_ref: str,
+    model_ref: str,
+    qwen_ref: str,
+    environment_ref: str,
+    result_schema: str = SKINTOKENS_RESULT_SCHEMA,
+) -> str:
+    return deterministic_cache_key(
+        "skintokens-rig",
+        source_glb=source_glb,
+        preserve_texture=bool(preserve_texture),
+        use_postprocess=bool(use_postprocess),
+        source_ref=source_ref,
+        model_ref=model_ref,
+        qwen_ref=qwen_ref,
+        environment_ref=environment_ref,
+        result_schema=result_schema,
+    )
+
+
+def cubepart_cache_key(
+    source_geometry_digest: str,
+    *,
+    part_names: list[str],
+    guidance_scale: float,
+    num_inference_steps: int,
+    seed: int,
+    source_ref: str,
+    model_ref: str,
+    environment_ref: str,
+    result_schema: str = CUBEPART_RESULT_SCHEMA,
+) -> str:
+    return deterministic_cache_key(
+        "cubepart-segmentation",
+        canonical_geometry=source_geometry_digest,
+        part_names=part_names,
+        guidance_scale=float(guidance_scale),
+        num_inference_steps=int(num_inference_steps),
+        seed=int(seed),
+        source_ref=source_ref,
+        model_ref=model_ref,
         environment_ref=environment_ref,
         result_schema=result_schema,
     )

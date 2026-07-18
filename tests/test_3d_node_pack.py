@@ -256,7 +256,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             else:
                 sys.modules[name] = module
 
-    def test_import_is_lazy_and_exactly_three_nodes_are_public(self):
+    def test_import_is_lazy_and_exactly_seven_nodes_are_public(self):
         before = set(sys.modules)
         package = load_package()
         imported = set(sys.modules) - before
@@ -269,15 +269,31 @@ class ThreeDNodePackTests(unittest.TestCase):
             public,
             [
                 "ComfyColabTrellisImageTo3D",
+                "ComfyColabTrellis2MV",
                 "ComfyColabUltraShapeRefine",
                 "ComfyColabPixal3DImageTo3D",
+                "ComfyColabPixal3DMV",
+                "ComfyColabSkinTokensAutoRig",
+                "ComfyColabCubePartSegment",
             ],
         )
-        trellis, ultra, pixal = schemas[:3]
+        schemas_by_id = {schema.node_id: schema for schema in schemas}
+        trellis = schemas_by_id["ComfyColabTrellisImageTo3D"]
+        ultra = schemas_by_id["ComfyColabUltraShapeRefine"]
+        pixal = schemas_by_id["ComfyColabPixal3DImageTo3D"]
+        trellis_mv = schemas_by_id["ComfyColabTrellis2MV"]
+        pixal_mv = schemas_by_id["ComfyColabPixal3DMV"]
+        skintokens = schemas_by_id["ComfyColabSkinTokensAutoRig"]
+        cubepart = schemas_by_id["ComfyColabCubePartSegment"]
         self.assertEqual(trellis.display_name, "ComfyColab TRELLIS.2 — Image to 3D")
         self.assertIn("early untextured geometry preview", trellis.description)
         self.assertEqual(ultra.display_name, "ComfyColab UltraShape — Refine Geometry")
         self.assertEqual(pixal.display_name, "ComfyColab Pixal3D — Image to 3D")
+        self.assertEqual(trellis_mv.display_name, "ComfyColab TRELLIS2MV — Multi-View to 3D")
+        self.assertIn("not official Pixal3D multiview support", pixal_mv.description)
+        self.assertEqual(skintokens.outputs[0]["name"], "rigged_model_3d")
+        self.assertEqual(cubepart.outputs[0]["name"], "segmented_model_3d")
+        self.assertIn("not unlabeled", cubepart.description)
         self.assertEqual(trellis.outputs[0]["name"], "model_3d")
         self.assertEqual(ultra.outputs[0]["name"], "refined_model_3d")
         self.assertEqual(pixal.outputs[0]["name"], "model_3d")
@@ -335,6 +351,92 @@ class ThreeDNodePackTests(unittest.TestCase):
             "cache_mode",
         ])
         self.assertEqual(inputs["texture_size"]["default"], 0)
+
+    def test_multiview_and_mesh_postprocess_schemas_are_truthfully_labeled(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        trellis = nodes.ComfyColabTrellis2MV.define_schema()
+        pixal = nodes.ComfyColabPixal3DMV.define_schema()
+        skin = nodes.ComfyColabSkinTokensAutoRig.define_schema()
+        cube = nodes.ComfyColabCubePartSegment.define_schema()
+
+        for schema in (trellis, pixal):
+            inputs = {item["name"]: item for item in schema.inputs}
+            self.assertFalse(any(inputs[name].get("optional") for name in ("front_image", "back_image", "left_image", "right_image")))
+            self.assertTrue(inputs["top_image"]["optional"])
+            self.assertTrue(inputs["bottom_image"]["optional"])
+            self.assertEqual(schema.outputs[0]["io_type"], "FILE_3D_GLB")
+
+        self.assertIn("ReconViaGen-inspired", pixal.description)
+        self.assertEqual(skin.inputs[1]["name"], "preserve_texture")
+        cube_inputs = {item["name"]: item for item in cube.inputs}
+        self.assertFalse(cube_inputs["accept_research_license"]["default"])
+        self.assertEqual([item["name"] for item in cube.outputs], [
+            "segmented_model_3d", "parts_directory", "manifest_json"
+        ])
+
+    def test_multiview_graphs_preserve_labeled_view_order_and_real_worker_nodes(self):
+        load_package()
+        graph = importlib.import_module("comfycolab_3d_test.graph")
+        presets = importlib.import_module("comfycolab_3d_test.presets")
+
+        trellis_result = graph.build_trellis_multiview_graph(
+            "front",
+            presets.resolve_trellis_settings("1024 — Quality"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            seed=1,
+            remove_background="Off",
+            front_axis="z",
+            blend_temperature=2.0,
+            cache_mode="Disable cache",
+            cache_key="a" * 64,
+        )
+        trellis_shape = next(
+            item for item in trellis_result.expand
+            if item["class_type"] == "Trellis2MultiViewImageToShape"
+        )
+        self.assertEqual(
+            [name for name in trellis_shape["inputs"] if name.endswith("_image")],
+            ["front_image", "back_image", "left_image", "right_image"],
+        )
+        self.assertNotIn("top_image", trellis_shape["inputs"])
+
+        pixal_result = graph.build_pixal3d_multiview_graph(
+            "front",
+            presets.resolve_pixal3d_settings("1024 — Stable"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            seed=2,
+            remove_background="Off",
+            camera_fov_degrees=0.0,
+            fusion_strategy="directional_softmax",
+            fusion_temperature=2.0,
+            keep_worker_loaded=True,
+            cache_mode="Disable cache",
+            cache_key="b" * 64,
+        )
+        pixal_worker = next(
+            item for item in pixal_result.expand
+            if item["class_type"] == "ComfyColab3DPixal3DMultiViewWorker"
+        )
+        self.assertEqual(pixal_worker["inputs"]["fusion_strategy"], "directional_softmax")
+        self.assertEqual(
+            [name for name in pixal_worker["inputs"] if name.endswith("_image")],
+            ["front_image", "back_image", "left_image", "right_image"],
+        )
+
+    def test_cubepart_public_node_blocks_before_provisioning_without_license_acceptance(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        with mock.patch.object(
+            nodes, "_load_worker_artifact_provisioner",
+            side_effect=AssertionError("license gate provisioned artifacts"),
+        ):
+            with self.assertRaisesRegex(PermissionError, "research-only"):
+                nodes.ComfyColabCubePartSegment.execute("input.glb")
 
     def test_pixal3d_quality_preserves_1536_experimental_without_downgrade(self):
         load_package()

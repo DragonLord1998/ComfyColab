@@ -47,6 +47,8 @@ COMFY_DIR = CONTENT / "ComfyUI"
 REPO_DIR = CONTENT / "ComfyColab"
 ULTRASHAPE_DIR = CONTENT / "UltraShape-1.0"
 PIXAL3D_DIR = CONTENT / "Pixal3D"
+SKINTOKENS_DIR = CONTENT / "SkinTokens"
+CUBE_DIR = CONTENT / "cube"
 STATE_DIR = CONTENT / ".comfycolab"
 STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
@@ -65,12 +67,21 @@ GEOMETRY_REF = "c67199de05705642258e727fa118f412877b4ebf"
 ULTRASHAPE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
 TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
 TRELLIS_CATEGORY_PATCH_ID = "trellis2-advanced-categories-v1"
+TRELLIS_MULTIVIEW_PATCH_ID = "trellis2-multiview-weight-cache-v1"
 ULTRASHAPE_PATCH_ID = "ultrashape-inference-compat-v3"
 COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
 PIXAL3D_CACHE_MANIFEST = "pixal3d-g4-v1.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 PIXAL3D_REF = "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af"
+SKINTOKENS_REF = "273b691d35989d71cd17ff2895fdc735097b92d1"
+CUBEPART_REF = "3c6d06ddbef3160a1e1950cb13ab63dd12a61e50"
+SKINTOKENS_MODEL_REPO = "VAST-AI/SkinTokens"
+SKINTOKENS_MODEL_REF = "79736cad0fd84de384d5eede659b4ebd24effe33"
+SKINTOKENS_QWEN_REPO = "Qwen/Qwen3-0.6B"
+SKINTOKENS_QWEN_REF = "c1899de289a04d12100db370d81485cdf75e47ca"
+CUBEPART_MODEL_REPO = "Roblox/cubepart"
+CUBEPART_MODEL_REF = "28431d124e77040fcaf34c0a71623ff61d35a6c0"
 PIXAL3D_MODEL_REPO = "TencentARC/Pixal3D"
 PIXAL3D_MODEL_REF = "0b31f9160aa400719af409098bff7936a932f726"
 PIXAL3D_DINOV3_MODEL_REPO = "camenduru/dinov3-vitl16-pretrain-lvd1689m"
@@ -1823,6 +1834,16 @@ def main() -> None:
         PIXAL3D_REF,
     )
     clone_or_update(
+        "https://github.com/VAST-AI-Research/SkinTokens.git",
+        SKINTOKENS_DIR,
+        SKINTOKENS_REF,
+    )
+    clone_or_update(
+        "https://github.com/Roblox/cube.git",
+        CUBE_DIR,
+        CUBEPART_REF,
+    )
+    clone_or_update(
         str(CONFIG["repository_url"]),
         REPO_DIR,
         str(CONFIG["repository_ref"]),
@@ -1834,6 +1855,10 @@ def main() -> None:
     trellis_category_patch = apply_pinned_patch(
         TRELLIS_DIR,
         REPO_DIR / "patches" / "trellis2-advanced-categories.json",
+    )
+    trellis_multiview_patch = apply_pinned_patch(
+        TRELLIS_DIR,
+        REPO_DIR / "patches" / "trellis2-multiview-weight-cache.json",
     )
     ultrashape_patch = apply_pinned_patch(
         ULTRASHAPE_DIR,
@@ -1862,6 +1887,16 @@ def main() -> None:
     environment["COMFYCOLAB_PIXAL3D_MOGE_MODEL_REF"] = PIXAL3D_MOGE_MODEL_REF
     environment["COMFYCOLAB_PIXAL3D_NAF_REF"] = PIXAL3D_NAF_REF
     environment["COMFYCOLAB_PIXAL3D_ENVIRONMENT_REF"] = PIXAL3D_ENVIRONMENT_REF
+    environment["COMFYCOLAB_SKINTOKENS_SOURCE"] = str(SKINTOKENS_DIR)
+    environment["COMFYCOLAB_SKINTOKENS_SOURCE_REF"] = SKINTOKENS_REF
+    environment["COMFYCOLAB_SKINTOKENS_MODEL_REPO"] = SKINTOKENS_MODEL_REPO
+    environment["COMFYCOLAB_SKINTOKENS_MODEL_REF"] = SKINTOKENS_MODEL_REF
+    environment["COMFYCOLAB_SKINTOKENS_QWEN_REPO"] = SKINTOKENS_QWEN_REPO
+    environment["COMFYCOLAB_SKINTOKENS_QWEN_REF"] = SKINTOKENS_QWEN_REF
+    environment["COMFYCOLAB_CUBEPART_SOURCE"] = str(CUBE_DIR / "cubepart")
+    environment["COMFYCOLAB_CUBEPART_SOURCE_REF"] = CUBEPART_REF
+    environment["COMFYCOLAB_CUBEPART_MODEL_REPO"] = CUBEPART_MODEL_REPO
+    environment["COMFYCOLAB_CUBEPART_MODEL_REF"] = CUBEPART_MODEL_REF
     comfy: subprocess.Popen[bytes] | None = None
     tunnel: subprocess.Popen[bytes] | None = None
     ready = False
@@ -1941,6 +1976,11 @@ def main() -> None:
             "geometryCommit": git_commit(GEOMETRY_DIR),
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
             "pixal3dCommit": git_commit(PIXAL3D_DIR),
+            "skinTokensCommit": git_commit(SKINTOKENS_DIR),
+            "cubePartCommit": git_commit(CUBE_DIR),
+            "skinTokensModelRef": SKINTOKENS_MODEL_REF,
+            "skinTokensQwenRef": SKINTOKENS_QWEN_REF,
+            "cubePartModelRef": CUBEPART_MODEL_REF,
             "birefnetModelRef": BIREFNET_MODEL_REF,
             "triposplatCoreRef": COMFY_REF,
             "triposplatCoreReady": True,
@@ -1951,6 +1991,7 @@ def main() -> None:
             "pixal3dEnvironmentRef": PIXAL3D_ENVIRONMENT_REF,
             "trellisPatch": trellis_patch,
             "trellisCategoryPatch": trellis_category_patch,
+            "trellisMultiviewPatch": trellis_multiview_patch,
             "ultrashapePatch": ultrashape_patch,
             "comfyEnvTimeoutPatch": COMFY_ENV_TIMEOUT_PATCH_ID,
             "isolatedCallTimeoutSeconds": int(environment["COMFY_ENV_CALL_TIMEOUT"]),

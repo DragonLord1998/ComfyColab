@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import atexit
 import json
-import math
 import os
 import queue
 import signal
@@ -13,166 +12,93 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TextIO
 
-from .geometry_quality import validate_volumetric_glb
+from .file3d import validate_glb
 
 
-READY_PREFIX = "COMFYCOLAB_PIXAL3D_READY="
-PROGRESS_PREFIX = "COMFYCOLAB_PIXAL3D_PROGRESS="
-RESULT_PREFIX = "COMFYCOLAB_PIXAL3D_RESULT="
+READY_PREFIX = "COMFYCOLAB_SKINTOKENS_READY="
+PROGRESS_PREFIX = "COMFYCOLAB_SKINTOKENS_PROGRESS="
+RESULT_PREFIX = "COMFYCOLAB_SKINTOKENS_RESULT="
 PROTOCOL_VERSION = 1
-PIXAL3D_VIEW_ORDER = ("front", "back", "left", "right", "top", "bottom")
-PIXAL3D_FUSION_STRATEGIES = ("directional_softmax", "average")
 
 
 @dataclass(frozen=True)
-class Pixal3DWorkerCommand:
+class SkinTokensWorkerCommand:
     python: str
     worker_script: str
     source_dir: str
-    checkpoint_dir: str
-    image_path: str
-    output_mesh: str
+    model_dir: str
+    qwen_dir: str
+    checkpoint: str
+    input_glb: str
+    output_glb: str
     metadata_output: str
     request_id: str
-    seed: int
-    camera_fov_degrees: float
-    texture_size: int
-    pipeline_type: str
-    max_tokens: int
-    target_face_count: int = 1_000_000
-    inference_steps: int = 12
-    guidance_scale: float = 7.5
-    dinov3_dir: str = ""
-    moge_dir: str = ""
-    naf_source_dir: str = ""
-    naf_checkpoint: str = ""
-    source_ref: str = ""
-    model_ref: str = ""
-    dinov3_ref: str = ""
-    moge_ref: str = ""
-    naf_ref: str = ""
-    naf_checkpoint_ref: str = ""
-    environment_ref: str = ""
+    source_ref: str
+    model_ref: str
+    qwen_ref: str
+    environment_ref: str
+    preserve_texture: bool = True
+    use_transfer: bool = True
+    use_skeleton: bool = False
+    use_postprocess: bool = False
+    top_k: int = 5
+    top_p: float = 0.95
+    temperature: float = 1.0
+    repetition_penalty: float = 2.0
+    num_beams: int = 10
     keep_worker_loaded: bool = True
-    views: tuple[dict[str, str], ...] | None = None
-    fusion_temperature: float = 2.0
-    fusion_strategy: str = "directional_softmax"
-
-    def argv(self) -> list[str]:
-        """Return a complete one-request invocation for diagnostics and tests."""
-
-        values = self.server_argv() + ["--one-shot"]
-        request = build_pixal3d_request(self)
-        for name, value in (
-            ("--request-id", request["request_id"]),
-            ("--image-path", request["image_path"]),
-            ("--output-mesh", request["output_mesh"]),
-            ("--metadata-output", request["metadata_output"]),
-            ("--pipeline-type", request["pipeline_type"]),
-            ("--seed", request["seed"]),
-            ("--camera-fov-degrees", self.camera_fov_degrees),
-            ("--sampling-steps", request["sampling_steps"]),
-            ("--target-face-count", request["target_face_count"]),
-            ("--texture-size", request["texture_size"]),
-            ("--max-tokens", request["max_tokens"]),
-        ):
-            values.extend((name, str(value)))
-        return values
 
     def server_argv(self) -> list[str]:
-        values = [
+        return [
             self.python,
             self.worker_script,
             "--server",
             "--source-dir",
             self.source_dir,
-            "--checkpoint-dir",
-            self.checkpoint_dir,
+            "--model-dir",
+            self.model_dir,
+            "--qwen-dir",
+            self.qwen_dir,
+            "--checkpoint",
+            self.checkpoint,
         ]
+
+    def argv(self) -> list[str]:
+        values = self.server_argv() + ["--one-shot"]
+        request = build_skintokens_request(self)
         for name, value in (
-            ("--dinov3-dir", self.dinov3_dir),
-            ("--moge-dir", self.moge_dir),
-            ("--naf-source-dir", self.naf_source_dir),
-            ("--naf-checkpoint", self.naf_checkpoint),
+            ("--request-id", request["request_id"]),
+            ("--input-glb", request["input_glb"]),
+            ("--output-glb", request["output_glb"]),
+            ("--metadata-output", request["metadata_output"]),
         ):
-            if value:
-                values.extend((name, value))
+            values.extend((name, str(value)))
         return values
 
 
-def build_pixal3d_request(command: Pixal3DWorkerCommand) -> dict:
-    fov_degrees = float(command.camera_fov_degrees)
-    if not math.isfinite(fov_degrees) or fov_degrees < 0.0 or fov_degrees >= 179.0:
-        raise ValueError("camera_fov_degrees must be 0 for automatic estimation or between 0 and 179")
-    camera_angle_x = math.radians(fov_degrees) if fov_degrees > 0.0 else None
-    request = {
+def build_skintokens_request(command: SkinTokensWorkerCommand) -> dict:
+    return {
         "protocol": PROTOCOL_VERSION,
         "request_id": command.request_id,
-        "image_path": command.image_path,
-        "output_mesh": command.output_mesh,
+        "input_glb": command.input_glb,
+        "output_glb": command.output_glb,
         "metadata_output": command.metadata_output,
-        "seed": int(command.seed),
-        "pipeline_type": command.pipeline_type,
-        "sampling_steps": int(command.inference_steps),
-        "guidance_scale": float(command.guidance_scale),
-        "camera_mode": "manual" if camera_angle_x is not None else "moge",
-        "camera_fov_radians": camera_angle_x,
-        "camera_params": None if camera_angle_x is None else {"camera_angle_x": camera_angle_x},
-        "target_face_count": int(command.target_face_count),
-        "texture_size": int(command.texture_size),
-        "max_tokens": int(command.max_tokens),
+        "preserve_texture": bool(command.preserve_texture),
+        "use_transfer": bool(command.use_transfer),
+        "use_skeleton": bool(command.use_skeleton),
+        "use_postprocess": bool(command.use_postprocess),
+        "top_k": int(command.top_k),
+        "top_p": float(command.top_p),
+        "temperature": float(command.temperature),
+        "repetition_penalty": float(command.repetition_penalty),
+        "num_beams": int(command.num_beams),
         "revisions": {
             "source": command.source_ref,
             "model": command.model_ref,
-            "dinov3": command.dinov3_ref,
-            "moge": command.moge_ref,
-            "naf": command.naf_ref,
-            "naf_checkpoint": command.naf_checkpoint_ref,
+            "qwen": command.qwen_ref,
             "environment": command.environment_ref,
         },
     }
-    if command.views is not None:
-        request["views"] = _validate_pixal3d_views(command.views)
-        request["fusion_temperature"] = _validate_fusion_temperature(
-            command.fusion_temperature
-        )
-        if command.fusion_strategy not in PIXAL3D_FUSION_STRATEGIES:
-            raise ValueError(
-                "fusion_strategy must be directional_softmax or average"
-            )
-        request["fusion_strategy"] = command.fusion_strategy
-    return request
-
-
-def _validate_fusion_temperature(value: float) -> float:
-    temperature = float(value)
-    if not math.isfinite(temperature) or temperature <= 0.0 or temperature > 20.0:
-        raise ValueError("fusion_temperature must be in (0, 20]")
-    return temperature
-
-
-def _validate_pixal3d_views(views: tuple[dict[str, str], ...] | list[dict[str, str]]) -> list[dict[str, str]]:
-    if not 2 <= len(views) <= len(PIXAL3D_VIEW_ORDER):
-        raise ValueError("Pixal3D multiview requires 2 to 6 ordered views")
-    expected = PIXAL3D_VIEW_ORDER[: len(views)]
-    serialized: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for index, view in enumerate(views):
-        name = str(view.get("name", ""))
-        if name != expected[index]:
-            raise ValueError(
-                "Pixal3D multiview views must be ordered front, back, left, right, top, bottom"
-            )
-        if name in seen:
-            raise ValueError(f"Duplicate Pixal3D multiview label: {name}")
-        image_path = str(view.get("image_path", ""))
-        if not image_path:
-            raise ValueError(f"Pixal3D multiview view {name} omitted image_path")
-        seen.add(name)
-        serialized.append({"name": name, "image_path": image_path})
-    if serialized[0]["name"] != "front":
-        raise ValueError("Pixal3D multiview requires front as the first view")
-    return serialized
 
 
 def _reader(stream: TextIO, output: queue.Queue[str | None]) -> None:
@@ -219,8 +145,8 @@ def _terminate_process(process, timeout: float = 5.0) -> None:
             pass
 
 
-def _owned_artifacts(command: Pixal3DWorkerCommand) -> tuple[Path, ...]:
-    output = Path(command.output_mesh)
+def _owned_artifacts(command: SkinTokensWorkerCommand) -> tuple[Path, ...]:
+    output = Path(command.output_glb)
     metadata = Path(command.metadata_output)
     return (
         output,
@@ -234,7 +160,7 @@ def _owned_artifacts(command: Pixal3DWorkerCommand) -> tuple[Path, ...]:
     )
 
 
-def _cleanup(command: Pixal3DWorkerCommand, *, include_final: bool = True) -> None:
+def _cleanup(command: SkinTokensWorkerCommand, *, include_final: bool = True) -> None:
     artifacts = _owned_artifacts(command)
     if not include_final:
         artifacts = artifacts[2:]
@@ -242,8 +168,44 @@ def _cleanup(command: Pixal3DWorkerCommand, *, include_final: bool = True) -> No
         artifact.unlink(missing_ok=True)
 
 
-class Pixal3DWorkerPool:
-    """Serialize requests through one long-lived isolated Pixal3D process."""
+def validate_skintokens_output(path: str | Path, *, preserve_texture: bool) -> dict:
+    document = validate_glb(
+        path,
+        require_material=preserve_texture,
+        require_texture=preserve_texture,
+        require_uv=preserve_texture,
+    )
+    skins = document.get("skins") or []
+    nodes = document.get("nodes") or []
+    meshes = document.get("meshes") or []
+    if not skins:
+        raise ValueError("SkinTokens output GLB does not contain a skin")
+    joint_count = 0
+    for skin in skins:
+        joints = skin.get("joints") or []
+        if not joints:
+            raise ValueError("SkinTokens output GLB skin has no joints")
+        for joint in joints:
+            if not isinstance(joint, int) or joint < 0 or joint >= len(nodes):
+                raise ValueError("SkinTokens output GLB skin references an invalid joint")
+        joint_count += len(joints)
+    skinned_nodes = [
+        node for node in nodes if isinstance(node, dict) and isinstance(node.get("skin"), int)
+    ]
+    if not skinned_nodes:
+        raise ValueError("SkinTokens output GLB has no skinned mesh node")
+    for node in skinned_nodes:
+        mesh = node.get("mesh")
+        skin = node.get("skin")
+        if not isinstance(mesh, int) or mesh < 0 or mesh >= len(meshes):
+            raise ValueError("SkinTokens output GLB skinned node references an invalid mesh")
+        if not isinstance(skin, int) or skin < 0 or skin >= len(skins):
+            raise ValueError("SkinTokens output GLB skinned node references an invalid skin")
+    return {"skins": len(skins), "joints": joint_count, "skinned_nodes": len(skinned_nodes)}
+
+
+class SkinTokensWorkerPool:
+    """Serialize requests through one long-lived isolated SkinTokens process."""
 
     def __init__(
         self,
@@ -269,12 +231,12 @@ class Pixal3DWorkerPool:
         except (AttributeError, OSError):
             return True
 
-    def _launch(self, command: Pixal3DWorkerCommand) -> None:
+    def _launch(self, command: SkinTokensWorkerCommand) -> None:
         self.close()
         self._lines = queue.Queue()
         argv = command.server_argv()
         env = os.environ.copy()
-        env["COMFYCOLAB_PIXAL3D_ENVIRONMENT_REF"] = command.environment_ref
+        env["COMFYCOLAB_SKINTOKENS_ENVIRONMENT_REF"] = command.environment_ref
         self._process = self._popen_factory(
             argv,
             stdin=subprocess.PIPE,
@@ -287,7 +249,7 @@ class Pixal3DWorkerPool:
         )
         if self._process.stdin is None or self._process.stdout is None:
             self.close()
-            raise RuntimeError("Pixal3D worker pipes are unavailable")
+            raise RuntimeError("SkinTokens worker pipes are unavailable")
         self._reader_thread = threading.Thread(
             target=_reader, args=(self._process.stdout, self._lines), daemon=True
         )
@@ -309,22 +271,22 @@ class Pixal3DWorkerPool:
                 payload = json.loads(line.split("=", 1)[1])
                 if int(payload.get("protocol", -1)) != PROTOCOL_VERSION:
                     self.close()
-                    raise RuntimeError("Pixal3D worker protocol version mismatch")
+                    raise RuntimeError("SkinTokens worker protocol version mismatch")
                 return
         self.close()
         raise RuntimeError(
-            "Pixal3D worker failed to become ready"
+            "SkinTokens worker failed to become ready"
             + (f": {' | '.join(tail)}" if tail else "")
         )
 
-    def _ensure_process(self, command: Pixal3DWorkerCommand) -> None:
+    def _ensure_process(self, command: SkinTokensWorkerCommand) -> None:
         signature = tuple(command.server_argv())
         if not self._process_running() or self._signature != signature:
             self._launch(command)
 
     def run(
         self,
-        command: Pixal3DWorkerCommand,
+        command: SkinTokensWorkerCommand,
         *,
         is_cancelled: Callable[[], bool] = lambda: False,
         on_progress: Callable[[dict], None] = lambda _event: None,
@@ -335,27 +297,26 @@ class Pixal3DWorkerPool:
                 self._ensure_process(command)
                 process = self._process
                 if process is None or process.stdin is None:
-                    raise RuntimeError("Pixal3D worker is unavailable")
-                request = build_pixal3d_request(command)
-                process.stdin.write(json.dumps(request, sort_keys=True) + "\n")
+                    raise RuntimeError("SkinTokens worker is unavailable")
+                process.stdin.write(json.dumps(build_skintokens_request(command), sort_keys=True) + "\n")
                 process.stdin.flush()
                 tail: list[str] = []
                 while True:
                     if is_cancelled():
                         self.close()
-                        raise InterruptedError("Pixal3D generation was cancelled")
+                        raise InterruptedError("SkinTokens rigging was cancelled")
                     try:
                         line = self._lines.get(timeout=self._poll_interval)
                     except queue.Empty:
                         if not self._process_running():
                             raise RuntimeError(
-                                "Pixal3D worker exited before returning a matching result"
+                                "SkinTokens worker exited before returning a matching result"
                                 + (f": {' | '.join(tail)}" if tail else "")
                             )
                         continue
                     if line is None:
                         if not self._process_running():
-                            raise RuntimeError("Pixal3D worker output closed unexpectedly")
+                            raise RuntimeError("SkinTokens worker output closed unexpectedly")
                         continue
                     tail = (tail + [line])[-40:]
                     if line.startswith(PROGRESS_PREFIX):
@@ -371,25 +332,24 @@ class Pixal3DWorkerPool:
                     if result.get("status") != "ok":
                         error_type = str(result.get("error_type") or "RuntimeError")
                         message = str(result.get("error") or "unknown worker failure")
-                        raise RuntimeError(f"Pixal3D worker failed: {error_type}: {message}")
-                    output = Path(str(result.get("output_mesh", "")))
+                        raise RuntimeError(f"SkinTokens worker failed: {error_type}: {message}")
+                    output = Path(str(result.get("output_glb", "")))
                     metadata = Path(str(result.get("metadata_output", "")))
-                    if output.resolve() != Path(command.output_mesh).resolve():
-                        raise RuntimeError("Pixal3D worker reported an unexpected output path")
+                    if output.resolve() != Path(command.output_glb).resolve():
+                        raise RuntimeError("SkinTokens worker reported an unexpected output path")
                     if metadata.resolve() != Path(command.metadata_output).resolve():
-                        raise RuntimeError("Pixal3D worker reported an unexpected metadata path")
-                    validate_volumetric_glb(
-                        output,
-                        stage="Pixal3D worker output",
-                        require_material=True,
-                        require_texture=True,
-                        require_uv=True,
+                        raise RuntimeError("SkinTokens worker reported an unexpected metadata path")
+                    contract = validate_skintokens_output(
+                        output, preserve_texture=command.preserve_texture
                     )
                     if not metadata.is_file():
-                        raise RuntimeError("Pixal3D worker metadata is missing")
+                        raise RuntimeError("SkinTokens worker metadata is missing")
+                    metadata_payload = json.loads(metadata.read_text(encoding="utf-8"))
+                    if not metadata_payload.get("texture_preservation", {}).get("requested") == command.preserve_texture:
+                        raise RuntimeError("SkinTokens metadata omitted the requested texture policy")
                     if not command.keep_worker_loaded:
                         self.close()
-                    return result
+                    return {**result, "rig_contract": contract}
             except BaseException:
                 _cleanup(command)
                 self.close()
@@ -402,15 +362,15 @@ class Pixal3DWorkerPool:
             _terminate_process(process)
 
 
-_GLOBAL_POOL: Pixal3DWorkerPool | None = None
+_GLOBAL_POOL: SkinTokensWorkerPool | None = None
 _GLOBAL_POOL_LOCK = threading.Lock()
 
 
-def global_pixal3d_worker_pool() -> Pixal3DWorkerPool:
+def global_skintokens_worker_pool() -> SkinTokensWorkerPool:
     global _GLOBAL_POOL
     with _GLOBAL_POOL_LOCK:
         if _GLOBAL_POOL is None:
-            _GLOBAL_POOL = Pixal3DWorkerPool()
+            _GLOBAL_POOL = SkinTokensWorkerPool()
         return _GLOBAL_POOL
 
 
@@ -423,8 +383,9 @@ atexit.register(_close_global_pool)
 
 
 __all__ = [
-    "Pixal3DWorkerCommand",
-    "Pixal3DWorkerPool",
-    "build_pixal3d_request",
-    "global_pixal3d_worker_pool",
+    "SkinTokensWorkerCommand",
+    "SkinTokensWorkerPool",
+    "build_skintokens_request",
+    "global_skintokens_worker_pool",
+    "validate_skintokens_output",
 ]

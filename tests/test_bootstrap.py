@@ -30,6 +30,11 @@ class BootstrapRenderingTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        trellis_multiview = json.loads(
+            (root / "patches" / "trellis2-multiview-weight-cache.json").read_text(
+                encoding="utf-8"
+            )
+        )
         ultrashape = json.loads(
             (root / "patches" / "ultrashape-inference-only-imports.json").read_text(
                 encoding="utf-8"
@@ -63,6 +68,18 @@ class BootstrapRenderingTests(unittest.TestCase):
             remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
         )
         self.assertEqual(trellis_categories["revision"], remote_bootstrap.TRELLIS_REF)
+        self.assertEqual(
+            trellis_multiview["patch_id"], remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID
+        )
+        self.assertEqual(trellis_multiview["revision"], remote_bootstrap.TRELLIS_REF)
+        multiview_source = "\n".join(
+            line
+            for file_spec in trellis_multiview["files"]
+            for replacement in file_spec["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn("view_weights=view_weights", multiview_source)
+        self.assertIn("Compute spatial blend weights once per sampler run", multiview_source)
         self.assertEqual(ultrashape["patch_id"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
         self.assertEqual(ultrashape["revision"], remote_bootstrap.ULTRASHAPE_REF)
         surface = next(
@@ -140,6 +157,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 side_effect=[
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+                    remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
                     remote_bootstrap.ULTRASHAPE_PATCH_ID,
                 ],
             ), mock.patch.object(
@@ -493,6 +511,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 side_effect=[
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+                    remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
                     remote_bootstrap.ULTRASHAPE_PATCH_ID,
                 ],
             ), mock.patch.object(
@@ -526,12 +545,19 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(payload["trellisCommit"], "abc123")
             self.assertEqual(payload["geometryCommit"], "abc123")
             self.assertEqual(payload["ultrashapeCommit"], "abc123")
+            self.assertEqual(payload["skinTokensModelRef"], remote_bootstrap.SKINTOKENS_MODEL_REF)
+            self.assertEqual(payload["skinTokensQwenRef"], remote_bootstrap.SKINTOKENS_QWEN_REF)
+            self.assertEqual(payload["cubePartModelRef"], remote_bootstrap.CUBEPART_MODEL_REF)
             self.assertEqual(payload["triposplatCoreRef"], remote_bootstrap.COMFY_REF)
             self.assertTrue(payload["triposplatCoreReady"])
             self.assertEqual(payload["trellisPatch"], remote_bootstrap.TRELLIS_PATCH_ID)
             self.assertEqual(
                 payload["trellisCategoryPatch"],
                 remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+            )
+            self.assertEqual(
+                payload["trellisMultiviewPatch"],
+                remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
             )
             self.assertEqual(payload["ultrashapePatch"], remote_bootstrap.ULTRASHAPE_PATCH_ID)
             self.assertEqual(
@@ -593,6 +619,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 side_effect=[
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
+                    remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
                     remote_bootstrap.ULTRASHAPE_PATCH_ID,
                 ],
             ), mock.patch.object(

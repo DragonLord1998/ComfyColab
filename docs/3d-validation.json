@@ -20,6 +20,11 @@
     "pixal3dUtils3d": "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
     "pixal3dNatten": "natten==0.21.6+torch2110cu128",
     "pixal3dEnvironment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
+    "skinTokens": "273b691d35989d71cd17ff2895fdc735097b92d1",
+    "skinTokensModel": "VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33",
+    "skinTokensQwen": "Qwen/Qwen3-0.6B@c1899de289a04d12100db370d81485cdf75e47ca",
+    "cubePart": "3c6d06ddbef3160a1e1950cb13ab63dd12a61e50",
+    "cubePartModel": "Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0",
     "cubvh": "757b913bfbf19ed65e3a379d159391a8e29efa0f",
     "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
     "comfyEnv": "0.3.89"
@@ -27,6 +32,7 @@
   "patches": {
     "trellis": "trellis2-strict-1536-birefnet-pin-metrics-v4",
     "trellisCategory": "trellis2-advanced-categories-v1",
+    "trellisMultiview": "trellis2-multiview-weight-cache-v1",
     "ultrashape": "ultrashape-inference-compat-v3",
     "triposplat": "pending-live-g4",
     "pixal3d": "pixal3d-persistent-worker-v1"
@@ -36,6 +42,8 @@
     "trellis_1024_cascade_textured_glb": {"status": "pending", "evidence": null},
     "trellis_1536_cascade_genuine": {"status": "pending", "evidence": null},
     "trellis_1536_default_cap_no_downgrade": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:trellis_1536_default_cap:601933964f35a3da555e538ff56cb3e1d2d882b47546e3418eba3e1c48ad4a2d"},
+    "trellis_multiview_4view_textured_glb": {"status": "pending", "evidence": null},
+    "trellis_multiview_6view_textured_glb": {"status": "pending", "evidence": null},
     "combined_environment_cuda_probes": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:combined_environment_cuda_probes:375c31677dc651781e9ff01b5c7d1b4181e395869055f15be74b1a77c542d28d"},
     "ultrashape_384_refinement": {"status": "pending", "evidence": null},
     "ultrashape_512_refinement": {"status": "pending", "evidence": null},
@@ -50,6 +58,9 @@
     "pixal3d_cancellation_cleanup": {"status": "pending", "evidence": null},
     "pixal3d_preview_save_glb_reader": {"status": "pending", "evidence": null},
     "pixal3d_1536_experimental": {"status": "pending", "evidence": null},
+    "pixal3d_multiview_4view_experimental_glb": {"status": "pending", "evidence": null},
+    "skintokens_auto_rig_glb": {"status": "pending", "evidence": null},
+    "cubepart_schema_decomposition_glb": {"status": "pending", "evidence": null},
     "full_workflow_hard_surface": {"status": "pending", "evidence": null},
     "full_workflow_organic": {"status": "pending", "evidence": null},
     "full_workflow_thin": {"status": "pending", "evidence": null},

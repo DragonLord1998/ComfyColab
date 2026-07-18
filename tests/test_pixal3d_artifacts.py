@@ -25,6 +25,42 @@ def load_artifacts():
 
 
 class Pixal3DArtifactTests(unittest.TestCase):
+    def test_moge_snapshot_accepts_model_checkpoint_without_config_json(self) -> None:
+        artifacts = load_artifacts()
+
+        def snapshot_download(*, repo_id, revision, local_dir, **_kwargs):
+            root = Path(local_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            if repo_id == artifacts.PIXAL3D_MODEL_REPO:
+                (root / "pipeline.json").write_text("{}", encoding="utf-8")
+            elif repo_id == artifacts.DINOV3_MODEL_REPO:
+                (root / "config.json").write_text("{}", encoding="utf-8")
+            elif repo_id == artifacts.MOGE_MODEL_REPO:
+                (root / "model.pt").write_bytes(b"checkpoint-with-embedded-config")
+            else:
+                self.fail(f"Unexpected snapshot repository: {repo_id}")
+            return str(root)
+
+        fake_hub = types.SimpleNamespace(snapshot_download=snapshot_download)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            sys.modules, {"huggingface_hub": fake_hub}
+        ), mock.patch.object(
+            artifacts,
+            "_ensure_naf_source",
+            return_value=Path(directory) / "naf-source",
+        ), mock.patch.object(
+            artifacts,
+            "_download_verified",
+            return_value=Path(directory) / "naf_release.pth",
+        ), mock.patch.object(
+            artifacts.shutil,
+            "disk_usage",
+            return_value=types.SimpleNamespace(free=artifacts.MIN_FREE_BYTES),
+        ):
+            provisioned = artifacts.ensure_pixal3d_artifacts(Path(directory) / "models")
+            self.assertTrue((provisioned.moge_dir / "model.pt").is_file())
+            self.assertFalse((provisioned.moge_dir / "config.json").exists())
+
     def test_snapshot_manifest_rejects_and_repairs_corrupted_non_sentinel_file(self) -> None:
         artifacts = load_artifacts()
         calls: list[tuple[str, str]] = []

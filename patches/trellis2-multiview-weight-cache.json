@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "patch_id": "trellis2-multiview-weight-cache-v1",
+  "revision": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+  "files": [
+    {
+      "path": "nodes/trellis2/samplers/flow_euler.py",
+      "before_sha256": "92eede8cf22f5706e2fa4f6a05f5265f7082f9bad39a793710da48a0afd2c15d",
+      "after_sha256": "7d373918a3592e0f5e0a06d81d2675d5d739cdaebfd3f6883e6c31328009e465",
+      "replacements": [
+        {
+          "occurrences": 1,
+          "before_lines": [
+            "        views: List[str],",
+            "        front_axis: str = 'z',",
+            "        blend_temperature: float = 2.0,",
+            "        **kwargs",
+            "    ):",
+            "        is_sparse = hasattr(x_t, 'coords')",
+            "",
+            "        if is_sparse:",
+            "            weights = self._compute_view_weights_sparse(",
+            "                x_t.coords, views, front_axis, blend_temperature)",
+            "        else:",
+            "            weights = self._compute_view_weights_dense(",
+            "                x_t.shape, x_t.device, views, front_axis, blend_temperature)"
+          ],
+          "after_lines": [
+            "        views: List[str],",
+            "        front_axis: str = 'z',",
+            "        blend_temperature: float = 2.0,",
+            "        view_weights=None,",
+            "        **kwargs",
+            "    ):",
+            "        is_sparse = hasattr(x_t, 'coords')",
+            "",
+            "        weights = view_weights",
+            "        if weights is None:",
+            "            if is_sparse:",
+            "                weights = self._compute_view_weights_sparse(",
+            "                    x_t.coords, views, front_axis, blend_temperature)",
+            "            else:",
+            "                weights = self._compute_view_weights_dense(",
+            "                    x_t.shape, x_t.device, views, front_axis, blend_temperature)"
+          ]
+        },
+        {
+          "occurrences": 1,
+          "before_lines": [
+            "        t_pairs = list((t_seq[i], t_seq[i + 1]) for i in range(steps))",
+            "        ret = edict({\"samples\": None, \"pred_x_t\": [], \"pred_x_0\": []})",
+            "",
+            "        for t, t_prev in t_pairs:",
+            "            out = self.sample_once(",
+            "                model, sample, t, t_prev,",
+            "                conds=conds, views=views,",
+            "                front_axis=front_axis,",
+            "                blend_temperature=blend_temperature,",
+            "                **kwargs,",
+            "            )"
+          ],
+          "after_lines": [
+            "        t_pairs = list((t_seq[i], t_seq[i + 1]) for i in range(steps))",
+            "        ret = edict({\"samples\": None, \"pred_x_t\": [], \"pred_x_0\": []})",
+            "",
+            "        # Coordinates and active views remain fixed for every diffusion step.",
+            "        # Compute spatial blend weights once per sampler run instead of once",
+            "        # per step; this preserves the exact math while removing repeated 3D",
+            "        # grid construction and softmax work.",
+            "        is_sparse = hasattr(sample, 'coords')",
+            "        if is_sparse:",
+            "            view_weights = self._compute_view_weights_sparse(",
+            "                sample.coords, views, front_axis, blend_temperature)",
+            "        else:",
+            "            view_weights = self._compute_view_weights_dense(",
+            "                sample.shape, sample.device, views, front_axis, blend_temperature)",
+            "",
+            "        for t, t_prev in t_pairs:",
+            "            out = self.sample_once(",
+            "                model, sample, t, t_prev,",
+            "                conds=conds, views=views,",
+            "                front_axis=front_axis,",
+            "                blend_temperature=blend_temperature,",
+            "                view_weights=view_weights,",
+            "                **kwargs,",
+            "            )"
+          ]
+        }
+      ]
+    }
+  ]
+}
