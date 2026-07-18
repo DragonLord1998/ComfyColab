@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "family": "LTX-2.3 Distilled 1.1 GGUF",
+  "default_gguf": "Q3_K_S",
+  "ggufs": {
+    "Q3_K_S": {
+      "filename": "ltx-2.3-22b-distilled-1.1-Q3_K_S.gguf",
+      "folder_key": "unet_gguf",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/distilled-1.1/ltx-2.3-22b-distilled-1.1-Q3_K_S.gguf",
+      "sha256": "4449208e0613d4a65cf5aa11ae7ae04fa417ad54489a273a283cf15fd088a146",
+      "size_bytes": 9741626400
+    },
+    "Q4_K_S": {
+      "filename": "ltx-2.3-22b-distilled-1.1-Q4_K_S.gguf",
+      "folder_key": "unet_gguf",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/distilled-1.1/ltx-2.3-22b-distilled-1.1-Q4_K_S.gguf",
+      "sha256": "f9e2b72221a9b9bc0a3ade678ddda102b14af7a4f83476b7319e3ec38423cd80",
+      "size_bytes": 12961578016
+    },
+    "Q4_K_M": {
+      "filename": "ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf",
+      "folder_key": "unet_gguf",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/distilled-1.1/ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf",
+      "sha256": "5d09efdc0b8ec2054c44a05366cd7c6634ffa333b379b1f8baf018a78974b73d",
+      "size_bytes": 14194441248
+    }
+  },
+  "shared": {
+    "text_encoder": {
+      "filename": "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
+      "folder_key": "text_encoders",
+      "url": "https://huggingface.co/unsloth/gemma-3-12b-it-qat-GGUF/resolve/858acec7ec0541a46c39985c95d3b52d8f3ab183/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
+      "sha256": "da98f81c86916ed1c76b3eeda56b25cb7b8352b01093e2edb8028110fe2cb53b",
+      "size_bytes": 7432229248
+    },
+    "connector": {
+      "filename": "ltx-2.3-22b-distilled_embeddings_connectors.safetensors",
+      "folder_key": "text_encoders",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/text_encoders/ltx-2.3-22b-distilled_embeddings_connectors.safetensors",
+      "sha256": "c61cbb396e2a8175d8b2da51f0fdac885a4ccd22c9f64dafa5aa2c455dc8a507",
+      "size_bytes": 2312144712
+    },
+    "video_vae": {
+      "filename": "ltx-2.3-22b-distilled_video_vae.safetensors",
+      "folder_key": "vae",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/vae/ltx-2.3-22b-distilled_video_vae.safetensors",
+      "sha256": "e68d6d8f8a42942ac9b862cc315beb3bc30805a8876c7ad63ba5bf7a2b8e168a",
+      "size_bytes": 1452256522
+    },
+    "audio_vae": {
+      "filename": "ltx-2.3-22b-distilled_audio_vae.safetensors",
+      "folder_key": "vae",
+      "url": "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/vae/ltx-2.3-22b-distilled_audio_vae.safetensors",
+      "sha256": "3cd6a6eb8cb28f5ecc12f1f3126952b2a3d2b0b42ad3270e63cefafafe0d9b57",
+      "size_bytes": 364853140
+    },
+    "temporal_2x": {
+      "filename": "ltx-2.3-temporal-upscaler-x2-1.0.safetensors",
+      "folder_key": "latent_upscale_models",
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/4229404625088d21c4f112eb640fb04a0900ee25/ltx-2.3-temporal-upscaler-x2-1.0.safetensors",
+      "sha256": "2bc3300f2b3c3c1834d72164fbf13a3b9fd73e5a741e8a2c3f4035f89a75c3fe",
+      "size_bytes": 261944000
+    }
+  },
+  "spatial_upscalers": {
+    "None": null,
+    "1.5x": {
+      "filename": "ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors",
+      "folder_key": "latent_upscale_models",
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/4229404625088d21c4f112eb640fb04a0900ee25/ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors",
+      "sha256": "b2b3193e68cb04b4701e1d59bec4ed5d5e3e84506d9a42d5a129d37d39823df7",
+      "size_bytes": 1090125794
+    },
+    "2x": {
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "folder_key": "latent_upscale_models",
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/4229404625088d21c4f112eb640fb04a0900ee25/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "sha256": "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed",
+      "size_bytes": 995743560
+    }
+  }
+}

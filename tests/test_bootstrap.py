@@ -420,26 +420,32 @@ class BootstrapRenderingTests(unittest.TestCase):
             image_source = repository / "custom_nodes" / "ComfyColab-ZImage"
             three_d_source = repository / "custom_nodes" / "ComfyColab-3D"
             triposplat_source = repository / "custom_nodes" / "ComfyColab-Triposplat"
+            ltx_source = repository / "custom_nodes" / "ComfyColab-LTXVideo"
             image_source.mkdir(parents=True)
             three_d_source.mkdir(parents=True)
             triposplat_source.mkdir(parents=True)
+            ltx_source.mkdir(parents=True)
             image_target = root / "custom_nodes" / "ComfyColab-ZImage"
             three_d_target = root / "custom_nodes" / "ComfyColab-3D"
             triposplat_target = root / "custom_nodes" / "ComfyColab-Triposplat"
+            ltx_target = root / "custom_nodes" / "ComfyColab-LTXVideo"
             image_target.mkdir(parents=True)
             three_d_target.mkdir(parents=True)
             triposplat_target.mkdir(parents=True)
+            ltx_target.mkdir(parents=True)
             with mock.patch.multiple(
                 remote_bootstrap,
                 REPO_DIR=repository,
                 NODE_TARGET=image_target,
                 NODE_3D_TARGET=three_d_target,
                 NODE_TRIPOSPLAT_TARGET=triposplat_target,
+                NODE_LTX_TARGET=ltx_target,
             ):
                 remote_bootstrap.install_node_pack()
             self.assertEqual(image_target.resolve(), image_source.resolve())
             self.assertEqual(three_d_target.resolve(), three_d_source.resolve())
             self.assertEqual(triposplat_target.resolve(), triposplat_source.resolve())
+            self.assertEqual(ltx_target.resolve(), ltx_source.resolve())
 
     def test_triposplat_core_support_requires_native_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -493,6 +499,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 COMFY_DIR=root / "ComfyUI",
                 REPO_DIR=root / "ComfyColab",
                 GGUF_DIR=root / "ComfyUI-GGUF",
+                LTX_VIDEO_DIR=root / "ComfyUI-LTXVideo",
                 TRELLIS_DIR=root / "ComfyUI-TRELLIS2",
                 GEOMETRY_DIR=root / "ComfyUI-GeometryPack",
                 ULTRASHAPE_DIR=root / "UltraShape-1.0",
@@ -543,6 +550,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(payload["comfyUrl"], proxy_url)
             self.assertIsNone(payload["cloudflareUrl"])
             self.assertEqual(payload["trellisCommit"], "abc123")
+            self.assertEqual(payload["ltxVideoCommit"], "abc123")
             self.assertEqual(payload["geometryCommit"], "abc123")
             self.assertEqual(payload["ultrashapeCommit"], "abc123")
             self.assertEqual(payload["skinTokensModelRef"], remote_bootstrap.SKINTOKENS_MODEL_REF)
@@ -684,6 +692,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         )
         self.assertIn("8b099de36acd81acd1afa3b5442951dc847e0a52", source)
         self.assertIn("6ea2651e7df66d7585f6ffee804b20e92fb38b8a", source)
+        self.assertIn("aceeae9635f6d493f2893ba3c411a1c36031788a", source)
         self.assertIn("9b878516f2dc2fd873f4f6cceadba403dd12d83e", source)
         self.assertIn("c67199de05705642258e727fa118f412877b4ebf", source)
         self.assertIn("5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66", source)
@@ -693,11 +702,16 @@ class BootstrapRenderingTests(unittest.TestCase):
             root = Path(directory)
             comfy_dir = root / "ComfyUI"
             gguf_dir = comfy_dir / "custom_nodes" / "ComfyUI-GGUF"
+            ltx_video_dir = comfy_dir / "custom_nodes" / "ComfyUI-LTXVideo"
             trellis_dir = comfy_dir / "custom_nodes" / "ComfyUI-TRELLIS2"
             comfy_dir.mkdir(parents=True)
             gguf_dir.mkdir(parents=True)
+            ltx_video_dir.mkdir(parents=True)
             trellis_dir.mkdir(parents=True)
             (gguf_dir / "requirements.txt").write_text("gguf\n", encoding="utf-8")
+            (ltx_video_dir / "requirements.txt").write_text(
+                "diffusers\n", encoding="utf-8"
+            )
             (trellis_dir / "requirements.txt").write_text(
                 "comfy-env==0.3.89\n", encoding="utf-8"
             )
@@ -706,6 +720,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 COMFY_DIR=comfy_dir,
                 GGUF_DIR=gguf_dir,
+                LTX_VIDEO_DIR=ltx_video_dir,
                 TRELLIS_DIR=trellis_dir,
             ), mock.patch.object(
                 remote_bootstrap,
@@ -719,11 +734,15 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(commands[0][1], comfy_dir)
             self.assertEqual(commands[1][0][-1], str(gguf_dir / "requirements.txt"))
             self.assertEqual(
-                commands[2][0][-3:],
+                commands[2][0][-1],
+                str(ltx_video_dir / "requirements.txt"),
+            )
+            self.assertEqual(
+                commands[3][0][-3:],
                 ["-r", str(trellis_dir / "requirements.txt"), "--upgrade"],
             )
             self.assertEqual(
-                commands[3],
+                commands[4],
                 ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
             )
             timeout_patch.assert_called_once_with()
@@ -1192,10 +1211,15 @@ class BootstrapRenderingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             comfy_dir = root / "ComfyUI"
+            ltx_video_dir = comfy_dir / "custom_nodes" / "ComfyUI-LTXVideo"
             trellis_dir = comfy_dir / "custom_nodes" / "ComfyUI-TRELLIS2"
             workspace = root / ".ce"
             comfy_dir.mkdir(parents=True)
+            ltx_video_dir.mkdir(parents=True)
             trellis_dir.mkdir(parents=True)
+            (ltx_video_dir / "requirements.txt").write_text(
+                "diffusers\n", encoding="utf-8"
+            )
             (trellis_dir / "requirements.txt").write_text(
                 "comfy-env==0.3.89\n", encoding="utf-8"
             )
@@ -1206,6 +1230,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 COMFY_DIR=comfy_dir,
                 GGUF_DIR=root / "missing-gguf",
+                LTX_VIDEO_DIR=ltx_video_dir,
                 TRELLIS_DIR=trellis_dir,
             ), mock.patch.object(
                 remote_bootstrap.Path,

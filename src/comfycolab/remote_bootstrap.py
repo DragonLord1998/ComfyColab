@@ -54,14 +54,17 @@ STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
 TUNNEL_LOG = STATE_DIR / "cloudflared.log"
 GGUF_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-GGUF"
+LTX_VIDEO_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-LTXVideo"
 TRELLIS_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-TRELLIS2"
 GEOMETRY_DIR = COMFY_DIR / "custom_nodes" / "ComfyUI-GeometryPack"
 NODE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-ZImage"
 NODE_3D_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-3D"
 NODE_TRIPOSPLAT_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-Triposplat"
+NODE_LTX_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-LTXVideo"
 READY_PREFIX = "COMFYCOLAB_READY="
 COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
+LTX_VIDEO_REF = "aceeae9635f6d493f2893ba3c411a1c36031788a"
 TRELLIS_REF = "9b878516f2dc2fd873f4f6cceadba403dd12d83e"
 GEOMETRY_REF = "c67199de05705642258e727fa118f412877b4ebf"
 ULTRASHAPE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
@@ -1374,6 +1377,21 @@ def install_dependencies() -> str:
     gguf_requirements = GGUF_DIR / "requirements.txt"
     if gguf_requirements.exists():
         run([sys.executable, "-m", "pip", "install", "-r", str(gguf_requirements)])
+    ltx_video_requirements = LTX_VIDEO_DIR / "requirements.txt"
+    if not ltx_video_requirements.is_file():
+        raise RuntimeError(
+            f"LTX-2.3 requirements are missing: {ltx_video_requirements}"
+        )
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(ltx_video_requirements),
+        ]
+    )
     trellis_requirements = TRELLIS_DIR / "requirements.txt"
     if not trellis_requirements.is_file():
         raise RuntimeError(f"TRELLIS.2 requirements are missing: {trellis_requirements}")
@@ -1500,6 +1518,10 @@ def install_node_pack() -> None:
         (
             REPO_DIR / "custom_nodes" / "ComfyColab-Triposplat",
             NODE_TRIPOSPLAT_TARGET,
+        ),
+        (
+            REPO_DIR / "custom_nodes" / "ComfyColab-LTXVideo",
+            NODE_LTX_TARGET,
         ),
     )
     for source, target in node_packs:
@@ -1814,6 +1836,11 @@ def main() -> None:
     clone_or_update("https://github.com/Comfy-Org/ComfyUI.git", COMFY_DIR, COMFY_REF)
     clone_or_update("https://github.com/city96/ComfyUI-GGUF.git", GGUF_DIR, GGUF_REF)
     clone_or_update(
+        "https://github.com/Lightricks/ComfyUI-LTXVideo.git",
+        LTX_VIDEO_DIR,
+        LTX_VIDEO_REF,
+    )
+    clone_or_update(
         "https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2.git",
         TRELLIS_DIR,
         TRELLIS_REF,
@@ -1972,6 +1999,7 @@ def main() -> None:
             "repositoryCommit": git_commit(REPO_DIR),
             "comfyCommit": git_commit(COMFY_DIR),
             "ggufCommit": git_commit(GGUF_DIR),
+            "ltxVideoCommit": git_commit(LTX_VIDEO_DIR),
             "trellisCommit": git_commit(TRELLIS_DIR),
             "geometryCommit": git_commit(GEOMETRY_DIR),
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
