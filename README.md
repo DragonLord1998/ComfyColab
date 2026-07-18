@@ -566,6 +566,16 @@ Download any generated images you want to keep before running
 
 ## About the Google Colab proxy option
 
+Generated two-cell notebooks use the authenticated Colab proxy as the primary
+access path. Cell 1 reserves the session-bound proxy and Cell 2 starts ComfyUI
+with the matching CORS origin, probes the `/system_stats` transport, and
+requires a successful `/ws` handshake. Cell 2 prints the Colab proxy URL first,
+then embeds ComfyUI with `serve_kernel_port_as_iframe()`. The raw proxy URL is
+valid only for the current signed-in user while that notebook/runtime remains
+open; browser security may still reject it in a separate tab, so the embedded
+view is shown immediately afterward. A Cloudflare URL is printed last as the
+fallback.
+
 The current `google-colab-cli` executes Python through a separate Jupyter
 connection. That connection cannot complete Colab frontend-only `eval_js()` /
 `proxyPort()` requests, so a terminal-only Google proxy URL is not reliable.
