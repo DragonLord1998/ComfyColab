@@ -32,6 +32,7 @@ ENVIRONMENTS_DIR = STATE_DIR / "environments"
 STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
 TUNNEL_LOG = STATE_DIR / "cloudflared.log"
+PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -268,6 +269,7 @@ def run(
     input_text: str | None = None,
     capture_output: bool = False,
     timeout: int | None = None,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     rendered = [str(part) for part in command]
     print(f"[comfycolab] $ {' '.join(rendered)}", flush=True)
@@ -279,8 +281,105 @@ def run(
         text=True,
         capture_output=capture_output,
         timeout=timeout,
-        check=True,
+        check=check,
     )
+
+
+def pip_check_conflicts() -> tuple[str, ...]:
+    """Return normalized conflicts without failing on a pre-conflicted host image."""
+
+    result = run(
+        [sys.executable, "-m", "pip", "check"],
+        capture_output=True,
+        check=False,
+    )
+    conflicts = tuple(
+        sorted(
+            {
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip() and line.strip() != "No broken requirements found."
+            }
+        )
+    )
+    if result.returncode == 0:
+        return ()
+    if result.returncode == 1 and conflicts:
+        return conflicts
+    detail = (result.stderr or result.stdout or "no diagnostic output").strip()
+    raise RuntimeContractError(
+        "pip check could not complete: " + detail[-2000:]
+    )
+
+
+def reject_new_pip_conflicts(
+    baseline: Sequence[str],
+    current: Sequence[str],
+) -> None:
+    introduced = sorted(set(current) - set(baseline))
+    if introduced:
+        raise RuntimeContractError(
+            "ComfyColab introduced Python package conflicts:\n- "
+            + "\n- ".join(introduced)
+        )
+
+
+def load_or_create_pip_baseline() -> tuple[str, ...]:
+    """Persist the clean-runtime conflict set so retries cannot redefine it."""
+
+    path = PIP_BASELINE_FILE
+    if path.is_symlink():
+        raise RuntimeContractError(
+            "persisted pip baseline is invalid. Restart the Colab runtime."
+        )
+    if path.exists():
+        if not path.is_file():
+            raise RuntimeContractError(
+                "persisted pip baseline is invalid. Restart the Colab runtime."
+            )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeContractError(
+                "persisted pip baseline is invalid. Restart the Colab runtime."
+            ) from error
+        expected = {"schema", "python", "conflicts"}
+        python_identity = payload.get("python") if isinstance(payload, dict) else None
+        conflicts = payload.get("conflicts") if isinstance(payload, dict) else None
+        valid = (
+            isinstance(payload, dict)
+            and set(payload) == expected
+            and payload.get("schema") == 1
+            and isinstance(python_identity, dict)
+            and set(python_identity) == {"executable", "version"}
+            and python_identity.get("executable") == sys.executable
+            and python_identity.get("version") == platform.python_version()
+            and isinstance(conflicts, list)
+            and all(isinstance(item, str) and item for item in conflicts)
+            and conflicts == sorted(set(conflicts))
+        )
+        if not valid:
+            raise RuntimeContractError(
+                "persisted pip baseline is invalid. Restart the Colab runtime."
+            )
+        return tuple(conflicts)
+
+    conflicts = pip_check_conflicts()
+    payload = {
+        "schema": 1,
+        "python": {
+            "executable": sys.executable,
+            "version": platform.python_version(),
+        },
+        "conflicts": list(conflicts),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    if temporary.is_symlink() or temporary.exists():
+        temporary.unlink()
+    temporary.write_bytes(canonical_json_bytes(payload))
+    temporary.replace(path)
+    return conflicts
 
 
 def clone_at_commit(repository: str, destination: Path, commit: str) -> None:
@@ -1546,6 +1645,13 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
         lock,
         accepted_licenses=accepted_licenses,
     )
+    baseline_pip_conflicts = load_or_create_pip_baseline()
+    if baseline_pip_conflicts:
+        print(
+            "[comfycolab] Detected pre-existing Colab package conflicts; "
+            "only newly introduced conflicts will be fatal.",
+            flush=True,
+        )
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     port = int(config["port"])
     refresh = bool(config["refresh"])
@@ -1614,7 +1720,17 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
         if previous_value is not None and previous_value != value:
             raise RuntimeContractError(f"runtime environment conflict for {name}")
         runtime_environment[name] = value
-    run([sys.executable, "-m", "pip", "check"])
+    current_pip_conflicts = pip_check_conflicts()
+    reject_new_pip_conflicts(
+        baseline_pip_conflicts,
+        current_pip_conflicts,
+    )
+    if current_pip_conflicts:
+        print(
+            f"[comfycolab] Ignoring {len(current_pip_conflicts)} unchanged "
+            "pre-existing package conflict(s).",
+            flush=True,
+        )
 
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
