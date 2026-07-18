@@ -6,6 +6,7 @@ import io as stdio
 import json
 import math
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -98,6 +99,74 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             image_module.new("RGBA", (8, 8), (0, 0, 0, 0)).save(path)
             with self.assertRaisesRegex(ValueError, "no visible foreground"):
                 worker_main._prepare_image_without_rmbg(path)
+
+    def test_worker_accepts_moge_model_pt_and_loads_the_checkpoint_file(self) -> None:
+        worker_main = load_worker_main()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_dir = root / "pixal3d"
+            dinov3_dir = root / "dinov3"
+            moge_dir = root / "moge"
+            naf_source_dir = root / "naf"
+            checkpoint_dir.mkdir()
+            dinov3_dir.mkdir()
+            moge_dir.mkdir()
+            naf_source_dir.mkdir()
+            (checkpoint_dir / "pipeline.json").write_text("{}", encoding="utf-8")
+            (dinov3_dir / "config.json").write_text("{}", encoding="utf-8")
+            (moge_dir / "model.pt").write_bytes(b"checkpoint-with-embedded-config")
+            naf_checkpoint = root / "naf_release.pth"
+            naf_checkpoint.write_bytes(b"naf")
+
+            args = types.SimpleNamespace(
+                source_dir=root / "source",
+                checkpoint_dir=checkpoint_dir,
+                dinov3_dir=dinov3_dir,
+                moge_dir=moge_dir,
+                naf_source_dir=naf_source_dir,
+                naf_checkpoint=naf_checkpoint,
+            )
+            moge_model = types.SimpleNamespace(cpu=mock.Mock())
+            official = types.SimpleNamespace(
+                IMAGE_COND_CONFIGS={"shape": {}},
+                init_pipeline=mock.Mock(return_value=object()),
+                load_moge_model=mock.Mock(return_value=moge_model),
+                get_camera_params_wild_moge=mock.Mock(
+                    return_value={
+                        "camera_angle_x": math.radians(45),
+                        "distance": 2.0,
+                        "mesh_scale": 1.0,
+                    }
+                ),
+            )
+            original_hub_load = mock.Mock()
+            torch_module = types.SimpleNamespace(
+                cuda=types.SimpleNamespace(
+                    is_available=mock.Mock(return_value=True),
+                    empty_cache=mock.Mock(),
+                ),
+                hub=types.SimpleNamespace(load=original_hub_load),
+            )
+            runtime = worker_main.Pixal3DRuntime(args)
+
+            with mock.patch.object(
+                worker_main, "_install_native_aliases"
+            ), mock.patch.object(
+                worker_main, "_load_official_inference", return_value=official
+            ), mock.patch.object(
+                worker_main.importlib, "import_module", return_value=torch_module
+            ):
+                runtime.ensure_pipeline("test-request")
+
+            camera = runtime._camera_params(
+                {"camera_fov_radians": None}, root / "prepared.png"
+            )
+
+        self.assertEqual(camera["distance"], 2.0)
+        official.load_moge_model.assert_called_once_with(
+            device="cuda", model_name=str(moge_dir / "model.pt")
+        )
+        moge_model.cpu.assert_called_once_with()
 
     def test_reuses_running_worker_for_multiple_request_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

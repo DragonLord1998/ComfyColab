@@ -295,7 +295,7 @@ def ensure_pixal3d_artifacts(
         repo_id=MOGE_MODEL_REPO,
         revision=MOGE_MODEL_REF,
         destination=_snapshot_dir(root, "moge", MOGE_MODEL_REF),
-        sentinel="config.json",
+        sentinel="model.pt",
         progress=progress,
     )
     naf_source_dir = _ensure_naf_source(root / f"naf-{NAF_SOURCE_REF[:12]}")

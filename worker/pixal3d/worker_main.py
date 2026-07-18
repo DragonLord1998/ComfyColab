@@ -251,7 +251,7 @@ class Pixal3DRuntime:
             raise FileNotFoundError("Pinned Pixal3D model snapshot is incomplete")
         if not self.args.dinov3_dir.joinpath("config.json").is_file():
             raise FileNotFoundError("Pinned DINOv3 snapshot is incomplete")
-        if not self.args.moge_dir.joinpath("config.json").is_file():
+        if not self.args.moge_dir.joinpath("model.pt").is_file():
             raise FileNotFoundError("Pinned MoGe snapshot is incomplete")
         for config in self.official.IMAGE_COND_CONFIGS.values():
             config["model_name"] = str(self.args.dinov3_dir)
@@ -322,7 +322,7 @@ class Pixal3DRuntime:
                 "mesh_scale": 1.0,
             }
         moge = self.official.load_moge_model(
-            device="cuda", model_name=str(self.args.moge_dir)
+            device="cuda", model_name=str(self.args.moge_dir / "model.pt")
         )
         try:
             return self.official.get_camera_params_wild_moge(
