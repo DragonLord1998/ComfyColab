@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import os
+from collections import deque
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
@@ -24,6 +25,7 @@ CORE_DIR = CONTENT / "ComfyColab"
 STATE_DIR = CONTENT / ".comfycolab"
 LOCK_FILE = STATE_DIR / "lock.json"
 STAGE1_CONFIG_FILE = STATE_DIR / "stage1-config.json"
+STAGE1_LOG_FILE = STATE_DIR / "stage1.log"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -121,6 +123,66 @@ def run(
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
+def run_stage1(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> None:
+    """Stream stage-1 output while retaining an actionable failure tail."""
+
+    print(f"[comfycolab:stage0] $ {' '.join(command)}", flush=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tail: deque[str] = deque(maxlen=200)
+    process: subprocess.Popen[str] | None = None
+    try:
+        with STAGE1_LOG_FILE.open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            if process.stdout is None:
+                process.kill()
+                raise fail("stage-1 output pipe was not created")
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                log.write(line)
+                log.flush()
+                tail.append(line)
+            return_code = process.wait()
+    except BaseException as error:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        if isinstance(error, OSError):
+            raise fail(f"stage-1 launch/output failed: {error}") from error
+        raise
+
+    if return_code == 0:
+        return
+    output_tail = "".join(tail)[-12000:].strip()
+    detail = (
+        "\n--- stage-1 output tail ---\n" + output_tail
+        if output_tail
+        else "\nStage-1 produced no output."
+    )
+    raise fail(
+        f"stage-1 exited with status {return_code} under Python "
+        f"{sys.version.split()[0]}. Full output: {STAGE1_LOG_FILE}.{detail}"
+    )
+
+
 def clone_authenticated_core(repository: str, commit: str) -> None:
     if CORE_DIR.exists():
         shutil.rmtree(CORE_DIR)
@@ -199,7 +261,7 @@ def main() -> None:
     STAGE1_CONFIG_FILE.write_bytes(canonical_json_bytes(stage1_config))
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(CORE_DIR / "src")
-    run(
+    run_stage1(
         [
             sys.executable,
             "-m",

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import re
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
 
+from comfycolab import stage0_runtime
 from comfycolab.config import ConfigError, CoreStage0ConfigV1
 from comfycolab.stage0 import CONFIG_MARKER, render_stage0
 
@@ -70,6 +76,113 @@ class Stage0ConfigTests(unittest.TestCase):
         decoded = base64.b64decode(match.group(1))
         self.assertEqual(decoded, config.canonical_bytes())
         self.assertEqual(json.loads(decoded), config.to_dict())
+
+    def test_stage1_failure_includes_combined_child_output_tail(self) -> None:
+        process = mock.Mock()
+        process.stdout = io.StringIO(
+            "[comfycolab] installing\n"
+            "ipython 7.34.0 requires jedi, which is not installed.\n"
+        )
+        process.wait.return_value = 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            log_path = state_dir / "stage1.log"
+            with (
+                mock.patch.object(stage0_runtime, "STATE_DIR", state_dir),
+                mock.patch.object(stage0_runtime, "STAGE1_LOG_FILE", log_path),
+                mock.patch.object(
+                    stage0_runtime.subprocess,
+                    "Popen",
+                    return_value=process,
+                ),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "(?s)stage-1 exited with status 1.*requires jedi",
+                ),
+            ):
+                stage0_runtime.run_stage1(
+                    ["python", "-m", "comfycolab.runtime"],
+                    cwd=Path(directory),
+                    env={},
+                )
+
+            self.assertIn("requires jedi", log_path.read_text(encoding="utf-8"))
+            process.wait.assert_called_once_with()
+
+    def test_stage1_success_streams_and_persists_output(self) -> None:
+        process = mock.Mock()
+        process.stdout = io.StringIO("COMFYCOLAB_READY={}\n")
+        process.wait.return_value = 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            log_path = state_dir / "stage1.log"
+            output = io.StringIO()
+            with (
+                mock.patch.object(stage0_runtime, "STATE_DIR", state_dir),
+                mock.patch.object(stage0_runtime, "STAGE1_LOG_FILE", log_path),
+                mock.patch.object(
+                    stage0_runtime.subprocess,
+                    "Popen",
+                    return_value=process,
+                ),
+                redirect_stdout(output),
+            ):
+                stage0_runtime.run_stage1(
+                    ["python", "-m", "comfycolab.runtime"],
+                    cwd=Path(directory),
+                    env={},
+                )
+
+            self.assertIn("COMFYCOLAB_READY={}", output.getvalue())
+            self.assertEqual(
+                log_path.read_text(encoding="utf-8"),
+                "COMFYCOLAB_READY={}\n",
+            )
+
+    def test_stage1_stream_failure_terminates_child(self) -> None:
+        class BrokenStream:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise OSError("stream failed")
+
+        process = mock.Mock()
+        process.stdout = BrokenStream()
+        process.poll.return_value = None
+        process.wait.return_value = 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            with (
+                mock.patch.object(stage0_runtime, "STATE_DIR", state_dir),
+                mock.patch.object(
+                    stage0_runtime,
+                    "STAGE1_LOG_FILE",
+                    state_dir / "stage1.log",
+                ),
+                mock.patch.object(
+                    stage0_runtime.subprocess,
+                    "Popen",
+                    return_value=process,
+                ),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "stage-1 launch/output failed: stream failed",
+                ),
+            ):
+                stage0_runtime.run_stage1(
+                    ["python", "-m", "comfycolab.runtime"],
+                    cwd=Path(directory),
+                    env={},
+                )
+
+            process.terminate.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=5)
 
 
 if __name__ == "__main__":

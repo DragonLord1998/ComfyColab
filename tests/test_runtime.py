@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -99,6 +100,106 @@ class RuntimeContractTests(unittest.TestCase):
             lock,
             accepted_licenses={"accept_research_terms"},
         )
+
+    def test_pip_check_records_preexisting_colab_conflicts(self) -> None:
+        result = subprocess.CompletedProcess(
+            args=["python", "-m", "pip", "check"],
+            returncode=1,
+            stdout="ipython 7.34.0 requires jedi, which is not installed.\n",
+            stderr="",
+        )
+        with mock.patch.object(runtime, "run", return_value=result) as run:
+            conflicts = runtime.pip_check_conflicts()
+
+        self.assertEqual(
+            conflicts,
+            ("ipython 7.34.0 requires jedi, which is not installed.",),
+        )
+        run.assert_called_once_with(
+            [runtime.sys.executable, "-m", "pip", "check"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_unchanged_preexisting_pip_conflict_is_not_fatal(self) -> None:
+        baseline = ("ipython 7.34.0 requires jedi, which is not installed.",)
+        runtime.reject_new_pip_conflicts(baseline, baseline)
+
+    def test_new_pip_conflict_is_fatal(self) -> None:
+        baseline = ("ipython 7.34.0 requires jedi, which is not installed.",)
+        current = baseline + (
+            "example 2.0 has requirement dependency<2, but you have dependency 3.0.",
+        )
+        with self.assertRaisesRegex(
+            runtime.RuntimeContractError,
+            "(?s)introduced Python package conflicts.*example 2.0",
+        ):
+            runtime.reject_new_pip_conflicts(baseline, current)
+
+    def test_pip_check_execution_error_is_fatal(self) -> None:
+        result = subprocess.CompletedProcess(
+            args=["python", "-m", "pip", "check"],
+            returncode=2,
+            stdout="",
+            stderr="pip check failed internally",
+        )
+        with (
+            mock.patch.object(runtime, "run", return_value=result),
+            self.assertRaisesRegex(
+                runtime.RuntimeContractError,
+                "pip check could not complete.*failed internally",
+            ),
+        ):
+            runtime.pip_check_conflicts()
+
+    def test_original_pip_baseline_is_reused_across_failed_attempts(self) -> None:
+        original = ("ipython 7.34.0 requires jedi, which is not installed.",)
+        introduced = original + (
+            "example 2.0 has requirement dependency<2, but you have dependency 3.0.",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            baseline_path = Path(directory) / "pip-baseline.json"
+            with (
+                mock.patch.object(runtime, "PIP_BASELINE_FILE", baseline_path),
+                mock.patch.object(
+                    runtime,
+                    "pip_check_conflicts",
+                    return_value=original,
+                ) as pip_check,
+            ):
+                first = runtime.load_or_create_pip_baseline()
+            self.assertEqual(first, original)
+            pip_check.assert_called_once_with()
+
+            with (
+                mock.patch.object(runtime, "PIP_BASELINE_FILE", baseline_path),
+                mock.patch.object(
+                    runtime,
+                    "pip_check_conflicts",
+                    side_effect=AssertionError("must not re-baseline a dirty retry"),
+                ),
+            ):
+                retry = runtime.load_or_create_pip_baseline()
+
+            self.assertEqual(retry, original)
+            with self.assertRaisesRegex(
+                runtime.RuntimeContractError,
+                "introduced Python package conflicts",
+            ):
+                runtime.reject_new_pip_conflicts(retry, introduced)
+
+    def test_corrupt_pip_baseline_requires_a_clean_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            baseline_path = Path(directory) / "pip-baseline.json"
+            baseline_path.write_text('{"schema":1}', encoding="utf-8")
+            with (
+                mock.patch.object(runtime, "PIP_BASELINE_FILE", baseline_path),
+                self.assertRaisesRegex(
+                    runtime.RuntimeContractError,
+                    "pip baseline is invalid.*Restart the Colab runtime",
+                ),
+            ):
+                runtime.load_or_create_pip_baseline()
 
     def test_dependency_destination_rejects_escape(self) -> None:
         with self.assertRaisesRegex(runtime.RuntimeContractError, "unsafe"):
