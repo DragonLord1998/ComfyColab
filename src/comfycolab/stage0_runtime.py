@@ -63,6 +63,7 @@ def decode_config(encoded: str) -> dict[str, object]:
         "port",
         "refresh",
         "colab_proxy",
+        "runtime_mode",
         "accepted_licenses",
     }
     if set(payload) != expected:
@@ -99,6 +100,8 @@ def decode_config(encoded: str) -> dict[str, object]:
         raise fail("port is invalid")
     if type(payload["refresh"]) is not bool or type(payload["colab_proxy"]) is not bool:
         raise fail("refresh and colab_proxy must be booleans")
+    if payload["runtime_mode"] not in {"generic", "legacy-full"}:
+        raise fail("runtime_mode is invalid")
     accepted = payload["accepted_licenses"]
     if (
         not isinstance(accepted, list)
@@ -253,6 +256,7 @@ def main() -> None:
         "port": config["port"],
         "refresh": config["refresh"],
         "colab_proxy": config["colab_proxy"],
+        "runtime_mode": config["runtime_mode"],
         "lock_path": str(LOCK_FILE),
         "lock_sha256": config["lock_sha256"],
         "core_dir": str(CORE_DIR),

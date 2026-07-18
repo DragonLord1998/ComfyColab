@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
+import re
 import sys
 import types
 import unittest
@@ -19,14 +21,21 @@ from comfycolab.notebook import (
 
 
 class NotebookTests(unittest.TestCase):
-    def config(self, *, colab_proxy: bool = True) -> CoreStage0ConfigV1:
+    def config(
+        self,
+        *,
+        colab_proxy: bool = True,
+        runtime_mode: str = "generic",
+        lock_bytes: bytes = b'{"packs":[],"schema":1}',
+    ) -> CoreStage0ConfigV1:
         return CoreStage0ConfigV1.create(
             core_repository="https://github.com/example/ComfyColab.git",
             core_commit="a" * 40,
             stage1_entrypoint="src/comfycolab/runtime.py",
             stage1_sha256="b" * 64,
-            lock_bytes=b'{"packs":[],"schema":1}',
+            lock_bytes=lock_bytes,
             colab_proxy=colab_proxy,
+            runtime_mode=runtime_mode,
         )
 
     def test_notebook_is_deterministic_and_cells_compile(self) -> None:
@@ -49,6 +58,41 @@ class NotebookTests(unittest.TestCase):
         bootstrap = "".join(notebook["cells"][1]["source"])
         self.assertIn("CONFIG_B64 =", bootstrap)
         self.assertIn("stage1_entrypoint", bootstrap)
+
+    def test_full_node_notebook_embeds_legacy_runtime_and_exact_pack_ids(self) -> None:
+        lock = {
+            "schema": 1,
+            "packs": [
+                {"id": pack_id}
+                for pack_id in ("3d", "3dgs", "image", "video")
+            ],
+        }
+        lock_bytes = json.dumps(
+            lock,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        notebook = render_notebook(
+            self.config(
+                runtime_mode="legacy-full",
+                lock_bytes=lock_bytes,
+            )
+        )
+        bootstrap = "".join(notebook["cells"][1]["source"])
+        match = re.search(
+            r'CONFIG_B64 = "([A-Za-z0-9+/=]+)"',
+            bootstrap,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        restored = CoreStage0ConfigV1.from_dict(
+            json.loads(base64.b64decode(match.group(1)))
+        )
+        self.assertEqual(restored.runtime_mode, "legacy-full")
+        self.assertEqual(
+            [pack["id"] for pack in json.loads(restored.lock_bytes())["packs"]],
+            ["3d", "3dgs", "image", "video"],
+        )
 
     def test_proxy_cell_reserves_trusted_session_bound_primary_url(self) -> None:
         notebook = render_notebook(self.config())

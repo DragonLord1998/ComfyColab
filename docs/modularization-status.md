@@ -22,6 +22,10 @@
   roots.
 - Immutable public daughter commits and raw manifest digests recorded in
   `registry/published-packs.json`.
+- An explicit `legacy-full` notebook compatibility runtime that verifies the
+  four node-bearing daughter commits, links their declared node roots, and
+  reuses the previously validated full dependency bootstrap without promoting
+  them into the official generic-runtime registry.
 
 ## Local repository layout
 
@@ -41,15 +45,15 @@ the singular World Model terminology.
 
 ## Fresh local verification
 
-- Core `scripts/check.sh`: 322 tests pass against exact published daughter
-  checkouts, including
-  validation of all five manifests from their sibling checkouts.
+- Core `scripts/check.sh`: 360 tests run against exact published daughter
+  checkouts (358 pass and 2 optional Pillow cases skip), including validation
+  of all five manifests from their sibling checkouts.
 - Daughter suites: 18 Image, 15 Video, 140 3D, 27 3DGS, and 4 World Model
   tests pass from their independent repository roots.
 - Shell syntax, Python compilation, offline pack doctors, and whitespace checks
   pass.
 
-The 322-test core checkout still includes the preserved legacy domain regression
+The 360-test core checkout still includes the preserved legacy domain regression
 suite. It proves migration compatibility, not that legacy source is ready to be
 deleted.
 
@@ -87,8 +91,9 @@ installation or model inference.
   verification; no mutable `main` reference is accepted.
 - The official pack registry remains empty until each candidate is runnable,
   discoverable in ComfyUI, accelerator-validated, and rollback-safe.
-- `legacy-full.json` is not published merely because all refs exist. It remains
-  gated on all five packs passing the combined runtime path.
+- `profiles/legacy-full.json` is published only for the explicit notebook
+  compatibility runtime. It is not an official generic-runtime promotion and
+  excludes World Model because that repository has no nodes.
 - Production domain source remains in core until the matching daughter
   pre-release, pack integration, live smoke, and lock rollback are proven.
 - The legacy `comfy-env==0.3.89` timeout patch remains in the old bootstrap
@@ -113,6 +118,7 @@ requires:
 6. implement generic 3D environment-TOML installation and cache restoration,
    then run every required live G4 path;
 7. promote only passing packs into `registry/official-packs.json`;
-8. publish `profiles/legacy-full.json` only after the combined profile passes;
+8. replace the `legacy-full` compatibility runtime with the generic pack
+   runtime only after the combined profile passes;
 9. remove matching legacy source and regression tests from core one pack at a
    time, retaining the old bootstrap until its remaining behavior is covered.

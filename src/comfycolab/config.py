@@ -56,6 +56,7 @@ class CoreStage0ConfigV1:
     port: int = 8188
     refresh: bool = False
     colab_proxy: bool = False
+    runtime_mode: str = "generic"
     accepted_licenses: tuple[str, ...] = ()
     schema: int = 1
 
@@ -71,6 +72,7 @@ class CoreStage0ConfigV1:
         port: int = 8188,
         refresh: bool = False,
         colab_proxy: bool = False,
+        runtime_mode: str = "generic",
         accepted_licenses: Sequence[str] = (),
     ) -> "CoreStage0ConfigV1":
         return cls(
@@ -83,6 +85,7 @@ class CoreStage0ConfigV1:
             port=port,
             refresh=refresh,
             colab_proxy=colab_proxy,
+            runtime_mode=runtime_mode,
             accepted_licenses=tuple(sorted(set(accepted_licenses))),
         ).validated()
 
@@ -99,6 +102,7 @@ class CoreStage0ConfigV1:
             "port",
             "refresh",
             "colab_proxy",
+            "runtime_mode",
             "accepted_licenses",
         }
         unknown = set(payload) - expected
@@ -119,6 +123,7 @@ class CoreStage0ConfigV1:
                 port=payload["port"],
                 refresh=payload["refresh"],
                 colab_proxy=payload["colab_proxy"],
+                runtime_mode=payload["runtime_mode"],
                 accepted_licenses=tuple(payload["accepted_licenses"]),
             )
         except TypeError as error:
@@ -165,6 +170,8 @@ class CoreStage0ConfigV1:
             raise ConfigError("port must be an integer between 1 and 65535")
         if type(self.refresh) is not bool or type(self.colab_proxy) is not bool:
             raise ConfigError("refresh and colab_proxy must be booleans")
+        if self.runtime_mode not in {"generic", "legacy-full"}:
+            raise ConfigError("runtime_mode must be 'generic' or 'legacy-full'")
         if (
             not isinstance(self.accepted_licenses, tuple)
             or len(self.accepted_licenses) != len(set(self.accepted_licenses))
@@ -193,6 +200,7 @@ class CoreStage0ConfigV1:
             "port": self.port,
             "refresh": self.refresh,
             "colab_proxy": self.colab_proxy,
+            "runtime_mode": self.runtime_mode,
             "accepted_licenses": list(self.accepted_licenses),
         }
 

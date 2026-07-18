@@ -13,7 +13,11 @@ from .packs.io import load_registry
 from .packs.lock import ComfyColabLockV1
 from .repositories import temporary_checkout
 from .resolution import PreparedLaunch, prepare_launch, prepare_launch_from_lock
-from .runtime import validate_pack_license_gates, validate_runtime_support
+from .runtime import (
+    validate_legacy_full_lock,
+    validate_pack_license_gates,
+    validate_runtime_support,
+)
 from .state import (
     normalize_runtime_state,
     read_runtime_state,
@@ -99,28 +103,36 @@ def _client(args: argparse.Namespace) -> ColabClient:
 
 
 def _prepare_launch(args: argparse.Namespace) -> PreparedLaunch:
+    runtime_mode = "legacy-full" if getattr(args, "legacy_full", False) else "generic"
+    prepared: PreparedLaunch | None = None
     if args.refresh:
         existing = _lock_path(args)
         if existing.is_file():
             lock = ComfyColabLockV1.from_bytes(existing.read_bytes())
-            return prepare_launch_from_lock(
+            prepared = prepare_launch_from_lock(
                 lock,
                 port=args.port,
                 refresh=True,
                 colab_proxy=args.colab_proxy,
+                runtime_mode=runtime_mode,
                 accepted_licenses=args.accept_license,
             )
-    return prepare_launch(
-        core_repository=resolve_repository_url(args.repo_url),
-        core_ref=args.repo_ref,
-        pack_aliases=args.pack,
-        profile=args.profile,
-        pack_ref_files=[Path(path).expanduser() for path in args.pack_ref],
-        port=args.port,
-        refresh=args.refresh,
-        colab_proxy=args.colab_proxy,
-        accepted_licenses=args.accept_license,
-    )
+    if prepared is None:
+        prepared = prepare_launch(
+            core_repository=resolve_repository_url(args.repo_url),
+            core_ref=args.repo_ref,
+            pack_aliases=args.pack,
+            profile=args.profile,
+            pack_ref_files=[Path(path).expanduser() for path in args.pack_ref],
+            port=args.port,
+            refresh=args.refresh,
+            colab_proxy=args.colab_proxy,
+            runtime_mode=runtime_mode,
+            accepted_licenses=args.accept_license,
+        )
+    if runtime_mode == "legacy-full":
+        validate_legacy_full_lock(prepared.lock.to_dict())
+    return prepared
 
 
 def _start(args: argparse.Namespace) -> int:
@@ -471,6 +483,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--colab-proxy",
         action=argparse.BooleanOptionalAction,
         default=True,
+    )
+    notebook.add_argument(
+        "--legacy-full",
+        action="store_true",
+        help=(
+            "Use the authenticated compatibility runtime for the exact Image, Video, "
+            "3D, and 3DGS daughter refs selected by the profile."
+        ),
     )
     notebook.add_argument("--output", default="ComfyColab.ipynb")
     notebook.set_defaults(handler=_render_notebook)

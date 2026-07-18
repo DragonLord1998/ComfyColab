@@ -37,6 +37,24 @@ class RuntimeContractTests(unittest.TestCase):
             "runtime_env": [],
         }
 
+    def full_node_lock(self) -> dict[str, object]:
+        lock = self.core_lock()
+        lock["packs"] = [
+            {
+                "id": pack_id,
+                "repository": f"https://github.com/example/{pack_id}.git",
+                "commit": character * 40,
+                "manifest_sha256": character * 64,
+            }
+            for pack_id, character in (
+                ("3d", "c"),
+                ("3dgs", "d"),
+                ("image", "e"),
+                ("video", "f"),
+            )
+        ]
+        return lock
+
     def test_load_lock_requires_digest_and_canonical_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "lock.json"
@@ -474,6 +492,38 @@ class RuntimeContractTests(unittest.TestCase):
                 }
             )
 
+    def test_legacy_full_requires_exact_node_bearing_daughter_set(self) -> None:
+        packs = runtime.validate_legacy_full_lock(self.full_node_lock())
+        self.assertEqual(
+            [pack["id"] for pack in packs],
+            ["3d", "3dgs", "image", "video"],
+        )
+        incomplete = self.full_node_lock()
+        incomplete["packs"] = list(incomplete["packs"])[:-1]
+        with self.assertRaisesRegex(
+            runtime.RuntimeContractError,
+            "requires exactly the node-bearing daughter packs",
+        ):
+            runtime.validate_legacy_full_lock(incomplete)
+
+    def test_legacy_full_dispatches_before_generic_runtime_preflight(self) -> None:
+        config = {
+            "runtime_mode": "legacy-full",
+            "accepted_licenses": [],
+            "port": 8188,
+            "refresh": False,
+            "colab_proxy": True,
+            "lock_sha256": "a" * 64,
+        }
+        lock = self.full_node_lock()
+        with (
+            mock.patch.object(runtime, "execute_legacy_full") as legacy,
+            mock.patch.object(runtime, "validate_runtime_support") as generic,
+        ):
+            runtime.execute(config, lock)
+        legacy.assert_called_once_with(config, lock)
+        generic.assert_not_called()
+
     def test_pack_license_gate_is_enforced_before_runtime_mutation(self) -> None:
         lock = {
             "packs": [
@@ -635,6 +685,41 @@ class RuntimeContractTests(unittest.TestCase):
             target = comfy / "custom_nodes" / "ComfyColab-ZImage"
             self.assertTrue(target.is_symlink())
             self.assertEqual(target.resolve(), source.resolve())
+
+    def test_link_node_roots_links_all_full_node_daughters(self) -> None:
+        targets = {
+            "3d": "ComfyColab-3D",
+            "3dgs": "ComfyColab-Triposplat",
+            "image": "ComfyColab-ZImage",
+            "video": "ComfyColab-LTXVideo",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy = root / "ComfyUI"
+            pack_roots: dict[str, Path] = {}
+            manifests: dict[str, dict[str, object]] = {}
+            for pack_id, target_name in targets.items():
+                pack_root = root / "packs" / pack_id
+                source = pack_root / "custom_nodes" / target_name
+                source.mkdir(parents=True)
+                pack_roots[pack_id] = pack_root
+                manifests[pack_id] = {
+                    "node_roots": [
+                        {
+                            "source": f"custom_nodes/{target_name}",
+                            "target": target_name,
+                        }
+                    ]
+                }
+            with mock.patch.object(runtime, "COMFY_DIR", comfy):
+                runtime.link_node_roots(manifests, pack_roots=pack_roots)
+            for pack_id, target_name in targets.items():
+                target = comfy / "custom_nodes" / target_name
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(
+                    target.resolve(),
+                    (pack_roots[pack_id] / "custom_nodes" / target_name).resolve(),
+                )
 
     def test_duplicate_node_targets_are_rejected_before_second_link(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

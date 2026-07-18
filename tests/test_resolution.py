@@ -12,6 +12,7 @@ from comfycolab.resolution import (
     resolve_from_checkout,
     select_pack_refs,
 )
+from comfycolab.packs.io import load_profile, load_registry
 
 
 class ResolutionTests(unittest.TestCase):
@@ -64,6 +65,20 @@ class ResolutionTests(unittest.TestCase):
             root = self.make_core(Path(directory) / "core")
             with self.assertRaisesRegex(ResolutionError, "authenticated official registry"):
                 select_pack_refs(root, pack_aliases=["image"], profile=None)
+
+    def test_legacy_full_profile_matches_published_node_packs(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        published = load_registry(root / "registry" / "published-packs.json")
+        profile = load_profile(root / "profiles" / "legacy-full.json")
+        expected = {
+            pack_id: published.packs[pack_id]
+            for pack_id in ("3d", "3dgs", "image", "video")
+        }
+        self.assertEqual(
+            {pack.id: pack for pack in profile.packs},
+            expected,
+        )
+        self.assertNotIn("world", {pack.id for pack in profile.packs})
 
     def test_refresh_reuses_exact_lock_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

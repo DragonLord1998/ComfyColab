@@ -447,6 +447,241 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(triposplat_target.resolve(), triposplat_source.resolve())
             self.assertEqual(ltx_target.resolve(), ltx_source.resolve())
 
+    def test_install_node_pack_links_configured_daughter_facades(self) -> None:
+        targets = {
+            "3d": "ComfyColab-3D",
+            "3dgs": "ComfyColab-Triposplat",
+            "image": "ComfyColab-ZImage",
+            "video": "ComfyColab-LTXVideo",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy = root / "ComfyUI"
+            configured: dict[str, tuple[Path, dict[str, object]]] = {}
+            for pack_id, target_name in targets.items():
+                pack_root = root / "packs" / pack_id
+                (pack_root / "custom_nodes" / target_name).mkdir(parents=True)
+                configured[pack_id] = (
+                    pack_root,
+                    {
+                        "node_roots": [
+                            {
+                                "source": f"custom_nodes/{target_name}",
+                                "target": target_name,
+                            }
+                        ]
+                    },
+                )
+            with mock.patch.object(remote_bootstrap, "COMFY_DIR", comfy):
+                remote_bootstrap.install_node_pack(configured)
+            for pack_id, target_name in targets.items():
+                target = comfy / "custom_nodes" / target_name
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(
+                    target.resolve(),
+                    (
+                        configured[pack_id][0]
+                        / "custom_nodes"
+                        / target_name
+                    ).resolve(),
+                )
+
+    def test_prepare_configured_node_pack_verifies_manifest_digest(self) -> None:
+        manifest_bytes = json.dumps(
+            {
+                "schema": 1,
+                "id": "image",
+                "version": "0.1.0",
+                "node_roots": [
+                    {
+                        "source": "custom_nodes/ComfyColab-ZImage",
+                        "target": "ComfyColab-ZImage",
+                    }
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        commit = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            packs_dir = Path(directory) / "packs"
+            stale_root = packs_dir / "image"
+            stale_root.mkdir(parents=True)
+            stale_node = stale_root / "custom_nodes" / "stale.py"
+            stale_node.parent.mkdir(parents=True)
+            stale_node.write_text("modified = True\n", encoding="utf-8")
+
+            def clone(_url: str, destination: Path, _ref: str) -> None:
+                destination.mkdir(parents=True)
+                (destination / "comfycolab-pack.json").write_bytes(manifest_bytes)
+
+            with (
+                mock.patch.multiple(
+                    remote_bootstrap,
+                    PACKS_DIR=packs_dir,
+                    CONFIG={
+                        "packs": [
+                            {
+                                "id": "image",
+                                "repository": "https://github.com/example/image.git",
+                                "commit": commit,
+                                "manifest_sha256": hashlib.sha256(
+                                    manifest_bytes
+                                ).hexdigest(),
+                            }
+                        ]
+                    },
+                ),
+                mock.patch.object(
+                    remote_bootstrap,
+                    "clone_or_update",
+                    side_effect=clone,
+                ),
+                mock.patch.object(
+                    remote_bootstrap,
+                    "git_commit",
+                    return_value=commit,
+                ),
+            ):
+                prepared = remote_bootstrap.prepare_configured_node_packs()
+            self.assertEqual(set(prepared), {"image"})
+            self.assertEqual(prepared["image"][1]["id"], "image")
+            self.assertFalse(stale_node.exists())
+
+    def test_cubepart_source_requires_explicit_license_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cube_dir = Path(directory) / "cube"
+            cube_dir.mkdir()
+            (cube_dir / "stale.py").write_text("stale = True\n", encoding="utf-8")
+            with (
+                mock.patch.multiple(
+                    remote_bootstrap,
+                    CONFIG={"accepted_licenses": []},
+                    CUBE_DIR=cube_dir,
+                ),
+                mock.patch.object(remote_bootstrap, "clone_or_update") as clone,
+            ):
+                self.assertFalse(remote_bootstrap.prepare_cubepart_source())
+            clone.assert_not_called()
+            self.assertFalse(cube_dir.exists())
+
+        with (
+            mock.patch.object(
+                remote_bootstrap,
+                "CONFIG",
+                {"accepted_licenses": ["accept_research_license"]},
+            ),
+            mock.patch.object(remote_bootstrap, "clone_or_update") as clone,
+        ):
+            self.assertTrue(remote_bootstrap.prepare_cubepart_source())
+        clone.assert_called_once_with(
+            "https://github.com/Roblox/cube.git",
+            remote_bootstrap.CUBE_DIR,
+            remote_bootstrap.CUBEPART_REF,
+        )
+
+    def test_legacy_cloudflared_is_versioned_and_digest_verified(self) -> None:
+        payload = b"verified-cloudflared"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            with (
+                mock.patch.object(remote_bootstrap, "STATE_DIR", state_dir),
+                mock.patch.object(
+                    remote_bootstrap,
+                    "CLOUDFLARED_ASSETS",
+                    {"amd64": ("cloudflared-linux-amd64", digest)},
+                ),
+                mock.patch.object(
+                    remote_bootstrap.platform,
+                    "machine",
+                    return_value="x86_64",
+                ),
+                mock.patch.object(
+                    remote_bootstrap.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(payload),
+                ) as urlopen,
+            ):
+                path = remote_bootstrap.cloudflared_path()
+            self.assertEqual(path.read_bytes(), payload)
+            url = urlopen.call_args.args[0]
+            self.assertIn(
+                f"/download/{remote_bootstrap.CLOUDFLARED_VERSION}/",
+                url,
+            )
+            self.assertNotIn("/latest/", url)
+
+            path.unlink()
+            with (
+                mock.patch.object(remote_bootstrap, "STATE_DIR", state_dir),
+                mock.patch.object(
+                    remote_bootstrap,
+                    "CLOUDFLARED_ASSETS",
+                    {"amd64": ("cloudflared-linux-amd64", "0" * 64)},
+                ),
+                mock.patch.object(
+                    remote_bootstrap.platform,
+                    "machine",
+                    return_value="x86_64",
+                ),
+                mock.patch.object(
+                    remote_bootstrap.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(payload),
+                ),
+                self.assertRaisesRegex(RuntimeError, "digest mismatch"),
+            ):
+                remote_bootstrap.cloudflared_path()
+            self.assertEqual(list(state_dir.glob("*.part")), [])
+
+    def test_configured_daughter_nodes_must_appear_in_object_info(self) -> None:
+        configured = {
+            "image": (
+                Path("/content/.comfycolab/packs/image"),
+                {
+                    "probes": [
+                        {
+                            "phase": "post_start",
+                            "type": "comfy_node_ids",
+                            "values": ["ComfyColabZImageTurboBundleLoader"],
+                        }
+                    ]
+                },
+            )
+        }
+        response = io.BytesIO(
+            json.dumps(
+                {"ComfyColabZImageTurboBundleLoader": {"display_name": "Z-Image"}}
+            ).encode()
+        )
+        with mock.patch.object(
+            remote_bootstrap.urllib.request,
+            "urlopen",
+            return_value=response,
+        ):
+            self.assertEqual(
+                remote_bootstrap.validate_configured_node_discovery(
+                    8188,
+                    configured,
+                ),
+                {"image": ["ComfyColabZImageTurboBundleLoader"]},
+            )
+
+        missing_response = io.BytesIO(b"{}")
+        with (
+            mock.patch.object(
+                remote_bootstrap.urllib.request,
+                "urlopen",
+                return_value=missing_response,
+            ),
+            self.assertRaisesRegex(RuntimeError, "missing ComfyUI nodes"),
+        ):
+            remote_bootstrap.validate_configured_node_discovery(
+                8188,
+                configured,
+            )
+
     def test_triposplat_core_support_requires_native_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             comfy = Path(directory)
@@ -1274,6 +1509,93 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn('new URL("/", proxy).toString()', expression)
         self.assertEqual(timeout, 15)
         probe.assert_called_once_with(url)
+
+    def test_legacy_launch_uses_reserved_prod_colab_proxy_and_cors(self) -> None:
+        proxy = (
+            "https://8188-gpu-g4-s-kkb-use5c1-3m501x4q87ilk-c."
+            "us-east5-1.prod.colab.dev/"
+        )
+        with mock.patch.dict(
+            remote_bootstrap.os.environ,
+            {
+                "COMFYCOLAB_PROXY_URL": proxy,
+                "COMFYCOLAB_CORS_ORIGIN": proxy.removesuffix("/"),
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                remote_bootstrap.request_colab_proxy_url(8188),
+                None,
+            )
+            with mock.patch.object(
+                remote_bootstrap,
+                "CONFIG",
+                {"colab_proxy": True},
+            ):
+                self.assertEqual(
+                    remote_bootstrap.request_colab_proxy_url(8188),
+                    proxy,
+                )
+                self.assertEqual(
+                    remote_bootstrap.comfy_launch_command(
+                        8188,
+                        colab_proxy=True,
+                    )[-2:],
+                    ["--enable-cors-header", proxy.removesuffix("/")],
+                )
+
+    def test_legacy_reuse_requires_same_lock_cors_and_runtime_mode(self) -> None:
+        state = {
+            "lockSha256": "a" * 64,
+            "corsOrigin": "https://proxy.prod.colab.dev",
+            "runtimeMode": "legacy-full",
+            "acceptedLicenses": [],
+            "comfyUrl": "https://proxy.prod.colab.dev/",
+            "comfyPid": 42,
+        }
+        with (
+            mock.patch.object(remote_bootstrap, "pid_alive", return_value=True),
+            mock.patch.object(remote_bootstrap, "http_ready", return_value=True),
+        ):
+            self.assertTrue(
+                remote_bootstrap.running_comfy_matches(
+                    state,
+                    lock_sha256="a" * 64,
+                    cors_origin="https://proxy.prod.colab.dev",
+                    runtime_mode="legacy-full",
+                    accepted_licenses=[],
+                    port=8188,
+                    refresh=False,
+                )
+            )
+            for field, value in (
+                ("lock_sha256", "b" * 64),
+                ("cors_origin", "https://other.prod.colab.dev"),
+                ("runtime_mode", "generic"),
+            ):
+                arguments = {
+                    "lock_sha256": "a" * 64,
+                    "cors_origin": "https://proxy.prod.colab.dev",
+                    "runtime_mode": "legacy-full",
+                    "accepted_licenses": [],
+                    "port": 8188,
+                    "refresh": False,
+                }
+                arguments[field] = value
+                self.assertFalse(
+                    remote_bootstrap.running_comfy_matches(state, **arguments)
+                )
+            self.assertFalse(
+                remote_bootstrap.running_comfy_matches(
+                    state,
+                    lock_sha256="a" * 64,
+                    cors_origin="https://proxy.prod.colab.dev",
+                    runtime_mode="legacy-full",
+                    accepted_licenses=["accept_research_license"],
+                    port=8188,
+                    refresh=False,
+                )
+            )
 
     def test_colab_proxy_rejects_untrusted_url_and_falls_back(self) -> None:
         with mock.patch.object(

@@ -188,6 +188,7 @@ def prepare_launch(
     port: int = 8188,
     refresh: bool = False,
     colab_proxy: bool = False,
+    runtime_mode: str = "generic",
     accepted_licenses: Sequence[str] = (),
 ) -> PreparedLaunch:
     with temporary_checkout(core_repository, core_ref) as (core_checkout, core_commit):
@@ -215,6 +216,7 @@ def prepare_launch(
             port=port,
             refresh=refresh,
             colab_proxy=colab_proxy,
+            runtime_mode=runtime_mode,
             accepted_licenses=accepted_licenses,
         )
         return PreparedLaunch(
@@ -231,6 +233,7 @@ def prepare_launch_from_lock(
     port: int = 8188,
     refresh: bool = True,
     colab_proxy: bool = False,
+    runtime_mode: str = "generic",
     accepted_licenses: Sequence[str] = (),
 ) -> PreparedLaunch:
     payload = lock.to_dict()
@@ -260,6 +263,7 @@ def prepare_launch_from_lock(
             port=port,
             refresh=refresh,
             colab_proxy=colab_proxy,
+            runtime_mode=runtime_mode,
             accepted_licenses=accepted_licenses,
         )
     return PreparedLaunch(

@@ -35,6 +35,7 @@ TUNNEL_LOG = STATE_DIR / "cloudflared.log"
 PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
+LEGACY_FULL_PACK_IDS = frozenset({"3d", "3dgs", "image", "video"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PACK_ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
@@ -260,6 +261,7 @@ def load_stage1_config(path: Path) -> dict[str, Any]:
         "port",
         "refresh",
         "colab_proxy",
+        "runtime_mode",
         "lock_path",
         "lock_sha256",
         "core_dir",
@@ -271,6 +273,8 @@ def load_stage1_config(path: Path) -> dict[str, Any]:
         raise RuntimeContractError("stage-1 port is invalid")
     if type(payload["refresh"]) is not bool or type(payload["colab_proxy"]) is not bool:
         raise RuntimeContractError("stage-1 flags must be booleans")
+    if payload["runtime_mode"] not in {"generic", "legacy-full"}:
+        raise RuntimeContractError("stage-1 runtime_mode is invalid")
     if not isinstance(payload["lock_path"], str) or not Path(payload["lock_path"]).is_absolute():
         raise RuntimeContractError("stage-1 lock_path must be absolute")
     if not isinstance(payload["core_dir"], str) or not Path(payload["core_dir"]).is_absolute():
@@ -1858,7 +1862,96 @@ def emit_ready(payload: Mapping[str, Any]) -> None:
     print(READY_PREFIX + json.dumps(payload, separators=(",", ":")), flush=True)
 
 
+def validate_legacy_full_lock(
+    lock: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    packs = lock.get("packs")
+    if not isinstance(packs, list):
+        raise RuntimeContractError("legacy-full lock.packs must be an array")
+    validated: dict[str, Mapping[str, Any]] = {}
+    for pack in packs:
+        if not isinstance(pack, dict):
+            raise RuntimeContractError("legacy-full lock pack entries must be objects")
+        pack_id = safe_pack_id(pack.get("id"))
+        if pack_id in validated:
+            raise RuntimeContractError(f"duplicate pack in legacy-full lock: {pack_id}")
+        validate_repository(
+            pack.get("repository"),
+            field=f"legacy-full pack {pack_id} repository",
+        )
+        validate_commit(
+            pack.get("commit"),
+            field=f"legacy-full pack {pack_id} commit",
+        )
+        manifest_sha256 = pack.get("manifest_sha256")
+        if (
+            not isinstance(manifest_sha256, str)
+            or not _SHA256_RE.fullmatch(manifest_sha256)
+        ):
+            raise RuntimeContractError(
+                f"legacy-full pack {pack_id} manifest digest is invalid"
+            )
+        validated[pack_id] = pack
+    if set(validated) != LEGACY_FULL_PACK_IDS:
+        expected = ", ".join(sorted(LEGACY_FULL_PACK_IDS))
+        actual = ", ".join(sorted(validated)) or "none"
+        raise RuntimeContractError(
+            "legacy-full requires exactly the node-bearing daughter packs "
+            f"{expected}; resolved {actual}"
+        )
+    return tuple(validated[pack_id] for pack_id in sorted(validated))
+
+
+def execute_legacy_full(
+    config: Mapping[str, Any],
+    lock: Mapping[str, Any],
+) -> None:
+    """Run the preserved full installer against authenticated daughter refs."""
+
+    packs = validate_legacy_full_lock(lock)
+    core = lock.get("core")
+    if not isinstance(core, dict):
+        raise RuntimeContractError("legacy-full lock.core must be an object")
+    repository = validate_repository(
+        core.get("repository"),
+        field="legacy-full core repository",
+    )
+    commit = validate_commit(
+        core.get("commit"),
+        field="legacy-full core commit",
+    )
+
+    from . import remote_bootstrap
+
+    remote_bootstrap.CONFIG = {
+        "repository_url": repository,
+        "repository_ref": commit,
+        "port": int(config["port"]),
+        "refresh": bool(config["refresh"]),
+        "colab_proxy": bool(config["colab_proxy"]),
+        "runtime_mode": "legacy-full",
+        "lock_sha256": str(config["lock_sha256"]),
+        "accepted_licenses": list(config.get("accepted_licenses", [])),
+        "packs": [
+            {
+                "id": pack["id"],
+                "repository": pack["repository"],
+                "commit": pack["commit"],
+                "manifest_sha256": pack["manifest_sha256"],
+            }
+            for pack in packs
+        ],
+    }
+    remote_bootstrap.main()
+
+
 def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
+    runtime_mode = config.get("runtime_mode", "generic")
+    if runtime_mode == "legacy-full":
+        execute_legacy_full(config, lock)
+        return
+    if runtime_mode != "generic":
+        raise RuntimeContractError(f"unsupported runtime mode: {runtime_mode!r}")
     validate_runtime_support(lock)
     accepted_licenses = set(config["accepted_licenses"])
     validate_pack_license_gates(
