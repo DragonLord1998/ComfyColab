@@ -34,9 +34,11 @@ COMFY_LOG = STATE_DIR / "comfyui.log"
 TUNNEL_LOG = STATE_DIR / "cloudflared.log"
 PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
+DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PACK_ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 # Published upstream checksums:
 # https://github.com/cloudflare/cloudflared/releases/tag/2026.7.2
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -97,6 +99,104 @@ def validate_repository(value: object, *, field: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise RuntimeContractError(f"{field} must not include credentials, query, or fragment")
     return value
+
+
+def _trusted_colab_proxy_host(hostname: str) -> bool:
+    return (
+        hostname == "colab.research.google.com"
+        or (
+            hostname.endswith(".prod.colab.dev")
+            and hostname != "prod.colab.dev"
+        )
+        or (
+            hostname.endswith(".colab.googleusercontent.com")
+            and hostname != "colab.googleusercontent.com"
+        )
+    )
+
+
+def _validated_colab_url(value: object, *, field: str, allow_frontend: bool) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or "?" in value
+        or "#" in value
+    ):
+        raise RuntimeContractError(f"{field} must be a trusted HTTPS Colab origin")
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+        hostname = (parsed.hostname or "").lower()
+    except ValueError as error:
+        raise RuntimeContractError(f"{field} must be a trusted HTTPS Colab origin") from error
+    labels = hostname.split(".")
+    trusted_host = _trusted_colab_proxy_host(hostname) and (
+        allow_frontend or hostname != "colab.research.google.com"
+    )
+    if (
+        parsed.scheme != "https"
+        or not trusted_host
+        or any(not _HOST_LABEL_RE.fullmatch(label) for label in labels)
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or port not in {None, 443}
+    ):
+        raise RuntimeContractError(f"{field} must be a trusted HTTPS Colab origin")
+    return f"https://{hostname}"
+
+
+def validate_colab_cors_origin(value: object) -> str:
+    return _validated_colab_url(
+        value,
+        field="COMFYCOLAB_CORS_ORIGIN",
+        allow_frontend=True,
+    )
+
+
+def validate_colab_proxy_url(value: object) -> str:
+    return (
+        _validated_colab_url(
+            value,
+            field="COMFYCOLAB_PROXY_URL",
+            allow_frontend=False,
+        )
+        + "/"
+    )
+
+
+def colab_cors_origin(inherited_environment: Mapping[str, str]) -> str:
+    return validate_colab_cors_origin(
+        inherited_environment.get(
+            "COMFYCOLAB_CORS_ORIGIN",
+            DEFAULT_COLAB_CORS_ORIGIN,
+        )
+    )
+
+
+def comfy_launch_command(
+    port: int,
+    *,
+    colab_proxy: bool,
+    inherited_environment: Mapping[str, str],
+) -> list[str]:
+    command = [
+        sys.executable,
+        "main.py",
+        "--listen",
+        "127.0.0.1",
+        "--port",
+        str(port),
+    ]
+    if colab_proxy:
+        cors_origin = colab_cors_origin(inherited_environment)
+        command.extend(["--enable-cors-header", cors_origin])
+    return command
 
 
 def validate_commit(value: object, *, field: str) -> str:
@@ -1439,6 +1539,36 @@ def wait_for_tunnel(process: subprocess.Popen[bytes], timeout: int = 60) -> str:
     raise TimeoutError("cloudflared did not publish a URL")
 
 
+def start_cloudflare_tunnel(
+    port: int,
+) -> tuple[subprocess.Popen[bytes] | None, str | None, str | None]:
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        with TUNNEL_LOG.open("wb") as tunnel_log:
+            process = subprocess.Popen(
+                [
+                    str(cloudflared_path()),
+                    "tunnel",
+                    "--url",
+                    f"http://127.0.0.1:{port}",
+                    "--no-autoupdate",
+                ],
+                stdout=tunnel_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        return process, wait_for_tunnel(process), None
+    except Exception as error:
+        if process is not None:
+            stop_started_process(process)
+        detail = f"{type(error).__name__}: {error}"[-2000:]
+        print(
+            f"[comfycolab] Cloudflare fallback unavailable ({detail}).",
+            flush=True,
+        )
+        return None, None, detail
+
+
 def request_colab_proxy_url(port: int) -> str | None:
     try:
         from google.colab.output import eval_js
@@ -1453,16 +1583,7 @@ def request_colab_proxy_url(port: int) -> str | None:
 }})()
 """.strip()
         value = eval_js(expression, timeout_sec=15)
-        if not isinstance(value, str):
-            return None
-        parsed = urlparse(value)
-        hostname = (parsed.hostname or "").lower()
-        if parsed.scheme != "https" or not (
-            hostname == "googleusercontent.com"
-            or hostname.endswith(".googleusercontent.com")
-        ):
-            return None
-        return value
+        return validate_colab_proxy_url(value)
     except Exception as error:
         print(f"[comfycolab] Colab proxy unavailable ({error}).", flush=True)
         return None
@@ -1624,6 +1745,105 @@ def reset_installation_roots() -> None:
         remove_managed_path(path)
 
 
+def load_existing_installation(
+    lock: Mapping[str, Any],
+) -> tuple[dict[str, Path], dict[str, dict[str, Any]], dict[str, str]]:
+    comfyui = lock["comfyui"]
+    assert isinstance(comfyui, dict)
+    expected_comfyui_commit = str(comfyui["commit"])
+    if not COMFY_DIR.is_dir() or git_commit(COMFY_DIR) != expected_comfyui_commit:
+        raise RuntimeContractError("installed ComfyUI does not match the active lock")
+
+    pack_roots: dict[str, Path] = {}
+    manifests: dict[str, dict[str, Any]] = {}
+    for pack in lock.get("packs", []):
+        assert isinstance(pack, dict)
+        pack_id = safe_pack_id(pack["id"])
+        root = PACKS_DIR / pack_id
+        if not root.is_dir() or git_commit(root) != pack.get("commit"):
+            raise RuntimeContractError(
+                f"installed pack {pack_id} does not match the active lock"
+            )
+        pack_roots[pack_id] = root
+        manifests[pack_id] = load_pack_manifest(root, pack)
+
+    resolved_paths = {"comfyui": str(COMFY_DIR)}
+    for dependency in lock.get("dependencies", []):
+        assert isinstance(dependency, dict)
+        dependency_id = safe_pack_id(dependency.get("id"))
+        destination = dependency_destination(dependency)
+        if dependency.get("install_phase", "bootstrap") != "lazy" and not destination.exists():
+            raise RuntimeContractError(
+                f"installed dependency {dependency_id} is missing"
+            )
+        resolved_paths[dependency_id] = str(destination)
+
+    for specification in lock.get("environments", []):
+        assert isinstance(specification, dict)
+        environment_id = safe_pack_id(specification.get("id"))
+        kind = specification.get("kind")
+        if kind == "main":
+            python = Path(sys.executable)
+        elif kind == "isolated":
+            python = ENVIRONMENTS_DIR / environment_id / "bin" / "python"
+        else:
+            raise RuntimeContractError(
+                f"environment {environment_id} uses unsupported kind {kind!r}"
+            )
+        if not python.is_file():
+            raise RuntimeContractError(
+                f"installed environment {environment_id} is missing"
+            )
+        resolved_paths[f"environment:{environment_id}"] = str(python)
+    return pack_roots, manifests, resolved_paths
+
+
+def running_comfy_matches(
+    previous: Mapping[str, Any],
+    *,
+    lock_sha256: str,
+    cors_origin: str | None,
+    port: int,
+    refresh: bool,
+) -> bool:
+    return (
+        not refresh
+        and previous.get("lockSha256") == lock_sha256
+        and previous.get("corsOrigin") == cors_origin
+        and pid_alive(previous.get("comfyPid"))
+        and http_ready(port)
+    )
+
+
+def existing_cloudflare_endpoint(
+    previous: Mapping[str, Any],
+) -> tuple[int | None, str | None]:
+    tunnel_pid = previous.get("tunnelPid")
+    cloudflare_url = previous.get("cloudflareUrl")
+    if (
+        isinstance(tunnel_pid, int)
+        and pid_alive(tunnel_pid)
+        and isinstance(cloudflare_url, str)
+    ):
+        return tunnel_pid, cloudflare_url
+    return None, None
+
+
+def require_access_endpoint(
+    *,
+    colab_proxy: bool,
+    cloudflare_url: str | None,
+    tunnel_error: str | None,
+) -> None:
+    if colab_proxy or cloudflare_url is not None:
+        return
+    detail = f" ({tunnel_error})" if tunnel_error else ""
+    raise RuntimeError(
+        "Cloudflare fallback unavailable while Colab proxy mode is disabled"
+        f"{detail}"
+    )
+
+
 def save_state(payload: Mapping[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     temporary = STATE_FILE.with_suffix(".tmp")
@@ -1645,6 +1865,21 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
         lock,
         accepted_licenses=accepted_licenses,
     )
+    port = int(config["port"])
+    refresh = bool(config["refresh"])
+    colab_proxy = bool(config["colab_proxy"])
+    lock_sha256 = str(config["lock_sha256"])
+    cors_origin = colab_cors_origin(os.environ) if colab_proxy else None
+    reserved_proxy_url = None
+    if colab_proxy and "COMFYCOLAB_PROXY_URL" in os.environ:
+        reserved_proxy_url = validate_colab_proxy_url(
+            os.environ["COMFYCOLAB_PROXY_URL"]
+        )
+    comfy_command = comfy_launch_command(
+        port,
+        colab_proxy=colab_proxy,
+        inherited_environment=os.environ,
+    )
     baseline_pip_conflicts = load_or_create_pip_baseline()
     if baseline_pip_conflicts:
         print(
@@ -1653,50 +1888,113 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
             flush=True,
         )
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    port = int(config["port"])
-    refresh = bool(config["refresh"])
-    colab_proxy = bool(config["colab_proxy"])
-    lock_sha256 = str(config["lock_sha256"])
     previous = load_state()
-    reusable = (
-        not refresh
-        and previous.get("lockSha256") == lock_sha256
-        and http_ready(port)
-        and pid_alive(previous.get("comfyPid"))
-        and bool(previous.get("comfyUrl"))
-    )
-    if reusable:
-        emit_ready(previous)
+    if running_comfy_matches(
+        previous,
+        lock_sha256=lock_sha256,
+        cors_origin=cors_origin,
+        port=port,
+        refresh=refresh,
+    ):
+        proxy_url = (
+            reserved_proxy_url or request_colab_proxy_url(port)
+            if colab_proxy
+            else None
+        )
+        tunnel_pid, cloudflare_url = existing_cloudflare_endpoint(previous)
+        new_tunnel: subprocess.Popen[bytes] | None = None
+        tunnel_error: str | None = None
+        if cloudflare_url is None:
+            stop_managed_process(previous.get("tunnelPid"))
+            new_tunnel, cloudflare_url, tunnel_error = start_cloudflare_tunnel(port)
+            tunnel_pid = new_tunnel.pid if new_tunnel is not None else None
+        require_access_endpoint(
+            colab_proxy=colab_proxy,
+            cloudflare_url=cloudflare_url,
+            tunnel_error=tunnel_error,
+        )
+        payload = dict(previous)
+        payload.update(
+            {
+                "status": "ready",
+                "comfyUrl": proxy_url or cloudflare_url,
+                "cloudflareUrl": cloudflare_url,
+                "colabProxyUrl": proxy_url,
+                "corsOrigin": cors_origin,
+                "tunnelPid": tunnel_pid,
+                "tunnelError": tunnel_error,
+            }
+        )
+        try:
+            save_state(payload)
+            emit_ready(payload)
+        except BaseException:
+            if new_tunnel is not None:
+                stop_started_process(new_tunnel)
+            raise
         return
-    stop_managed_process(previous.get("tunnelPid"))
-    stop_managed_process(previous.get("comfyPid"))
-    STATE_FILE.unlink(missing_ok=True)
+
+    installation_reused = (
+        not refresh and previous.get("lockSha256") == lock_sha256
+    )
+    if installation_reused:
+        stop_managed_process(previous.get("comfyPid"))
+    else:
+        stop_managed_process(previous.get("tunnelPid"))
+        stop_managed_process(previous.get("comfyPid"))
     if http_ready(port):
         raise RuntimeError(f"port {port} is occupied by an unmanaged process")
-    reset_installation_roots()
 
     comfyui = lock["comfyui"]
     assert isinstance(comfyui, dict)
-    pack_roots, manifests = clone_packs(lock)
-    validate_manifest_compatibility(
-        manifests,
-        comfyui_commit=str(comfyui["commit"]),
-    )
-    clone_at_commit(str(comfyui["repository"]), COMFY_DIR, str(comfyui["commit"]))
-    install_core_requirements()
-    resolved_paths = install_dependencies(
-        lock,
-        pack_roots=pack_roots,
-        accepted_licenses=accepted_licenses,
-    )
-    resolved_paths["comfyui"] = str(COMFY_DIR)
-    environment_pythons = install_environments(
-        lock,
-        accepted_licenses=accepted_licenses,
-    )
-    resolved_paths.update(
-        {f"environment:{name}": path for name, path in environment_pythons.items()}
-    )
+    if installation_reused:
+        try:
+            pack_roots, manifests, resolved_paths = load_existing_installation(lock)
+        except (OSError, subprocess.CalledProcessError, RuntimeContractError) as error:
+            print(
+                f"[comfycolab] Existing installation is not reusable ({error}); "
+                "reinstalling the active lock.",
+                flush=True,
+            )
+            stop_managed_process(previous.get("tunnelPid"))
+            installation_reused = False
+
+    if not installation_reused:
+        STATE_FILE.unlink(missing_ok=True)
+        reset_installation_roots()
+        pack_roots, manifests = clone_packs(lock)
+        validate_manifest_compatibility(
+            manifests,
+            comfyui_commit=str(comfyui["commit"]),
+        )
+        clone_at_commit(
+            str(comfyui["repository"]),
+            COMFY_DIR,
+            str(comfyui["commit"]),
+        )
+        install_core_requirements()
+        resolved_paths = install_dependencies(
+            lock,
+            pack_roots=pack_roots,
+            accepted_licenses=accepted_licenses,
+        )
+        resolved_paths["comfyui"] = str(COMFY_DIR)
+        environment_pythons = install_environments(
+            lock,
+            accepted_licenses=accepted_licenses,
+        )
+        resolved_paths.update(
+            {
+                f"environment:{name}": path
+                for name, path in environment_pythons.items()
+            }
+        )
+    else:
+        validate_manifest_compatibility(
+            manifests,
+            comfyui_commit=str(comfyui["commit"]),
+        )
+
     applied_patches = apply_patches(
         lock,
         pack_roots=pack_roots,
@@ -1736,19 +2034,12 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
     environment["PYTHONUNBUFFERED"] = "1"
     environment.update(runtime_environment)
     comfy: subprocess.Popen[bytes] | None = None
-    tunnel: subprocess.Popen[bytes] | None = None
+    new_tunnel: subprocess.Popen[bytes] | None = None
     ready = False
     try:
         with COMFY_LOG.open("wb") as comfy_log:
             comfy = subprocess.Popen(
-                [
-                    sys.executable,
-                    "main.py",
-                    "--listen",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
+                comfy_command,
                 cwd=COMFY_DIR,
                 stdout=comfy_log,
                 stderr=subprocess.STDOUT,
@@ -1766,29 +2057,26 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
         )
         for pack_id, result in post_start_readiness.items():
             hook_readiness.setdefault(pack_id, {})["post_start"] = result
-        proxy_url = request_colab_proxy_url(port) if colab_proxy else None
-        cloudflare_url: str | None = None
-        try:
-            with TUNNEL_LOG.open("wb") as tunnel_log:
-                tunnel = subprocess.Popen(
-                    [
-                        str(cloudflared_path()),
-                        "tunnel",
-                        "--url",
-                        f"http://127.0.0.1:{port}",
-                        "--no-autoupdate",
-                    ],
-                    stdout=tunnel_log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-            cloudflare_url = wait_for_tunnel(tunnel)
-        except Exception:
-            if tunnel is not None:
-                stop_started_process(tunnel)
-                tunnel = None
-            if not proxy_url:
-                raise
+        proxy_url = None
+        if colab_proxy:
+            proxy_url = reserved_proxy_url or request_colab_proxy_url(port)
+        tunnel_pid, cloudflare_url = (
+            existing_cloudflare_endpoint(previous)
+            if installation_reused
+            else (None, None)
+        )
+        tunnel_error: str | None = None
+        if cloudflare_url is None:
+            stop_managed_process(previous.get("tunnelPid"))
+            new_tunnel, cloudflare_url, tunnel_error = start_cloudflare_tunnel(
+                port
+            )
+            tunnel_pid = new_tunnel.pid if new_tunnel is not None else None
+        require_access_endpoint(
+            colab_proxy=colab_proxy,
+            cloudflare_url=cloudflare_url,
+            tunnel_error=tunnel_error,
+        )
         pack_state: dict[str, Any] = {}
         lock_packs = {
             str(pack["id"]): pack
@@ -1822,8 +2110,10 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
             "comfyUrl": proxy_url or cloudflare_url,
             "cloudflareUrl": cloudflare_url,
             "colabProxyUrl": proxy_url,
+            "corsOrigin": cors_origin,
             "comfyPid": comfy.pid,
-            "tunnelPid": tunnel.pid if tunnel is not None else None,
+            "tunnelPid": tunnel_pid,
+            "tunnelError": tunnel_error,
             "port": port,
             "storage": "temporary",
             "lockSha256": lock_sha256,
@@ -1840,11 +2130,12 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
         emit_ready(payload)
     finally:
         if not ready:
-            if tunnel is not None:
-                stop_started_process(tunnel)
+            if new_tunnel is not None:
+                stop_started_process(new_tunnel)
             if comfy is not None:
                 stop_started_process(comfy)
-            STATE_FILE.unlink(missing_ok=True)
+            if not installation_reused:
+                STATE_FILE.unlink(missing_ok=True)
 
 
 def build_parser() -> argparse.ArgumentParser:

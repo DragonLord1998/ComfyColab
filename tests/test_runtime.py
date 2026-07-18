@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -49,6 +50,397 @@ class RuntimeContractTests(unittest.TestCase):
             pretty_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             with self.assertRaisesRegex(runtime.RuntimeContractError, "canonical"):
                 runtime.load_lock(path, pretty_digest)
+
+    def test_comfy_launch_command_preserves_non_proxy_arguments(self) -> None:
+        self.assertEqual(
+            runtime.comfy_launch_command(
+                8188,
+                colab_proxy=False,
+                inherited_environment={
+                    "COMFYCOLAB_CORS_ORIGIN": "https://untrusted.example"
+                },
+            ),
+            [
+                runtime.sys.executable,
+                "main.py",
+                "--listen",
+                "127.0.0.1",
+                "--port",
+                "8188",
+            ],
+        )
+
+    def test_comfy_launch_command_uses_default_colab_cors_origin(self) -> None:
+        self.assertEqual(
+            runtime.comfy_launch_command(
+                8188,
+                colab_proxy=True,
+                inherited_environment={},
+            ),
+            [
+                runtime.sys.executable,
+                "main.py",
+                "--listen",
+                "127.0.0.1",
+                "--port",
+                "8188",
+                "--enable-cors-header",
+                "https://colab.research.google.com",
+            ],
+        )
+
+    def test_comfy_launch_command_accepts_trusted_proxy_origins(self) -> None:
+        origins = {
+            (
+                "https://8188-gpu-g4-s-kkb-use5c1-3m501x4q87ilk-c."
+                "us-east5-1.prod.colab.dev/"
+            ): (
+                "https://8188-gpu-g4-s-kkb-use5c1-3m501x4q87ilk-c."
+                "us-east5-1.prod.colab.dev"
+            ),
+            "https://abc-8188.colab.googleusercontent.com": (
+                "https://abc-8188.colab.googleusercontent.com"
+            ),
+        }
+        for origin, expected in origins.items():
+            with self.subTest(origin=origin):
+                command = runtime.comfy_launch_command(
+                    8188,
+                    colab_proxy=True,
+                    inherited_environment={"COMFYCOLAB_CORS_ORIGIN": origin},
+                )
+                self.assertEqual(
+                    command[-2:],
+                    ["--enable-cors-header", expected],
+                )
+
+    def test_comfy_launch_command_rejects_untrusted_cors_origins(self) -> None:
+        for origin in (
+            "http://colab.research.google.com",
+            "https://prod.colab.dev",
+            "https://googleusercontent.com",
+            "https://colab.research.google.com.evil.example",
+            "https://user@colab.research.google.com",
+            "https://colab.research.google.com/path",
+            "https://colab.research.google.com?token=secret",
+            "https://colab.research.google.com?",
+            "https://colab.research.google.com#",
+            "https://abc.prod.colab.dev:8443",
+            "https://[broken",
+            " https://colab.research.google.com",
+        ):
+            with self.subTest(origin=origin), self.assertRaisesRegex(
+                runtime.RuntimeContractError,
+                "COMFYCOLAB_CORS_ORIGIN",
+            ):
+                runtime.comfy_launch_command(
+                    8188,
+                    colab_proxy=True,
+                    inherited_environment={"COMFYCOLAB_CORS_ORIGIN": origin},
+                )
+
+    def test_validate_colab_proxy_url_supports_current_and_legacy_hosts(self) -> None:
+        current = (
+            "https://8188-gpu-g4-s-kkb-use5c1-3m501x4q87ilk-c."
+            "us-east5-1.prod.colab.dev/"
+        )
+        legacy = "https://abc-8188.colab.googleusercontent.com"
+        self.assertEqual(runtime.validate_colab_proxy_url(current), current)
+        self.assertEqual(runtime.validate_colab_proxy_url(legacy), legacy + "/")
+
+        for value in (
+            "https://colab.research.google.com/",
+            "https://prod.colab.dev/",
+            "https://googleusercontent.com/",
+            "https://colab.googleusercontent.com/",
+            "https://attacker.googleusercontent.com/",
+            "https://abc.prod.colab.dev.evil.example/",
+            "https://user@abc.prod.colab.dev/",
+            "https://abc.prod.colab.dev/path",
+        ):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                runtime.RuntimeContractError,
+                "COMFYCOLAB_PROXY_URL",
+            ):
+                runtime.validate_colab_proxy_url(value)
+
+    def test_proxy_reuse_records_tunnel_failure_without_resetting_install(self) -> None:
+        proxy_url = (
+            "https://8188-gpu-g4-s-kkb-use5c1-3m501x4q87ilk-c."
+            "us-east5-1.prod.colab.dev/"
+        )
+        proxy_origin = proxy_url.removesuffix("/")
+        config = {
+            "accepted_licenses": [],
+            "port": 8188,
+            "refresh": False,
+            "colab_proxy": True,
+            "lock_sha256": "a" * 64,
+        }
+        previous = {
+            "schema": 1,
+            "status": "ready",
+            "lockSha256": "a" * 64,
+            "comfyPid": 101,
+            "tunnelPid": None,
+            "comfyUrl": proxy_url,
+            "cloudflareUrl": None,
+            "colabProxyUrl": proxy_url,
+            "corsOrigin": proxy_origin,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            with (
+                mock.patch.dict(
+                    runtime.os.environ,
+                    {
+                        "COMFYCOLAB_PROXY_URL": proxy_url,
+                        "COMFYCOLAB_CORS_ORIGIN": proxy_origin,
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(runtime, "STATE_DIR", state_dir),
+                mock.patch.object(
+                    runtime,
+                    "load_or_create_pip_baseline",
+                    return_value=(),
+                ),
+                mock.patch.object(runtime, "load_state", return_value=previous),
+                mock.patch.object(runtime, "pid_alive", return_value=True),
+                mock.patch.object(runtime, "http_ready", return_value=True),
+                mock.patch.object(
+                    runtime,
+                    "start_cloudflare_tunnel",
+                    return_value=(None, None, "RuntimeError: tunnel failed"),
+                ) as start_tunnel,
+                mock.patch.object(runtime, "request_colab_proxy_url") as request_proxy,
+                mock.patch.object(runtime, "stop_managed_process"),
+                mock.patch.object(runtime, "save_state") as save_state,
+                mock.patch.object(runtime, "emit_ready") as emit_ready,
+                mock.patch.object(runtime, "reset_installation_roots") as reset,
+            ):
+                runtime.execute(config, self.core_lock())
+
+        payload = save_state.call_args.args[0]
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["comfyUrl"], proxy_url)
+        self.assertEqual(payload["colabProxyUrl"], proxy_url)
+        self.assertIsNone(payload["cloudflareUrl"])
+        self.assertIsNone(payload["tunnelPid"])
+        self.assertEqual(payload["tunnelError"], "RuntimeError: tunnel failed")
+        start_tunnel.assert_called_once_with(8188)
+        request_proxy.assert_not_called()
+        reset.assert_not_called()
+        emit_ready.assert_called_once_with(payload)
+
+    def test_non_proxy_reuse_without_tunnel_still_fails(self) -> None:
+        config = {
+            "accepted_licenses": [],
+            "port": 8188,
+            "refresh": False,
+            "colab_proxy": False,
+            "lock_sha256": "a" * 64,
+        }
+        previous = {
+            "schema": 1,
+            "status": "ready",
+            "lockSha256": "a" * 64,
+            "comfyPid": 101,
+            "tunnelPid": None,
+            "comfyUrl": None,
+            "cloudflareUrl": None,
+            "colabProxyUrl": None,
+            "corsOrigin": None,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            with (
+                mock.patch.dict(runtime.os.environ, {}, clear=True),
+                mock.patch.object(runtime, "STATE_DIR", state_dir),
+                mock.patch.object(
+                    runtime,
+                    "load_or_create_pip_baseline",
+                    return_value=(),
+                ),
+                mock.patch.object(runtime, "load_state", return_value=previous),
+                mock.patch.object(runtime, "pid_alive", return_value=True),
+                mock.patch.object(runtime, "http_ready", return_value=True),
+                mock.patch.object(
+                    runtime,
+                    "start_cloudflare_tunnel",
+                    return_value=(None, None, "RuntimeError: tunnel failed"),
+                ),
+                mock.patch.object(runtime, "stop_managed_process"),
+                mock.patch.object(runtime, "save_state") as save_state,
+                mock.patch.object(runtime, "emit_ready") as emit_ready,
+                mock.patch.object(runtime, "reset_installation_roots") as reset,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Cloudflare fallback unavailable.*proxy mode is disabled",
+                ):
+                    runtime.execute(config, self.core_lock())
+
+        save_state.assert_not_called()
+        emit_ready.assert_not_called()
+        reset.assert_not_called()
+
+    def test_same_lock_cors_restart_reuses_installation_when_tunnel_fails(
+        self,
+    ) -> None:
+        config = {
+            "accepted_licenses": [],
+            "port": 8188,
+            "refresh": False,
+            "colab_proxy": False,
+            "lock_sha256": "a" * 64,
+        }
+        previous = {
+            "schema": 1,
+            "status": "ready",
+            "lockSha256": "a" * 64,
+            "comfyPid": 101,
+            "tunnelPid": None,
+            "comfyUrl": "https://old.prod.colab.dev/",
+            "cloudflareUrl": None,
+            "colabProxyUrl": "https://old.prod.colab.dev/",
+            "corsOrigin": "https://old.prod.colab.dev",
+        }
+        comfy_process = mock.Mock(pid=303)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir = root / "state"
+            comfy_dir = root / "ComfyUI"
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(runtime.os.environ, {}, clear=True))
+                stack.enter_context(
+                    mock.patch.multiple(
+                        runtime,
+                        STATE_DIR=state_dir,
+                        STATE_FILE=state_dir / "runtime.json",
+                        COMFY_DIR=comfy_dir,
+                        COMFY_LOG=state_dir / "comfyui.log",
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "load_or_create_pip_baseline",
+                        return_value=(),
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "load_state", return_value=previous)
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "http_ready", return_value=False)
+                )
+                stop_managed = stack.enter_context(
+                    mock.patch.object(runtime, "stop_managed_process")
+                )
+                load_existing = stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "load_existing_installation",
+                        return_value=({}, {}, {"comfyui": str(comfy_dir)}),
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "validate_manifest_compatibility")
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "apply_patches", return_value=[])
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "run_post_clone_probes")
+                )
+                stack.enter_context(mock.patch.object(runtime, "link_node_roots"))
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "run_prestart_hooks",
+                        return_value=({}, {}),
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "resolved_runtime_environment",
+                        return_value={},
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "pip_check_conflicts",
+                        return_value=(),
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(runtime, "reject_new_pip_conflicts")
+                )
+                popen = stack.enter_context(
+                    mock.patch.object(
+                        runtime.subprocess,
+                        "Popen",
+                        return_value=comfy_process,
+                    )
+                )
+                stack.enter_context(mock.patch.object(runtime, "wait_for_comfy"))
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "validate_post_start_nodes",
+                        return_value={},
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        runtime,
+                        "start_cloudflare_tunnel",
+                        return_value=(None, None, "RuntimeError: tunnel failed"),
+                    )
+                )
+                stop_started = stack.enter_context(
+                    mock.patch.object(runtime, "stop_started_process")
+                )
+                clone_packs = stack.enter_context(
+                    mock.patch.object(runtime, "clone_packs")
+                )
+                reset = stack.enter_context(
+                    mock.patch.object(runtime, "reset_installation_roots")
+                )
+                save_state = stack.enter_context(
+                    mock.patch.object(runtime, "save_state")
+                )
+                emit_ready = stack.enter_context(
+                    mock.patch.object(runtime, "emit_ready")
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Cloudflare fallback unavailable.*proxy mode is disabled",
+                ):
+                    runtime.execute(config, self.core_lock())
+
+        load_existing.assert_called_once_with(self.core_lock())
+        stop_managed.assert_any_call(101)
+        stop_started.assert_called_once_with(comfy_process)
+        command = popen.call_args.args[0]
+        self.assertEqual(
+            command,
+            [
+                runtime.sys.executable,
+                "main.py",
+                "--listen",
+                "127.0.0.1",
+                "--port",
+                "8188",
+            ],
+        )
+        clone_packs.assert_not_called()
+        reset.assert_not_called()
+        save_state.assert_not_called()
+        emit_ready.assert_not_called()
 
     def test_unsupported_installers_fail_local_runtime_preflight(self) -> None:
         with self.assertRaisesRegex(runtime.RuntimeContractError, "environment-TOML"):
