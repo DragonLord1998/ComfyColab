@@ -9,7 +9,7 @@
 - Core-only profile and pinned ComfyUI engine registry.
 - Canonical Python CLI, thin shell shim, versioned runtime state, and lock
   digest verification.
-- Canonical public-core URL defaults and a managed Python 3.10+ installer.
+- Canonical public-core URL defaults and a managed Python 3.12+ installer.
 - Clean lock-owned runtime-root rebuilds for non-reused locks, with stale-node,
   dependency, environment, and pack-state removal.
 - Local runtime-capability preflight before any Colab session allocation.

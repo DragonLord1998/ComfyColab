@@ -8,9 +8,9 @@ VENV_DIR="${COMFYCOLAB_VENV_DIR:-${HOME}/.local/share/comfycolab/venv}"
 BIN_DIR="${COMFYCOLAB_BIN_DIR:-${HOME}/.local/bin}"
 
 if [ -z "$PYTHON_BIN" ]; then
-  for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  for candidate in python3.13 python3.12 python3; do
     if command -v "$candidate" >/dev/null 2>&1 \
-      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
         >/dev/null 2>&1; then
       PYTHON_BIN="$candidate"
       break
@@ -19,9 +19,9 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$PYTHON_BIN" ] \
-  || ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+  || ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
     >/dev/null 2>&1; then
-  echo "ComfyColab requires Python 3.10 or newer." >&2
+  echo "ComfyColab requires Python 3.12 or newer." >&2
   echo "Install a supported Python or set COMFYCOLAB_PYTHON to its executable." >&2
   exit 1
 fi

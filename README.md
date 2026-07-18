@@ -28,7 +28,7 @@ Everything inside `/content` disappears when the Colab runtime is released.
 
 Prerequisites:
 
-- Python 3.10 or newer (`python3 --version`)
+- Python 3.12 or newer (`python3 --version`)
 - the official `colab` command, authenticated and able to create a session
 
 ComfyColab reuses the Colab CLI's Google authentication. The installer creates
@@ -608,7 +608,7 @@ source .venv/bin/activate
 python -m pip install -e ".[test]"
 ```
 
-Requirements are Python 3.10 or newer, Git, and a Google account with Colab
+Requirements are Python 3.12 or newer, Git, and a Google account with Colab
 access. The package installs the official `google-colab-cli` dependency.
 
 ## Model catalog

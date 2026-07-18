@@ -7,7 +7,7 @@ name = "comfycolab"
 version = "0.2.0.dev1"
 description = "Install and run pinned ComfyUI on temporary Google Colab runtimes."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [
   { name = "ComfyColab contributors" },

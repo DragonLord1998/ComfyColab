@@ -6,9 +6,9 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPOSITORY_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 if [ -z "$PYTHON_BIN" ]; then
-  for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  for candidate in python3.13 python3.12 python3; do
     if command -v "$candidate" >/dev/null 2>&1 \
-      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
         >/dev/null 2>&1; then
       PYTHON_BIN="$candidate"
       break
@@ -17,9 +17,9 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$PYTHON_BIN" ] \
-  || ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+  || ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
     >/dev/null 2>&1; then
-  echo "ComfyColab requires Python 3.10 or newer." >&2
+  echo "ComfyColab requires Python 3.12 or newer." >&2
   echo "Set COMFYCOLAB_PYTHON to a supported interpreter." >&2
   exit 1
 fi
