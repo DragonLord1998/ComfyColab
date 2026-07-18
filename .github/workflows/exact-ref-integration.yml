@@ -1,0 +1,72 @@
+name: Exact-ref integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    outputs:
+      daughter-matrix: ${{ steps.registry.outputs.daughter-matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - id: registry
+        shell: bash
+        run: |
+          matrix="$(python scripts/ci_exact_refs.py matrix registry/published-packs.json)"
+          echo "daughter-matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  daughter-contracts:
+    needs: registry
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.registry.outputs.daughter-matrix) }}
+    name: daughter-${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: core
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
+          path: daughter
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: daughter/pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: python core/scripts/ci_exact_refs.py verify-one core/registry/published-packs.json "${{ matrix.id }}" daughter
+      - run: python -m pip install -e "${{ matrix.install_target }}"
+      - run: PYTHON=python bash daughter/scripts/check.sh
+
+  core-contract:
+    needs: registry
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    name: core-${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: python scripts/ci_exact_refs.py checkout registry/published-packs.json daughter-repos
+      - run: python scripts/ci_exact_refs.py verify registry/published-packs.json daughter-repos
+      - run: COMFYCOLAB_DAUGHTER_REPOS_ROOT="$PWD/daughter-repos" PYTHON=python bash scripts/check.sh

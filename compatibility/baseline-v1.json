@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "baseline_commit": "e618d4fd8aafde1ea4a2278e9984b26bac53f698",
+  "local_test_count": 255,
+  "comfyui": {
+    "repository": "https://github.com/Comfy-Org/ComfyUI.git",
+    "ref": "8b099de36acd81acd1afa3b5442951dc847e0a52"
+  },
+  "packs": {
+    "image": {
+      "legacy_node_root": "ComfyColab-ZImage",
+      "schema_source_sha256": "d90084a5b6f6cf0f2a3771466e03e33ab7048e769c67b15e3eb4d94b9617fc33",
+      "public_nodes": [
+        {
+          "id": "ComfyColabZImageTurboBundleLoader",
+          "display_name": "Z-Image Turbo Bundle Loader",
+          "category": "ComfyColab/loaders"
+        },
+        {
+          "id": "ComfyColabQwenImageEdit2511BundleLoader",
+          "display_name": "Qwen Image Edit 2511 Bundle Loader",
+          "category": "ComfyColab/loaders"
+        },
+        {
+          "id": "ComfyColabKrea2BundleLoader",
+          "display_name": "Krea 2 Bundle Loader",
+          "category": "ComfyColab/loaders"
+        },
+        {
+          "id": "ComfyColabFlux2Klein4BBundleLoader",
+          "display_name": "FLUX.2 Klein 4B Bundle Loader",
+          "category": "ComfyColab/loaders"
+        },
+        {
+          "id": "ComfyColabFlux2Klein9BBundleLoader",
+          "display_name": "FLUX.2 Klein 9B Bundle Loader",
+          "category": "ComfyColab/loaders"
+        },
+        {
+          "id": "ComfyColabFlux2DevBundleLoader",
+          "display_name": "FLUX.2 Dev Bundle Loader",
+          "category": "ComfyColab/loaders"
+        }
+      ],
+      "workflows": []
+    },
+    "video": {
+      "legacy_node_root": "ComfyColab-LTXVideo",
+      "schema_source_sha256": "62fccb362dd294b10f67887be0d1e40b97dbf41a0c8473ec24b8d27dd58349ca",
+      "public_nodes": [
+        {
+          "id": "ComfyColabLTX23Video",
+          "display_name": "ComfyColab LTX-2.3 — Text/Image to Video",
+          "category": "ComfyColab/Video"
+        }
+      ],
+      "workflows": [
+        "comfycolab_ltx23_text_image_to_video.json"
+      ]
+    },
+    "3d": {
+      "legacy_node_root": "ComfyColab-3D",
+      "schema_source_sha256": "5a2ca20676712d2f150943b4323786b81b9006aa45b3e5e079123bf569a01d74",
+      "public_nodes": [
+        {
+          "id": "ComfyColabTrellisImageTo3D",
+          "display_name": "ComfyColab TRELLIS.2 — Image to 3D",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabTrellis2MV",
+          "display_name": "ComfyColab TRELLIS2MV — Multi-View to 3D",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabUltraShapeRefine",
+          "display_name": "ComfyColab UltraShape — Refine Geometry",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabPixal3DImageTo3D",
+          "display_name": "ComfyColab Pixal3D — Image to 3D",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabPixal3DMV",
+          "display_name": "ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabSkinTokensAutoRig",
+          "display_name": "ComfyColab SkinTokens — Auto Rig 3D",
+          "category": "ComfyColab/3D"
+        },
+        {
+          "id": "ComfyColabCubePartSegment",
+          "display_name": "ComfyColab CubePart — Segment 3D Parts",
+          "category": "ComfyColab/3D"
+        }
+      ],
+      "workflows": [
+        "comfycolab_trellis_image_to_3d.json",
+        "comfycolab_trellis2mv_to_3d.json",
+        "comfycolab_ultrashape_refine.json",
+        "comfycolab_pixal3d_image_to_3d.json",
+        "comfycolab_pixal3dmv_to_3d.json",
+        "comfycolab_skintokens_auto_rig.json",
+        "comfycolab_cubepart_segment.json"
+      ]
+    },
+    "3dgs": {
+      "legacy_node_root": "ComfyColab-Triposplat",
+      "schema_source_sha256": "d1f266a381371a51b4cafa32bde770c96eeb8449070de7bd3a5ac03d792264a9",
+      "public_nodes": [
+        {
+          "id": "ComfyColabTripoSplatImageToGaussianSplat",
+          "display_name": "ComfyColab TripoSplat — Image to Gaussian Splat",
+          "category": "ComfyColab/3D"
+        }
+      ],
+      "workflows": [
+        "comfycolab_triposplat_image_to_gaussian_splat.json"
+      ]
+    }
+  },
+  "pinned_dependencies": {
+    "comfyui_gguf": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
+    "comfyui_ltx_video": "aceeae9635f6d493f2893ba3c411a1c36031788a",
+    "comfyui_trellis2": "9b878516f2dc2fd873f4f6cceadba403dd12d83e",
+    "comfyui_geometry_pack": "c67199de05705642258e727fa118f412877b4ebf",
+    "ultrashape": "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66",
+    "pixal3d": "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af",
+    "skintokens": "273b691d35989d71cd17ff2895fdc735097b92d1",
+    "cubepart": "3c6d06ddbef3160a1e1950cb13ab63dd12a61e50"
+  },
+  "legacy_readiness_keys": [
+    "comfyUrl",
+    "cloudflareUrl",
+    "colabProxyUrl",
+    "repositoryCommit",
+    "comfyCommit",
+    "ggufCommit",
+    "ltxVideoCommit",
+    "trellisCommit",
+    "geometryCommit",
+    "ultrashapeCommit",
+    "pixal3dCommit",
+    "skinTokensCommit",
+    "cubePartCommit"
+  ],
+  "validation_boundaries": {
+    "local": "255 tests passed before modularization",
+    "live_gpu": "Pack-specific Colab inference remains a separate release gate"
+  }
+}

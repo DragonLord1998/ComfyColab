@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import types
@@ -11,6 +12,10 @@ from pathlib import Path
 from unittest import mock
 
 from comfycolab import cli
+from comfycolab.packs.lock import ComfyColabLockV1
+
+
+LOCK_SHA256 = "d" * 64
 
 
 def arguments(state: Path):
@@ -27,6 +32,11 @@ def arguments(state: Path):
         auth="adc",
         config="/tmp/sessions.json",
         colab_bin="colab",
+        pack=[],
+        profile="core",
+        pack_ref=[],
+        accept_license=[],
+        lock_dir=str(state.parent / "locks"),
     )
 
 
@@ -48,7 +58,10 @@ class FakeClient:
         return subprocess.CompletedProcess(
             [],
             0,
-            'COMFYCOLAB_READY={"comfyUrl":"https://demo.trycloudflare.com"}\n',
+            (
+                'COMFYCOLAB_READY={"comfyUrl":"https://demo.trycloudflare.com",'
+                f'"lockSha256":"{LOCK_SHA256}"}}\n'
+            ),
             "",
         )
 
@@ -70,10 +83,68 @@ class FakeStatusClient:
 
 
 class CliLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def prepared():
+        lock = mock.Mock()
+        lock.sha256 = LOCK_SHA256
+        lock.canonical_bytes.return_value = b'{"packs":[],"schema":1}'
+        lock.to_dict.return_value = {"dependencies": [], "environments": []}
+        return types.SimpleNamespace(source="bootstrap", lock=lock)
+
+    @staticmethod
+    def real_lock(comfyui_commit: str) -> ComfyColabLockV1:
+        return ComfyColabLockV1.from_dict(
+            {
+                "schema": 1,
+                "core": {
+                    "version": "0.2.0.dev1",
+                    "repository": "https://github.com/example/ComfyColab.git",
+                    "commit": "a" * 40,
+                },
+                "comfyui": {
+                    "repository": "https://github.com/Comfy-Org/ComfyUI.git",
+                    "commit": comfyui_commit,
+                },
+                "packs": [],
+                "dependencies": [],
+                "patches": [],
+                "environments": [],
+                "runtime_env": [],
+            }
+        )
+
     def test_start_defaults_to_g4(self) -> None:
         args = cli.build_parser().parse_args(["start"])
         self.assertEqual(args.gpu, "G4")
         self.assertFalse(args.colab_proxy)
+        self.assertEqual(args.profile, "core")
+        self.assertEqual(args.pack, [])
+
+    def test_repository_defaults_are_canonical_and_overridable(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                cli.resolve_repository_url(None),
+                "https://github.com/DragonLord1998/ComfyColab.git",
+            )
+        with mock.patch.dict(
+            os.environ,
+            {"COMFYCOLAB_REPO_URL": "https://github.com/example/fork.git"},
+            clear=True,
+        ):
+            self.assertEqual(
+                cli.resolve_repository_url(None),
+                "https://github.com/example/fork.git",
+            )
+        self.assertEqual(
+            cli.resolve_repository_url("https://github.com/example/explicit.git"),
+            "https://github.com/example/explicit.git",
+        )
+
+    def test_notebook_defaults_to_reproducible_core_profile(self) -> None:
+        args = cli.build_parser().parse_args(["notebook"])
+        self.assertEqual(args.profile, "core")
+        self.assertTrue(args.colab_proxy)
+        self.assertEqual(args.output, "ComfyColab.ipynb")
 
     def test_colab_proxy_opens_attached_page_and_embeds_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -82,13 +153,13 @@ class CliLifecycleTests(unittest.TestCase):
             args.colab_proxy = True
             client = FakeClient()
             with mock.patch.object(cli, "_client", return_value=client), mock.patch.object(
-                cli, "render_bootstrap", return_value="bootstrap"
-            ) as render, contextlib.redirect_stdout(io.StringIO()):
+                cli, "_prepare_launch", return_value=self.prepared()
+            ) as prepare, contextlib.redirect_stdout(io.StringIO()):
                 result = cli._start(args)
 
             self.assertEqual(result, 0)
             self.assertEqual(client.opened, ["comfycolab"])
-            self.assertTrue(render.call_args.kwargs["colab_proxy"])
+            self.assertTrue(prepare.call_args.args[0].colab_proxy)
 
     def test_status_transport_error_preserves_saved_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -125,7 +196,7 @@ class CliLifecycleTests(unittest.TestCase):
             state = Path(directory) / "runtime.json"
             client = FakeClient()
             with mock.patch.object(cli, "_client", return_value=client), mock.patch.object(
-                cli, "render_bootstrap", return_value="bootstrap"
+                cli, "_prepare_launch", return_value=self.prepared()
             ), contextlib.redirect_stdout(io.StringIO()):
                 result = cli._start(arguments(state))
 
@@ -139,11 +210,84 @@ class CliLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             client = FakeClient(bootstrap_error=RuntimeError("bootstrap failed"))
             with mock.patch.object(cli, "_client", return_value=client), mock.patch.object(
-                cli, "render_bootstrap", return_value="bootstrap"
+                cli, "_prepare_launch", return_value=self.prepared()
             ), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, "bootstrap failed"):
                     cli._start(arguments(Path(directory) / "runtime.json"))
             self.assertEqual(client.stopped, ["comfycolab"])
+
+    def test_unsupported_lock_fails_before_colab_client_or_lock_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "runtime.json"
+            args = arguments(state)
+            prepared = self.prepared()
+            prepared.lock.to_dict.return_value = {
+                "dependencies": [
+                    {
+                        "kind": "git",
+                        "id": "three-d",
+                        "requirements_file": "environment.toml",
+                        "requirements_format": "comfycolab-environment-toml",
+                    }
+                ],
+                "environments": [],
+            }
+            with mock.patch.object(
+                cli, "_prepare_launch", return_value=prepared
+            ), mock.patch.object(cli, "_client") as client:
+                with self.assertRaisesRegex(RuntimeError, "environment-TOML"):
+                    cli._start(args)
+            client.assert_not_called()
+            self.assertFalse(cli._lock_path(args).exists())
+
+    def test_unaccepted_pack_gate_fails_before_colab_allocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = arguments(Path(directory) / "runtime.json")
+            prepared = self.prepared()
+            prepared.lock.to_dict.return_value = {
+                "dependencies": [],
+                "environments": [],
+                "packs": [
+                    {
+                        "id": "research",
+                        "license_gate": "accept_research_terms",
+                    }
+                ],
+            }
+            with mock.patch.object(
+                cli, "_prepare_launch", return_value=prepared
+            ), mock.patch.object(cli, "_client") as client:
+                with self.assertRaisesRegex(RuntimeError, "accept-license"):
+                    cli._start(args)
+            client.assert_not_called()
+
+    def test_lock_updates_preserve_and_restore_one_previous_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lock_dir = Path(directory)
+            args = types.SimpleNamespace(
+                session="comfycolab",
+                lock_dir=str(lock_dir),
+            )
+            path = cli._lock_path(args)
+            first = self.real_lock("b" * 40)
+            second = self.real_lock("c" * 40)
+            cli._write_lock(path, first)
+            cli._write_lock(path, second)
+            previous_path = cli._previous_lock_path(path)
+            self.assertEqual(
+                ComfyColabLockV1.from_bytes(previous_path.read_bytes()).sha256,
+                first.sha256,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli._pack_rollback(args), 0)
+            self.assertEqual(
+                ComfyColabLockV1.from_bytes(path.read_bytes()).sha256,
+                first.sha256,
+            )
+            self.assertEqual(
+                ComfyColabLockV1.from_bytes(previous_path.read_bytes()).sha256,
+                second.sha256,
+            )
 
 
 if __name__ == "__main__":

@@ -1,175 +1,35 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-SESSION="${COMFYCOLAB_SESSION:-comfycolab}"
-GPU="${COMFYCOLAB_GPU:-G4}"
-AUTH="${COMFYCOLAB_AUTH:-adc}"
-CONFIG="${COMFYCOLAB_CONFIG:-$HOME/.config/comfycolab/colab-sessions.json}"
-STATE_DIR="${COMFYCOLAB_STATE_DIR:-$HOME/.config/comfycolab}"
-BOOTSTRAP_URL="${COMFYCOLAB_BOOTSTRAP_URL:-https://raw.githubusercontent.com/DragonLord1998/ComfyColab/main/src/comfycolab/remote_bootstrap.py}"
+PYTHON_BIN="${COMFYCOLAB_PYTHON:-}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPOSITORY_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-find_colab() {
-  if [[ -n "${COMFYCOLAB_COLAB_BIN:-}" ]]; then
-    printf '%s\n' "$COMFYCOLAB_COLAB_BIN"
-    return
-  fi
-  command -v colab 2>/dev/null || true
-}
+if [ -z "$PYTHON_BIN" ]; then
+  for candidate in python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
+        >/dev/null 2>&1; then
+      PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+fi
 
-usage() {
-  cat <<'EOF'
-Usage: comfycolab <start|status|url|stop> [--refresh] [--colab-proxy]
-
-Environment overrides:
-  COMFYCOLAB_COLAB_BIN  Path to the existing colab CLI
-  COMFYCOLAB_AUTH       adc (default) or oauth2
-  COMFYCOLAB_GPU        G4 (default), T4, L4, A100, or H100
-  COMFYCOLAB_SESSION    Session name (default: comfycolab)
-EOF
-}
-
-COMMAND="${1:-}"
-case "$COMMAND" in
-  start|status|url|stop) ;;
-  -h|--help|help)
-    usage
-    exit 0
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
-shift
-
-REFRESH=0
-COLAB_PROXY=0
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --refresh)
-      if [[ "$COMMAND" != "start" ]]; then
-        echo "[comfycolab] --refresh is only valid with start." >&2
-        exit 2
-      fi
-      REFRESH=1
-      ;;
-    --colab-proxy)
-      if [[ "$COMMAND" != "start" ]]; then
-        echo "[comfycolab] --colab-proxy is only valid with start." >&2
-        exit 2
-      fi
-      COLAB_PROXY=1
-      ;;
-    *)
-      echo "[comfycolab] Unknown option: $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-
-COLAB_BIN="$(find_colab)"
-if [[ -z "$COLAB_BIN" ]]; then
-  echo "[comfycolab] The existing 'colab' CLI was not found on PATH." >&2
-  echo "[comfycolab] Set COMFYCOLAB_COLAB_BIN to its full path." >&2
+if [ -z "$PYTHON_BIN" ] \
+  || ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' \
+    >/dev/null 2>&1; then
+  echo "ComfyColab requires Python 3.12 or newer." >&2
+  echo "Set COMFYCOLAB_PYTHON to a supported interpreter." >&2
   exit 1
 fi
 
-mkdir -p "$(dirname "$CONFIG")" "$STATE_DIR"
-BASE=("$COLAB_BIN" --config "$CONFIG" --auth "$AUTH")
+if [ -d "${REPOSITORY_ROOT}/src/comfycolab" ]; then
+  if [ -n "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="${REPOSITORY_ROOT}/src:${PYTHONPATH}"
+  else
+    export PYTHONPATH="${REPOSITORY_ROOT}/src"
+  fi
+fi
 
-case "$COMMAND" in
-  start)
-    bootstrap_file="$(mktemp -t comfycolab-bootstrap.XXXXXX.py)"
-    output_file="$(mktemp -t comfycolab-output.XXXXXX)"
-    cleanup() {
-      rm -f "$bootstrap_file" "$output_file"
-    }
-    trap cleanup EXIT
-
-    echo "[comfycolab] Fetching the public Colab bootstrap..."
-    curl -fsSL "$BOOTSTRAP_URL" -o "$bootstrap_file"
-    if [[ "$REFRESH" -eq 1 || "$COLAB_PROXY" -eq 1 ]]; then
-      refresh_json=false
-      colab_proxy_json=false
-      [[ "$REFRESH" -eq 1 ]] && refresh_json=true
-      [[ "$COLAB_PROXY" -eq 1 ]] && colab_proxy_json=true
-      bootstrap_config="{\"repository_url\":\"https://github.com/DragonLord1998/ComfyColab.git\",\"repository_ref\":\"main\",\"port\":8188,\"refresh\":${refresh_json},\"colab_proxy\":${colab_proxy_json}}"
-      bootstrap_config_b64="$(printf '%s' "$bootstrap_config" | base64 | tr -d '\n')"
-      sed "s|^CONFIG_B64 = \"__COMFYCOLAB_CONFIG_B64__\"$|CONFIG_B64 = \"$bootstrap_config_b64\"|" \
-        "$bootstrap_file" > "$bootstrap_file.refresh"
-      mv "$bootstrap_file.refresh" "$bootstrap_file"
-      if grep -Fq '__COMFYCOLAB_CONFIG_B64__' "$bootstrap_file"; then
-        echo "[comfycolab] The downloaded bootstrap does not support launcher configuration." >&2
-        exit 1
-      fi
-    fi
-
-    created=0
-    status_output="$("${BASE[@]}" status --session "$SESSION" 2>&1)" || {
-      printf '%s\n' "$status_output" >&2
-      exit 1
-    }
-    if grep -Fq "[$SESSION]" <<<"$status_output"; then
-      echo "[comfycolab] Reusing active Colab session '$SESSION'."
-    else
-      "${BASE[@]}" new --session "$SESSION" --gpu "$GPU"
-      created=1
-    fi
-
-    if [[ "$COLAB_PROXY" -eq 1 ]]; then
-      echo "[comfycolab] Opening the attached Colab page for the private proxy handshake..."
-      if ! "${BASE[@]}" url --session "$SESSION" --open; then
-        echo "[comfycolab] Could not open the Colab page; Cloudflare fallback will still be used." >&2
-      fi
-    fi
-
-    set +e
-    "${BASE[@]}" exec \
-      --session "$SESSION" \
-      --file "$bootstrap_file" \
-      --timeout 1800 | tee "$output_file"
-    exec_status="${PIPESTATUS[0]}"
-    set -e
-
-    if [[ "$exec_status" -ne 0 ]]; then
-      if [[ "$created" -eq 1 ]]; then
-        "${BASE[@]}" stop --session "$SESSION" || true
-      fi
-      exit "$exec_status"
-    fi
-
-    comfy_url="$(sed -n 's/^COMFYCOLAB_READY=.*"comfyUrl":"\([^"]*\)".*/\1/p' "$output_file" | tail -n 1)"
-    cloudflare_url="$(sed -n 's/^COMFYCOLAB_READY=.*"cloudflareUrl":"\([^"]*\)".*/\1/p' "$output_file" | tail -n 1)"
-    colab_proxy_url="$(sed -n 's/^COMFYCOLAB_READY=.*"colabProxyUrl":"\([^"]*\)".*/\1/p' "$output_file" | tail -n 1)"
-    if [[ -z "$comfy_url" ]]; then
-      echo "[comfycolab] Bootstrap finished without returning a ComfyUI URL." >&2
-      exit 1
-    fi
-    printf '%s\n' "$comfy_url" > "$STATE_DIR/comfy-url"
-    if [[ -n "$cloudflare_url" ]]; then
-      printf '%s\n' "$cloudflare_url" > "$STATE_DIR/cloudflare-url"
-    else
-      rm -f "$STATE_DIR/cloudflare-url"
-    fi
-    printf '\nComfyUI: %s\nSession: %s\n' "$comfy_url" "$SESSION"
-    if [[ -n "$colab_proxy_url" && -n "$cloudflare_url" ]]; then
-      printf 'Cloudflare fallback: %s\n' "$cloudflare_url"
-    fi
-    ;;
-  status)
-    "${BASE[@]}" status --session "$SESSION"
-    ;;
-  url)
-    if [[ ! -s "$STATE_DIR/comfy-url" ]]; then
-      echo "[comfycolab] No saved ComfyUI URL." >&2
-      exit 1
-    fi
-    cat "$STATE_DIR/comfy-url"
-    ;;
-  stop)
-    "${BASE[@]}" stop --session "$SESSION"
-    rm -f "$STATE_DIR/comfy-url" "$STATE_DIR/cloudflare-url"
-    ;;
-esac
+exec "$PYTHON_BIN" -m comfycolab "$@"
