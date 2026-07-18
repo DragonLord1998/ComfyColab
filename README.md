@@ -2,16 +2,17 @@
 
 Run ComfyUI on a temporary Google Colab GPU from your Mac with one command.
 
-ComfyColab creates a Colab session, installs ComfyUI and ComfyUI-GGUF, adds a
-curated model-loader node pack, and prints a Cloudflare URL you can open in any
-browser. No Google Drive is mounted and no model setup is required in the Colab
-terminal.
+ComfyColab creates a Colab session, installs pinned ComfyUI extensions, adds
+curated image, video, and 3D facade nodes, and prints a Cloudflare URL you can
+open in any browser. No Google Drive is mounted and no model setup is required
+in the Colab terminal.
 
 ## What you get
 
 - A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
 - ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
 - Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
+- LTX-2.3 text/image-to-video with selectable GGUF, FPS, and spatial upscaling
 - Simple 3D nodes for TRELLIS.2, TRELLIS2MV, TripoSplat, Pixal3D,
   experimental Pixal3DMV, UltraShape, SkinTokens rigging, and CubePart decomposition
 - The complete advanced TRELLIS.2 and GeometryPack node suites
@@ -78,7 +79,8 @@ left consuming compute units.
 
 1. The launcher creates or reuses a named Colab session.
 2. It requests the `G4` accelerator unless you configured another one.
-3. It clones tested versions of ComfyUI and ComfyUI-GGUF into `/content`.
+3. It clones tested versions of ComfyUI, ComfyUI-GGUF, and the official
+   Lighttricks ComfyUI-LTXVideo extension into `/content`.
 4. On a matching G4 runtime, it restores the checksum-verified combined 3D
    cache when available, with the existing TRELLIS.2 cache as a rollback path.
 5. It clones pinned TRELLIS.2, GeometryPack, UltraShape, Pixal3D, SkinTokens,
@@ -162,6 +164,62 @@ use the BFL FLUX Non-Commercial License and its acceptable-use requirements.
 This is the largest bundle. BFL recommends guidance 4 and 50 steps; 28 steps is
 a practical speed/quality compromise. FLUX.2 Dev uses the BFL FLUX
 Non-Commercial License.
+
+## LTX-2.3 video
+
+After updating an existing runtime, run:
+
+```bash
+comfycolab start --refresh
+```
+
+In ComfyUI, search for:
+
+```text
+ComfyColab LTX-2.3 — Text/Image to Video
+```
+
+The facade follows Lighttricks' current direct DistilledPipeline two-stage
+design and returns a native `VIDEO`, decoded `IMAGE` frames, and synchronized
+`AUDIO`. It generates the audio/video latent together at 24 FPS. If spatial
+upscaling is enabled, it upsamples the video latent and runs the short
+refinement stage. Choosing 48 FPS then applies the official temporal x2 latent
+upscaler before decoding; audio does not pass through the temporal video
+upscaler.
+
+Inputs:
+
+- `prompt`; the direct distilled pipeline is positive-only and has no
+  negative-prompt branch
+- optional first-frame `image`; leave it disconnected for text-to-video
+- `gguf_model`: `Q3_K_S`, `Q4_K_S`, or `Q4_K_M`
+- `fps`: `24` or temporally upscaled `48`
+- `spatial_upscaler`: `None`, `1.5x`, or `2x`; exact 1.5x output requires
+  base width and height divisible by 64
+- base `width`, `height`, `frame_count`, `seed`, and `image_strength`
+
+`Q3_K_S` is the lowest-memory default. Because the GGUF quantizes the direct
+LTX-2.3 Distilled 1.1 checkpoint, the node uses Lighttricks' current
+positive-only Euler schedules and does not stack the older ComfyUI workflow's
+distilled LoRA or CFG++ path on top. `2x` selects the latest v1.1
+spatial-upscaler hotfix; `1.5x` and temporal `2x` select their latest v1.0
+releases.
+
+The selected assets download on the first queue and are checksum verified.
+The default Q3 / 24 FPS / 2x bundle is approximately 22.3 GB. Selecting 48 FPS
+adds about 0.26 GB; the Q4 diffusion models add roughly 3.2–4.5 GB over Q3.
+All files remain in temporary Colab storage.
+
+An importable text/image-to-video starter is included at
+[`workflows/comfycolab_ltx23_text_image_to_video.json`](workflows/comfycolab_ltx23_text_image_to_video.json).
+It queues as text-to-video by default; connect its **Load Image** output to the
+facade's optional `image` input for image-to-video.
+
+Lighttricks lists 32 GB+ VRAM and 100 GB+ free disk as prerequisites for its
+ComfyUI workflows. Local tests verify the facade schema, selected downloads,
+graph branches, bootstrap pin, and workflow wiring; a real live Colab run is
+still required to establish runtime memory use, audiovisual synchronization,
+and output quality on the chosen accelerator.
 
 ## Simple 3D nodes
 
