@@ -299,6 +299,58 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("torch.cuda.synchronize", source)
         self.assertIn("get_device_capability() == (12, 0)", source)
 
+    def test_non_sm120_ultrashape_validation_still_executes_a_cubvh_kernel(self) -> None:
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(remote_bootstrap.subprocess, "run", return_value=completed) as run:
+            remote_bootstrap.validate_ultrashape_imports(Path("/cached/python"))
+        source = run.call_args.args[0][2]
+        self.assertIn("cubvh.cuBVH", source)
+        self.assertIn("unsigned_distance", source)
+        self.assertIn("torch.cuda.synchronize", source)
+        self.assertNotIn("get_device_capability() == (12, 0)", source)
+
+    def test_source_trellis_validation_does_not_require_sm120(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            for name in ("trellis2-nodes", "geometrypack-nodes"):
+                python = workspace / ".pixi" / "envs" / name / "bin" / "python"
+                python.parent.mkdir(parents=True)
+                python.touch()
+            completed = mock.Mock(returncode=0)
+            with mock.patch.object(
+                remote_bootstrap.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                remote_bootstrap.validate_trellis_cache(workspace)
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            source = call.args[0][2]
+            self.assertIn("torch.cuda.synchronize", source)
+            self.assertNotIn("get_device_capability() == (12, 0)", source)
+
+    def test_sm120_trellis_cache_validation_retains_capability_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            for name in ("trellis2-nodes", "geometrypack-nodes"):
+                python = workspace / ".pixi" / "envs" / name / "bin" / "python"
+                python.parent.mkdir(parents=True)
+                python.touch()
+            completed = mock.Mock(returncode=0)
+            with mock.patch.object(
+                remote_bootstrap.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                remote_bootstrap.validate_trellis_cache(
+                    workspace,
+                    require_sm120=True,
+                )
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            source = call.args[0][2]
+            self.assertIn("get_device_capability() == (12, 0)", source)
+
     def test_malformed_combined_manifest_falls_back_to_trellis_cache(self) -> None:
         with mock.patch.object(
             remote_bootstrap,
@@ -362,6 +414,38 @@ class BootstrapRenderingTests(unittest.TestCase):
             ), mock.patch.object(remote_bootstrap, "validate_trellis_cache") as validate:
                 remote_bootstrap.install_ultrashape_overlay()
         validate.assert_called_once_with(home / ".ce", validate_ultrashape=True)
+
+    def test_pixal3d_skips_sm120_worker_on_other_gpus(self) -> None:
+        with mock.patch.object(
+            remote_bootstrap,
+            "sm120_gpu_available",
+            return_value=False,
+        ), mock.patch.object(remote_bootstrap, "restore_pixal3d_cache") as restore, mock.patch.object(
+            remote_bootstrap, "install_pixal3d_source"
+        ) as source_install:
+            self.assertEqual(remote_bootstrap.install_pixal3d(), "unavailable")
+        restore.assert_not_called()
+        source_install.assert_not_called()
+
+    def test_pixal3d_source_install_remains_available_when_sm120_cache_is_incompatible(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            remote_bootstrap,
+            "sm120_gpu_available",
+            return_value=True,
+        ), mock.patch.object(
+            remote_bootstrap,
+            "restore_pixal3d_cache",
+            return_value=False,
+        ) as restore, mock.patch.object(
+            remote_bootstrap,
+            "install_pixal3d_source",
+            return_value="source-install",
+        ) as source_install:
+            self.assertEqual(remote_bootstrap.install_pixal3d(), "source-install")
+        restore.assert_called_once_with()
+        source_install.assert_called_once_with()
 
     def test_content_addressed_patch_is_strict_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

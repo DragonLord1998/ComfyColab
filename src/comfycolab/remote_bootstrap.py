@@ -472,6 +472,17 @@ def trellis_cache_compatible() -> bool:
     )
 
 
+def sm120_gpu_available() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return bool(
+        torch.cuda.is_available()
+        and torch.cuda.get_device_capability(0) == (12, 0)
+    )
+
+
 class CacheDownloadRetryableError(RuntimeError):
     """A cache transfer failure that is safe to retry."""
 
@@ -1266,6 +1277,13 @@ def install_pixal3d_source() -> str:
 
 
 def install_pixal3d() -> str:
+    if not sm120_gpu_available():
+        print(
+            "[comfycolab] Pixal3D's isolated worker is pinned to the verified "
+            "RTX PRO 6000 SM120 environment; skipping it on this GPU.",
+            flush=True,
+        )
+        return "unavailable"
     try:
         if restore_pixal3d_cache():
             return PIXAL3D_WORKER_PROFILE
@@ -1292,7 +1310,11 @@ def restore_trellis_cache(
     workspace = Path.home() / ".ce"
     if trellis_workspace_metadata_valid(workspace, cache):
         try:
-            validate_trellis_cache(workspace, validate_ultrashape=validate_ultrashape)
+            validate_trellis_cache(
+                workspace,
+                validate_ultrashape=validate_ultrashape,
+                require_sm120=True,
+            )
         except Exception:
             pass
         else:
@@ -1368,7 +1390,11 @@ def restore_trellis_cache(
             workspace.replace(backup)
         try:
             restored_workspace.replace(workspace)
-            validate_trellis_cache(workspace, validate_ultrashape=validate_ultrashape)
+            validate_trellis_cache(
+                workspace,
+                validate_ultrashape=validate_ultrashape,
+                require_sm120=True,
+            )
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
             if backup.exists():
@@ -1384,15 +1410,25 @@ def restore_trellis_cache(
     return True
 
 
-def validate_trellis_cache(workspace: Path, *, validate_ultrashape: bool = False) -> None:
+def validate_trellis_cache(
+    workspace: Path,
+    *,
+    validate_ultrashape: bool = False,
+    require_sm120: bool = False,
+) -> None:
     envs = workspace / ".pixi" / "envs"
+    capability_probe = (
+        "assert torch.cuda.get_device_capability() == (12, 0); "
+        if require_sm120
+        else ""
+    )
     probes = {
         "trellis2-nodes": (
             "import torch, cumesh_vb, drtk, flash_attn, flex_gemm_ap, "
             "o_voxel_vb_ap, sageattention; "
             "assert torch.__version__ == '2.11.0+cu128'; "
             "assert torch.version.cuda == '12.8'; "
-            "assert torch.cuda.get_device_capability() == (12, 0); "
+            f"{capability_probe}"
             "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
             "assert x.sum().item() == 4.0"
         ),
@@ -1400,7 +1436,7 @@ def validate_trellis_cache(workspace: Path, *, validate_ultrashape: bool = False
             "import torch, cumesh; "
             "assert torch.__version__ == '2.11.0+cu128'; "
             "assert torch.version.cuda == '12.8'; "
-            "assert torch.cuda.get_device_capability() == (12, 0); "
+            f"{capability_probe}"
             "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
             "assert x.sum().item() == 4.0"
         ),
@@ -1420,25 +1456,28 @@ def validate_trellis_cache(workspace: Path, *, validate_ultrashape: bool = False
     if validate_ultrashape:
         validate_ultrashape_imports(
             envs / "trellis2-nodes" / "bin" / "python",
-            require_sm120=True,
+            require_sm120=require_sm120,
         )
 
 
 def validate_ultrashape_imports(python: Path, *, require_sm120: bool = False) -> None:
-    kernel_probe = ""
-    if require_sm120:
-        kernel_probe = (
-            "; assert torch.cuda.get_device_capability() == (12, 0)"
-            "; vertices = torch.tensor([[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],"
-            "[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]], dtype=torch.float32)"
-            "; faces = torch.tensor([[0,2,1],[0,3,2],[4,5,6],[4,6,7],"
-            "[0,1,5],[0,5,4],[2,3,7],[2,7,6],[0,4,7],[0,7,3],"
-            "[1,2,6],[1,6,5]], dtype=torch.int32)"
-            "; bvh = cubvh.cuBVH(vertices, faces)"
-            "; distance = bvh.unsigned_distance(torch.tensor([[0.,0.,0.]], device='cuda'))[0]"
-            "; torch.cuda.synchronize()"
-            "; assert distance.shape == (1,) and torch.isfinite(distance).all()"
-        )
+    capability_probe = (
+        "; assert torch.cuda.get_device_capability() == (12, 0)"
+        if require_sm120
+        else ""
+    )
+    kernel_probe = (
+        f"{capability_probe}"
+        "; vertices = torch.tensor([[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],"
+        "[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]], dtype=torch.float32)"
+        "; faces = torch.tensor([[0,2,1],[0,3,2],[4,5,6],[4,6,7],"
+        "[0,1,5],[0,5,4],[2,3,7],[2,7,6],[0,4,7],[0,7,3],"
+        "[1,2,6],[1,6,5]], dtype=torch.int32)"
+        "; bvh = cubvh.cuBVH(vertices, faces)"
+        "; distance = bvh.unsigned_distance(torch.tensor([[0.,0.,0.]], device='cuda'))[0]"
+        "; torch.cuda.synchronize()"
+        "; assert distance.shape == (1,) and torch.isfinite(distance).all()"
+    )
     subprocess.run(
         [
             str(python),
