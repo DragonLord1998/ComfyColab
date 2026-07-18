@@ -53,6 +53,9 @@ TRIPOSPLAT_MODEL_REVISION = (
 PIXAL3D_WORKER_RESULT_EVENT = re.compile(
     r"COMFYCOLAB_PIXAL3D_RESULT=(?P<payload>\{[^\n]+\})"
 )
+SKINTOKENS_WORKER_RESULT_EVENT = re.compile(
+    r"COMFYCOLAB_SKINTOKENS_RESULT=(?P<payload>\{[^\n]+\})"
+)
 FIVE_STAGE_TEXTS = (
     "Stage 1/5 - Preparing models and input...",
     "Stage 2/5 - Generating 3D shape...",
@@ -209,6 +212,10 @@ CASES: dict[str, CaseSpec] = {
         require_textured=True,
         image_count=4,
         image_count_max=6,
+    ),
+    "skintokens_auto_rig": CaseSpec(
+        "skintokens_auto_rig", "skintokens", "skintokens_auto_rig_glb",
+        require_textured=True,
     ),
     "full_workflow_hard_surface": CaseSpec(
         "full_workflow_hard_surface", "full", "full_workflow_hard_surface",
@@ -738,10 +745,17 @@ def build_prompt(
 ) -> dict[str, Any]:
     cache_mode = cache_mode or args.cache_mode
     image_names = [image_name] if isinstance(image_name, str) else image_name
-    prompt: dict[str, Any] = {
-        str(index + 1): {"class_type": "LoadImage", "inputs": {"image": name}}
-        for index, name in enumerate(image_names)
-    }
+    prompt: dict[str, Any] = (
+        {}
+        if spec.kind == "skintokens"
+        else {
+            str(index + 1): {
+                "class_type": "LoadImage",
+                "inputs": {"image": name},
+            }
+            for index, name in enumerate(image_names)
+        }
+    )
     output_node: str
     if spec.kind in {"trellis", "cache", "strict1536"}:
         prompt["2"] = {
@@ -784,6 +798,27 @@ def build_prompt(
         prompt["2"] = {
             "class_type": "ComfyColabPixal3DImageTo3D",
             "inputs": pixal3d_inputs(spec, "1", args, cache_mode),
+        }
+        output_node = "2"
+    elif spec.kind == "skintokens":
+        if not args.model:
+            raise ValueError(f"Case {spec.name} requires --model PATH")
+        model = Path(args.model).resolve()
+        if not model.is_file():
+            raise FileNotFoundError(f"Input GLB is missing: {model}")
+        prompt["1"] = {
+            "class_type": "ComfyColab3DPathToFile3D",
+            "inputs": {"glb_path": str(model), "delete_source": False},
+        }
+        prompt["2"] = {
+            "class_type": "ComfyColabSkinTokensAutoRig",
+            "inputs": {
+                "model_3d": ["1", 0],
+                "preserve_texture": True,
+                "use_postprocess": False,
+                "keep_worker_loaded": getattr(args, "keep_worker_loaded", True),
+                "cache_mode": cache_mode,
+            },
         }
         output_node = "2"
     elif spec.kind == "advanced":
@@ -839,7 +874,7 @@ def build_advanced_nodes(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def required_image(spec: CaseSpec) -> bool:
-    return spec.kind not in {"probe"}
+    return spec.kind not in {"probe", "skintokens"}
 
 
 def output_index_for(spec: CaseSpec) -> int:
@@ -1178,6 +1213,21 @@ _COMPONENTS = {
     5126: ("f", 4),
 }
 _WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+_TEXTURE_SOURCE_EXTENSIONS = ("EXT_texture_webp", "KHR_texture_basisu")
+
+
+def texture_image_index(texture: dict[str, Any]) -> int | None:
+    source = texture.get("source")
+    if isinstance(source, int):
+        return source
+    extensions = texture.get("extensions")
+    if not isinstance(extensions, dict):
+        return None
+    for name in _TEXTURE_SOURCE_EXTENSIONS:
+        extension = extensions.get(name)
+        if isinstance(extension, dict) and isinstance(extension.get("source"), int):
+            return extension["source"]
+    return None
 
 
 def iter_accessor(
@@ -1414,6 +1464,165 @@ def inspect_glb(
     }
 
 
+def inspect_skinning(path: Path) -> dict[str, Any]:
+    document, binary = _parse_glb(path)
+    skins = document.get("skins") or []
+    nodes = document.get("nodes") or []
+    meshes = document.get("meshes") or []
+    accessors = document.get("accessors") or []
+    if not skins:
+        raise ValueError("SkinTokens output GLB does not contain a skin")
+
+    joint_count = 0
+    inverse_bind_matrices = 0
+    for skin in skins:
+        joints = skin.get("joints") or []
+        if not joints:
+            raise ValueError("SkinTokens output GLB skin has no joints")
+        if any(
+            not isinstance(joint, int) or not 0 <= joint < len(nodes)
+            for joint in joints
+        ):
+            raise ValueError("SkinTokens output GLB skin references an invalid joint")
+        joint_count += len(joints)
+        skeleton = skin.get("skeleton")
+        if skeleton is not None and (
+            not isinstance(skeleton, int) or not 0 <= skeleton < len(nodes)
+        ):
+            raise ValueError("SkinTokens output GLB skin references an invalid skeleton root")
+        inverse_bind = skin.get("inverseBindMatrices")
+        if inverse_bind is not None:
+            if not isinstance(inverse_bind, int) or not 0 <= inverse_bind < len(accessors):
+                raise ValueError("SkinTokens output GLB has invalid inverse bind matrices")
+            accessor = accessors[inverse_bind]
+            if (
+                accessor.get("type") != "MAT4"
+                or int(accessor.get("componentType", 0)) != 5126
+                or int(accessor.get("count", 0)) != len(joints)
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB inverse bind matrices do not match its joints"
+                )
+            inverse_bind_matrices += 1
+
+    skinned_nodes = [
+        node
+        for node in nodes
+        if isinstance(node, dict) and isinstance(node.get("skin"), int)
+    ]
+    if not skinned_nodes:
+        raise ValueError("SkinTokens output GLB has no skinned mesh node")
+
+    skinned_primitives = 0
+    weighted_vertices = 0
+    minimum_weight_sum = math.inf
+    maximum_weight_sum = -math.inf
+    maximum_joint_index = -1
+    for node in skinned_nodes:
+        skin_index = node["skin"]
+        mesh_index = node.get("mesh")
+        if not 0 <= skin_index < len(skins):
+            raise ValueError("SkinTokens output GLB skinned node references an invalid skin")
+        if not isinstance(mesh_index, int) or not 0 <= mesh_index < len(meshes):
+            raise ValueError("SkinTokens output GLB skinned node references an invalid mesh")
+        joint_limit = len(skins[skin_index].get("joints") or [])
+        primitives = meshes[mesh_index].get("primitives") or []
+        if not primitives:
+            raise ValueError("SkinTokens output GLB skinned mesh has no primitives")
+        for primitive in primitives:
+            attributes = primitive.get("attributes") or {}
+            position_index = attributes.get("POSITION")
+            joints_index = attributes.get("JOINTS_0")
+            weights_index = attributes.get("WEIGHTS_0")
+            if not all(
+                isinstance(index, int) and 0 <= index < len(accessors)
+                for index in (position_index, joints_index, weights_index)
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB skinned primitive must contain "
+                    "POSITION, JOINTS_0, and WEIGHTS_0"
+                )
+            vertex_count = int(accessors[position_index].get("count", 0))
+            joints_accessor = accessors[joints_index]
+            weights_accessor = accessors[weights_index]
+            if (
+                vertex_count <= 0
+                or joints_accessor.get("type") != "VEC4"
+                or int(joints_accessor.get("componentType", 0)) not in {5121, 5123}
+                or int(joints_accessor.get("count", 0)) != vertex_count
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB JOINTS_0 must be unsigned VEC4 "
+                    "and match POSITION count"
+                )
+            weight_component = int(weights_accessor.get("componentType", 0))
+            if (
+                weights_accessor.get("type") != "VEC4"
+                or weight_component not in {5121, 5123, 5126}
+                or int(weights_accessor.get("count", 0)) != vertex_count
+                or (
+                    weight_component in {5121, 5123}
+                    and weights_accessor.get("normalized") is not True
+                )
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB WEIGHTS_0 must be FLOAT or normalized "
+                    "unsigned VEC4 and match POSITION count"
+                )
+            joint_rows_count, joint_rows = iter_accessor(
+                document, binary, joints_index
+            )
+            weight_rows_count, weight_rows = iter_accessor(
+                document, binary, weights_index
+            )
+            if joint_rows_count != vertex_count or weight_rows_count != vertex_count:
+                raise ValueError(
+                    "SkinTokens output GLB skin accessor counts do not match POSITION"
+                )
+            divisor = {5121: 255.0, 5123: 65535.0, 5126: 1.0}[weight_component]
+            for joint_row, weight_row in zip(joint_rows, weight_rows):
+                if min(joint_row) < 0 or max(joint_row) >= joint_limit:
+                    raise ValueError(
+                        "SkinTokens output GLB JOINTS_0 references an unbound joint"
+                    )
+                normalized_weights = [
+                    float(value) / divisor for value in weight_row
+                ]
+                if not all(
+                    math.isfinite(value) and value >= 0.0
+                    for value in normalized_weights
+                ):
+                    raise ValueError(
+                        "SkinTokens output GLB WEIGHTS_0 contains invalid values"
+                    )
+                weight_sum = math.fsum(normalized_weights)
+                if not 0.98 <= weight_sum <= 1.02:
+                    raise ValueError(
+                        f"SkinTokens output GLB vertex weights are not normalized: {weight_sum}"
+                    )
+                minimum_weight_sum = min(minimum_weight_sum, weight_sum)
+                maximum_weight_sum = max(maximum_weight_sum, weight_sum)
+                maximum_joint_index = max(
+                    maximum_joint_index, *(int(value) for value in joint_row)
+                )
+                weighted_vertices += 1
+            skinned_primitives += 1
+
+    if not skinned_primitives or not weighted_vertices:
+        raise ValueError("SkinTokens output GLB has no weighted skinned primitives")
+    return {
+        "skins": len(skins),
+        "joints": joint_count,
+        "skinnedNodes": len(skinned_nodes),
+        "skinnedPrimitives": skinned_primitives,
+        "weightedVertices": weighted_vertices,
+        "minimumWeightSum": minimum_weight_sum,
+        "maximumWeightSum": maximum_weight_sum,
+        "maximumJointIndex": maximum_joint_index,
+        "inverseBindMatrices": inverse_bind_matrices,
+    }
+
+
 _PLY_SCALAR_TYPES = {
     "char": ("b", 1),
     "int8": ("b", 1),
@@ -1569,6 +1778,9 @@ def compact_log_evidence(text: str, *, tail_bytes: int = 12_000) -> str:
         match.group(0) for match in ULTRASHAPE_WORKER_SETTINGS_EVENT.finditer(text)
     )
     markers.extend(match.group(0) for match in PIXAL3D_WORKER_RESULT_EVENT.finditer(text))
+    markers.extend(
+        match.group(0) for match in SKINTOKENS_WORKER_RESULT_EVENT.finditer(text)
+    )
     missing = [marker for marker in markers if marker not in tail]
     return "\n".join([*missing, tail]) if missing else tail
 
@@ -1628,10 +1840,25 @@ def pixal3d_worker_result_events(text: str) -> list[dict[str, Any]]:
     )
 
 
+def skintokens_worker_result_events(text: str) -> list[dict[str, Any]]:
+    return _settings_events(
+        text,
+        SKINTOKENS_WORKER_RESULT_EVENT,
+        label="SkinTokens worker-result",
+    )
+
+
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
-    if spec.kind in {"triposplat", "pixal3d", "pixal3d_cache", "pixal3d_cancel", "pixal3d_reuse"}:
+    if spec.kind in {
+        "triposplat",
+        "pixal3d",
+        "pixal3d_cache",
+        "pixal3d_cancel",
+        "pixal3d_reuse",
+        "skintokens",
+    }:
         return "2"
     if spec.kind == "pixal3d_multiview_advanced":
         return "10"
@@ -1820,6 +2047,7 @@ def run_prompt_once(
     resolved_ultrashape_events = ultrashape_resolved_settings_events(log_text)
     worker_ultrashape_events = ultrashape_worker_settings_events(log_text)
     worker_pixal3d_events = pixal3d_worker_result_events(log_text)
+    worker_skintokens_events = skintokens_worker_result_events(log_text)
     resolved_ultrashape_settings = (
         resolved_ultrashape_events[-1] if resolved_ultrashape_events else None
     )
@@ -1827,12 +2055,23 @@ def run_prompt_once(
         worker_ultrashape_events[-1] if worker_ultrashape_events else None
     )
     worker_pixal3d_result = worker_pixal3d_events[-1] if worker_pixal3d_events else None
+    worker_skintokens_result = (
+        worker_skintokens_events[-1] if worker_skintokens_events else None
+    )
     if (
         spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}
         and effective_cache_mode != "Use cache"
         and not isinstance(worker_pixal3d_result, dict)
     ):
         raise RuntimeError("Pixal3D live run lacked machine-readable worker result evidence")
+    if (
+        spec.kind == "skintokens"
+        and effective_cache_mode != "Use cache"
+        and not isinstance(worker_skintokens_result, dict)
+    ):
+        raise RuntimeError(
+            "SkinTokens live run lacked machine-readable worker result evidence"
+        )
     if (
         require_geometry_evidence
         and spec.kind in {"trellis", "cache"}
@@ -1964,6 +2203,26 @@ def run_prompt_once(
             if any(path not in changed for path in saved_paths):
                 raise RuntimeError("SaveGLB node 91 reported a PLY artifact outside this prompt")
             validated = [inspect_3dgs_ply(path) for path in saved_paths]
+        elif spec.kind == "skintokens":
+            saved_paths = history_output_paths(history, "91", output_root)
+            if not saved_paths:
+                raise RuntimeError("SaveGLB node 91 did not report a SkinTokens GLB")
+            changed = {path.resolve() for path in files}
+            if any(path not in changed for path in saved_paths):
+                raise RuntimeError(
+                    "SaveGLB node 91 reported a SkinTokens artifact outside this prompt"
+                )
+            validated = [
+                {
+                    **inspect_glb(
+                        path,
+                        require_textured=True,
+                        require_noncollapsed=require_geometry_evidence,
+                    ),
+                    "skinContract": inspect_skinning(path),
+                }
+                for path in saved_paths
+            ]
         else:
             validated = [
                 inspect_glb(
@@ -1975,6 +2234,54 @@ def run_prompt_once(
             ]
         primary = max(validated, key=lambda item: item["bytes"])
     proof.update(historyCompleted=True, saveArtifactValidated=True)
+    if spec.kind == "skintokens" and effective_cache_mode != "Use cache":
+        assert isinstance(worker_skintokens_result, dict)
+        revisions = worker_skintokens_result.get("revisions")
+        environment = worker_skintokens_result.get("environment")
+        nested_versions = (
+            environment.get("versions") if isinstance(environment, dict) else None
+        )
+        versions = worker_skintokens_result.get("environment_versions")
+        generation = worker_skintokens_result.get("generation")
+        if not isinstance(revisions, dict) or set(revisions) != {
+            "source",
+            "model",
+            "qwen",
+            "environment",
+        }:
+            raise RuntimeError("SkinTokens worker evidence omitted exact revisions")
+        if not all(isinstance(value, str) and value for value in revisions.values()):
+            raise RuntimeError("SkinTokens worker evidence contained an empty revision")
+        if (
+            not isinstance(environment, dict)
+            or environment.get("environment_ref") != revisions["environment"]
+            or not isinstance(versions, dict)
+            or not versions
+            or versions != nested_versions
+        ):
+            raise RuntimeError(
+                "SkinTokens worker evidence omitted measured environment versions"
+            )
+        attempts = generation.get("attempts") if isinstance(generation, dict) else None
+        attempt_count = (
+            generation.get("attempt_count") if isinstance(generation, dict) else None
+        )
+        if (
+            not isinstance(attempt_count, int)
+            or not 1 <= attempt_count <= 4
+            or not isinstance(attempts, list)
+            or len(attempts) != attempt_count
+            or not isinstance(attempts[-1], dict)
+            or attempts[-1].get("status") != "ok"
+            or generation.get("selected_seed") != attempts[-1].get("seed")
+        ):
+            raise RuntimeError(
+                "SkinTokens worker evidence omitted deterministic generation attempts"
+            )
+        if worker_skintokens_result.get("sha256") != primary.get("sha256"):
+            raise RuntimeError(
+                "SkinTokens worker and SaveGLB artifact digests do not match"
+            )
     return {
         "promptId": prompt_id,
         "runtimeSeconds": round(runtime, 3),
@@ -1988,6 +2295,7 @@ def run_prompt_once(
         "resolvedUltraShapeSettings": resolved_ultrashape_settings,
         "workerUltraShapeSettings": worker_ultrashape_settings,
         "workerPixal3DResult": worker_pixal3d_result,
+        "workerSkinTokensResult": worker_skintokens_result,
         "logExcerpt": compact_log_evidence(log_text),
     }
 

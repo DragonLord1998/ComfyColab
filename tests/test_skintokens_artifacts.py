@@ -82,6 +82,78 @@ class SkinTokensArtifactTests(unittest.TestCase):
         self.assertTrue(marker["skipped"])
         check_call.assert_not_called()
 
+    def test_environment_uses_real_managed_python311_and_pinned_bpy(self) -> None:
+        artifacts = load_artifacts()
+        calls: list[tuple[list[str], dict]] = []
+        versions = {
+            "python": "3.11.15",
+            "bpy": "4.2.22",
+            "diffusers": "0.37.1",
+            "flash_attn": "2.8.3.post1",
+            "numpy": "1.26.4",
+            "torch": "2.7.0+cu128",
+            "transformers": "4.57.3",
+        }
+
+        def check_call(argv, **kwargs):
+            values = [str(value) for value in argv]
+            calls.append((values, kwargs))
+            if values[:2] == ["/usr/local/bin/uv", "venv"]:
+                python = Path(values[-1]) / "bin/python"
+                python.parent.mkdir(parents=True, exist_ok=True)
+                python.write_text("", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            artifacts.shutil, "which", return_value="/usr/local/bin/uv"
+        ), mock.patch.object(
+            artifacts.subprocess, "check_call", side_effect=check_call
+        ), mock.patch.object(
+            artifacts, "_probe_environment", return_value=versions
+        ) as probe_environment:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "requirements.txt").write_text("bpy>=4.2\n", encoding="utf-8")
+            env_dir = root / "envs/skintokens"
+            stale_python = env_dir / "bin/python"
+            stale_python.parent.mkdir(parents=True)
+            stale_python.write_text("", encoding="utf-8")
+            (env_dir / ".comfycolab-environment.json").write_text(
+                json.dumps(
+                    {
+                        "schema": artifacts.ARTIFACT_SCHEMA,
+                        "environment_ref": artifacts.SKINTOKENS_ENVIRONMENT_REF,
+                        "python_version": artifacts.SKINTOKENS_PYTHON_VERSION,
+                        "versions": {"python": "0.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            python = artifacts._ensure_environment(
+                source, env_dir, lambda _event: None
+            )
+            marker = json.loads(
+                (env_dir / ".comfycolab-environment.json").read_text()
+            )
+
+        self.assertEqual(python, env_dir / "bin/python")
+        self.assertEqual(marker["versions"], versions)
+        self.assertEqual(marker["python_version"], "3.11.15")
+        self.assertGreaterEqual(probe_environment.call_count, 2)
+        uv_call = calls[0][0]
+        self.assertEqual(uv_call[:2], ["/usr/local/bin/uv", "venv"])
+        self.assertIn("3.11.15", uv_call)
+        self.assertIn("--managed-python", uv_call)
+        self.assertTrue(
+            any("bpy==4.2.22" in argv for argv, _kwargs in calls)
+        )
+        flash_call = next(
+            (argv, kwargs)
+            for argv, kwargs in calls
+            if "flash-attn==2.8.3.post1" in argv
+        )
+        self.assertEqual(flash_call[1]["env"]["MAX_JOBS"], "8")
+
     def test_constants_pin_license_and_revisions(self) -> None:
         artifacts = load_artifacts()
 
@@ -92,6 +164,16 @@ class SkinTokensArtifactTests(unittest.TestCase):
         self.assertEqual(
             artifacts.SKINTOKENS_MODEL_REF,
             "79736cad0fd84de384d5eede659b4ebd24effe33",
+        )
+        self.assertEqual(artifacts.SKINTOKENS_PYTHON_VERSION, "3.11.15")
+        self.assertEqual(
+            artifacts.SKINTOKENS_ENVIRONMENT_REF,
+            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2",
+        )
+        self.assertIn("bpy==4.2.22", artifacts.SKINTOKENS_RUNTIME_PINS)
+        self.assertEqual(
+            artifacts.SKINTOKENS_FLASH_ATTN_PACKAGE,
+            "flash-attn==2.8.3.post1",
         )
         self.assertEqual(artifacts.SKINTOKENS_LICENSE["name"], "MIT")
 

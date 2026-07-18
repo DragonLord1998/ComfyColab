@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import math
 import os
 import queue
 import signal
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TextIO
 
-from .file3d import validate_glb
+from .file3d import _iter_accessor, _read_embedded_binary_chunk, validate_glb
 
 
 READY_PREFIX = "COMFYCOLAB_SKINTOKENS_READY="
@@ -46,6 +47,7 @@ class SkinTokensWorkerCommand:
     temperature: float = 1.0
     repetition_penalty: float = 2.0
     num_beams: int = 10
+    max_generation_attempts: int = 4
     keep_worker_loaded: bool = True
 
     def server_argv(self) -> list[str]:
@@ -92,6 +94,7 @@ def build_skintokens_request(command: SkinTokensWorkerCommand) -> dict:
         "temperature": float(command.temperature),
         "repetition_penalty": float(command.repetition_penalty),
         "num_beams": int(command.num_beams),
+        "max_generation_attempts": int(command.max_generation_attempts),
         "revisions": {
             "source": command.source_ref,
             "model": command.model_ref,
@@ -168,19 +171,15 @@ def _cleanup(command: SkinTokensWorkerCommand, *, include_final: bool = True) ->
         artifact.unlink(missing_ok=True)
 
 
-def validate_skintokens_output(path: str | Path, *, preserve_texture: bool) -> dict:
-    document = validate_glb(
-        path,
-        require_material=preserve_texture,
-        require_texture=preserve_texture,
-        require_uv=preserve_texture,
-    )
+def validate_skin_contract(document: dict, binary: bytes | None = None) -> dict:
     skins = document.get("skins") or []
     nodes = document.get("nodes") or []
     meshes = document.get("meshes") or []
+    accessors = document.get("accessors") or []
     if not skins:
         raise ValueError("SkinTokens output GLB does not contain a skin")
     joint_count = 0
+    inverse_bind_matrices = 0
     for skin in skins:
         joints = skin.get("joints") or []
         if not joints:
@@ -189,11 +188,41 @@ def validate_skintokens_output(path: str | Path, *, preserve_texture: bool) -> d
             if not isinstance(joint, int) or joint < 0 or joint >= len(nodes):
                 raise ValueError("SkinTokens output GLB skin references an invalid joint")
         joint_count += len(joints)
+        skeleton = skin.get("skeleton")
+        if skeleton is not None and (
+            not isinstance(skeleton, int) or skeleton < 0 or skeleton >= len(nodes)
+        ):
+            raise ValueError("SkinTokens output GLB skin references an invalid skeleton root")
+        inverse_bind = skin.get("inverseBindMatrices")
+        if inverse_bind is not None:
+            if (
+                not isinstance(inverse_bind, int)
+                or inverse_bind < 0
+                or inverse_bind >= len(accessors)
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB skin has invalid inverse bind matrices"
+                )
+            accessor = accessors[inverse_bind]
+            if (
+                accessor.get("type") != "MAT4"
+                or int(accessor.get("componentType", 0)) != 5126
+                or int(accessor.get("count", 0)) != len(joints)
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB inverse bind matrices do not match its joints"
+                )
+            inverse_bind_matrices += 1
     skinned_nodes = [
         node for node in nodes if isinstance(node, dict) and isinstance(node.get("skin"), int)
     ]
     if not skinned_nodes:
         raise ValueError("SkinTokens output GLB has no skinned mesh node")
+    skinned_primitives = 0
+    weighted_vertices = 0
+    minimum_weight_sum: float | None = None
+    maximum_weight_sum: float | None = None
+    maximum_joint_index: int | None = None
     for node in skinned_nodes:
         mesh = node.get("mesh")
         skin = node.get("skin")
@@ -201,7 +230,118 @@ def validate_skintokens_output(path: str | Path, *, preserve_texture: bool) -> d
             raise ValueError("SkinTokens output GLB skinned node references an invalid mesh")
         if not isinstance(skin, int) or skin < 0 or skin >= len(skins):
             raise ValueError("SkinTokens output GLB skinned node references an invalid skin")
-    return {"skins": len(skins), "joints": joint_count, "skinned_nodes": len(skinned_nodes)}
+        primitives = meshes[mesh].get("primitives") or []
+        if not primitives:
+            raise ValueError("SkinTokens output GLB skinned mesh has no primitives")
+        for primitive in primitives:
+            attributes = primitive.get("attributes") or {}
+            position = attributes.get("POSITION")
+            joints = attributes.get("JOINTS_0")
+            weights = attributes.get("WEIGHTS_0")
+            if not all(
+                isinstance(index, int) and 0 <= index < len(accessors)
+                for index in (position, joints, weights)
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB skinned primitive must contain "
+                    "POSITION, JOINTS_0, and WEIGHTS_0"
+                )
+            vertex_count = int(accessors[position].get("count", 0))
+            joints_accessor = accessors[joints]
+            weights_accessor = accessors[weights]
+            if (
+                vertex_count <= 0
+                or joints_accessor.get("type") != "VEC4"
+                or int(joints_accessor.get("componentType", 0)) not in {5121, 5123}
+                or int(joints_accessor.get("count", 0)) != vertex_count
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB JOINTS_0 must be unsigned VEC4 "
+                    "and match POSITION count"
+                )
+            weight_component = int(weights_accessor.get("componentType", 0))
+            if (
+                weights_accessor.get("type") != "VEC4"
+                or weight_component not in {5121, 5123, 5126}
+                or int(weights_accessor.get("count", 0)) != vertex_count
+                or (
+                    weight_component in {5121, 5123}
+                    and weights_accessor.get("normalized") is not True
+                )
+            ):
+                raise ValueError(
+                    "SkinTokens output GLB WEIGHTS_0 must be FLOAT or normalized "
+                    "unsigned VEC4 and match POSITION count"
+                )
+            if binary is None:
+                raise ValueError(
+                    "SkinTokens output GLB skin validation requires embedded skin buffers"
+                )
+            if "sparse" in joints_accessor or "sparse" in weights_accessor:
+                raise ValueError(
+                    "SkinTokens output GLB sparse skin accessors are unsupported"
+                )
+            joint_count_for_skin = len(skins[skin].get("joints") or [])
+            joint_row_count, joint_rows = _iter_accessor(document, binary, joints)
+            weight_row_count, weight_rows = _iter_accessor(document, binary, weights)
+            if joint_row_count != vertex_count or weight_row_count != vertex_count:
+                raise ValueError(
+                    "SkinTokens output GLB skin accessors do not match POSITION count"
+                )
+            weight_divisor = {5121: 255.0, 5123: 65535.0, 5126: 1.0}[weight_component]
+            for joint_row, weight_row in zip(joint_rows, weight_rows):
+                joint_values = tuple(int(value) for value in joint_row)
+                row_max_joint = max(joint_values)
+                if min(joint_values) < 0 or row_max_joint >= joint_count_for_skin:
+                    raise ValueError(
+                        "SkinTokens output GLB JOINTS_0 references an unbound joint"
+                    )
+                weights_for_vertex = tuple(float(value) / weight_divisor for value in weight_row)
+                if not all(math.isfinite(value) and value >= 0.0 for value in weights_for_vertex):
+                    raise ValueError("SkinTokens output GLB WEIGHTS_0 contains invalid values")
+                weight_sum = math.fsum(weights_for_vertex)
+                if not 0.98 <= weight_sum <= 1.02:
+                    raise ValueError(
+                        "SkinTokens output GLB vertex weights are not normalized"
+                    )
+                minimum_weight_sum = (
+                    weight_sum
+                    if minimum_weight_sum is None
+                    else min(minimum_weight_sum, weight_sum)
+                )
+                maximum_weight_sum = (
+                    weight_sum
+                    if maximum_weight_sum is None
+                    else max(maximum_weight_sum, weight_sum)
+                )
+                maximum_joint_index = (
+                    row_max_joint
+                    if maximum_joint_index is None
+                    else max(maximum_joint_index, row_max_joint)
+                )
+            skinned_primitives += 1
+            weighted_vertices += vertex_count
+    return {
+        "skins": len(skins),
+        "joints": joint_count,
+        "skinned_nodes": len(skinned_nodes),
+        "skinned_primitives": skinned_primitives,
+        "weighted_vertices": weighted_vertices,
+        "inverse_bind_matrices": inverse_bind_matrices,
+        "minimum_weight_sum": minimum_weight_sum,
+        "maximum_weight_sum": maximum_weight_sum,
+        "maximum_joint_index": maximum_joint_index,
+    }
+
+
+def validate_skintokens_output(path: str | Path, *, preserve_texture: bool) -> dict:
+    document = validate_glb(
+        path,
+        require_material=preserve_texture,
+        require_texture=preserve_texture,
+        require_uv=preserve_texture,
+    )
+    return validate_skin_contract(document, _read_embedded_binary_chunk(Path(path)))
 
 
 class SkinTokensWorkerPool:
@@ -236,7 +376,7 @@ class SkinTokensWorkerPool:
         self._lines = queue.Queue()
         argv = command.server_argv()
         env = os.environ.copy()
-        env["COMFYCOLAB_SKINTOKENS_ENVIRONMENT_REF"] = command.environment_ref
+        env.pop("COMFYCOLAB_SKINTOKENS_ENVIRONMENT_REF", None)
         self._process = self._popen_factory(
             argv,
             stdin=subprocess.PIPE,
@@ -332,7 +472,11 @@ class SkinTokensWorkerPool:
                     if result.get("status") != "ok":
                         error_type = str(result.get("error_type") or "RuntimeError")
                         message = str(result.get("error") or "unknown worker failure")
-                        raise RuntimeError(f"SkinTokens worker failed: {error_type}: {message}")
+                        traceback_text = str(result.get("traceback") or "").strip()
+                        details = f"\n{traceback_text[-4000:]}" if traceback_text else ""
+                        raise RuntimeError(
+                            f"SkinTokens worker failed: {error_type}: {message}{details}"
+                        )
                     output = Path(str(result.get("output_glb", "")))
                     metadata = Path(str(result.get("metadata_output", "")))
                     if output.resolve() != Path(command.output_glb).resolve():
@@ -387,5 +531,6 @@ __all__ = [
     "SkinTokensWorkerPool",
     "build_skintokens_request",
     "global_skintokens_worker_pool",
+    "validate_skin_contract",
     "validate_skintokens_output",
 ]

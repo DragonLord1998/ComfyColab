@@ -30,6 +30,7 @@ ID, completion time, and passed-gate list for auditability.
 | VGGT-Ω checkpoint SHA-256 | `c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934` |
 | Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3` |
 | SkinTokens source/model | `273b691d35989d71cd17ff2895fdc735097b92d1` / `VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33` |
+| SkinTokens worker profile | `g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2` |
 | CubePart source/model | `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50` / `Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
 | cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
@@ -74,11 +75,13 @@ ID, completion time, and passed-gate list for auditability.
       cameras and global tokens, applies depth/confidence weights only to
       projection features, and labels strict/fallback behavior without
       claiming a trained residual/register adapter.
-- [x] SkinTokens worker protocol validates skeleton/skin bindings and cleans
-      cancelled outputs. CubePart gates provisioning on explicit research
-      license acceptance and validates ordered per-part manifests.
-- [x] `scripts/check.sh` passes: 243 tests on 2026-07-16 (two optional Pillow
-      preprocess tests skipped in the minimal local environment).
+- [x] SkinTokens uses a measured Python 3.11.15 environment, validates real
+      `JOINTS_0`/`WEIGHTS_0` payloads, and applies deterministic bounded retries
+      only to malformed autoregressive skeleton/skin sequences. Cancellation
+      still cleans partial outputs. CubePart gates provisioning on explicit
+      research license acceptance and validates ordered per-part manifests.
+- [x] `scripts/check.sh` passes: 385 tests on 2026-07-19 (four optional tests
+      skipped in the minimal local environment).
 
 ## Live G4 benchmark table
 
@@ -108,7 +111,7 @@ path rather than a manual 512 override.
 | TRELLIS2MV four-view / FLUX.2 Klein 9B | 512 | n/a | 182.76 s | not captured | 9,023,296 | 149,099 | 1024 | passed live G4; textured, rank 3 |
 | Pixal3DMV four-view experimental / FLUX.2 Klein 9B | 1024 | 15,808 | 128.88 s worker / 232.58 s workflow | 57,337,375,616 B | 6,295,492 | 149,162 | 1024 | passed live G4; textured, rank 3 |
 | Pixal3DMV Advanced / VGGT-Ω strict | 1024 | 15,416 | 74.86 s worker / 101.25 s workflow | 57,337,113,280 B worker / 63,888,687,104 B workflow | 6,062,468 | 143,940 | 1024 | passed live G4; textured, rank 3; Sim(3) normalized RMS 0.0655 |
-| SkinTokens auto-rig | n/a | n/a | pending | pending | pending rigged GLB | pending joints/skins | preserve input | pending live G4 |
+| SkinTokens auto-rig | n/a | n/a | 141.39 s | 8,027,897,856 B | 8,972,012 | 149,162 | 2 embedded textures | passed after retry: 1 skin, 20 joints, 131,757 weighted vertices |
 | CubePart schema decomposition | n/a | n/a | pending | pending | pending combined/per-part GLBs | pending part count | colored parts | pending live G4 |
 
 The multiview probe used one camera-faithful four-view toy-van set generated
@@ -160,6 +163,23 @@ at a lower resolution. The later genuine-1536 attempt progressed through the
 high-density tiled sparse-convolution path, but the Colab backend became
 unavailable before completion, so it is not counted as a passed benchmark.
 
+SkinTokens passed its repository-native live case on run
+`g4-2fe26f88b4b04666` (prompt
+`64b6a922-b740-4971-bc2a-9948e7f0a285`). The G4 output SHA-256 is
+`04b871e54542480c72f95b9ffcea9d8725f8d370beee23a254bd39d3bf36e8c9`;
+the durable validator read the actual `JOINTS_0` and `WEIGHTS_0` buffers and
+confirmed one skin, 20 joints, one inverse-bind-matrix accessor, one skinned
+primitive, and normalized weights for all 131,757 vertices. It also verified
+the preserved embedded textures, native Preview3D/SaveGLB compatibility, and
+non-collapsed rank-3 geometry. The worker attested Python 3.11.15, PyTorch
+2.7.0+cu128, NumPy 1.26.4, bpy 4.2.22, transformers 4.57.3, diffusers 0.37.1,
+and flash-attn 2.8.3.post1 from the active environment marker. The exact-source
+G4 run exercised the recovery path: attempts one through three (seeds 550593027
+through 550593029) produced incomplete per-joint skin tokens, while attempt four
+used the conservative sampling profile with seed 550593030 and completed.
+Evidence:
+`live-g4:g4-2fe26f88b4b04666:skintokens_auto_rig:4a74198dd1ccadc824ce7b604e3be500b892f12d8ce41dc9ad2738b2a137f779`.
+
 Also proven on the same live G4 run:
 
 - PyTorch 2.11.0 + CUDA 12.8 on SM120, cubvh's CUDA distance kernel,
@@ -194,9 +214,10 @@ TRELLIS2MV likewise has one genuine four-view textured GLB. Its six-view gate
 remains pending. Advanced Pixal3DMV now has a strict verified VGGT-Ω run through
 the exact-digest mirror retrieval path; future official-source runs must resolve
 to the same checkpoint digest. Schema loading or the explicit weighted
-Pixal3D fallback cannot pass that gate. SkinTokens still needs a GLB with
-verified skins/joints, and CubePart still needs a combined scene plus ordered
-per-part GLBs. Local protocol/schema tests do not satisfy those gates.
+Pixal3D fallback cannot pass that gate. SkinTokens now has separate live G4
+proof for a textured rigged GLB with valid skins/joints and normalized vertex
+weights. CubePart still needs a combined scene plus ordered per-part GLBs.
+Local protocol/schema tests do not satisfy those remaining gates.
 
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
@@ -248,5 +269,6 @@ provenance.
 - [x] Pixal3DMV four-view FLUX.2 Klein 9B run produces a textured GLB without a contact sheet
 - [ ] TRELLIS2MV six-view run produces a textured GLB
 - [x] Advanced Pixal3DMV strict VGGT-Ω run records alignment/depth guidance and produces a textured GLB
-- [ ] SkinTokens produces a rigged GLB with valid skin, joints, and skinned mesh nodes
+- [x] SkinTokens produces a textured rigged GLB with 1 skin, 20 joints, 1
+      skinned primitive, and normalized weights for all 131,757 vertices
 - [ ] CubePart produces a combined GLB, ordered per-part GLBs, and matching manifest

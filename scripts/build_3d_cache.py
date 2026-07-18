@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -26,6 +27,7 @@ SRC = ROOT / "src"
 DEFAULT_MANIFEST = ROOT / "cache" / "3d-g4-v2.json"
 DEFAULT_PART_BYTES = 1_900_000_000
 LIVE_VALIDATION_SCHEMA = "comfycolab-3d-live-validation-v1"
+SKINTOKENS_PATCH_ID = "skintokens-py31115-bpy4222-webp-retry-validation-v3"
 REQUIRED_LIVE_GATES = (
     "trellis_512_textured_glb",
     "trellis_1024_cascade_textured_glb",
@@ -75,6 +77,22 @@ REQUIRED_LIVE_BENCHMARKS = {
     "pixal3d_preview_save_glb_reader": 1024,
     "pixal3d_1536_experimental": 1536,
 }
+
+
+def skintokens_environment_ref() -> str:
+    path = ROOT / "worker" / "skintokens" / "artifacts.py"
+    specification = importlib.util.spec_from_file_location(
+        "comfycolab_build_skintokens_artifacts", path
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"Unable to load SkinTokens artifact constants: {path}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    try:
+        specification.loader.exec_module(module)
+    finally:
+        sys.modules.pop(specification.name, None)
+    return str(module.SKINTOKENS_ENVIRONMENT_REF)
 
 
 def sha256_file(path: Path) -> str:
@@ -136,6 +154,7 @@ def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
                 f"{remote_bootstrap.SKINTOKENS_QWEN_REPO}@"
                 f"{remote_bootstrap.SKINTOKENS_QWEN_REF}"
             ),
+            "skinTokensEnvironment": skintokens_environment_ref(),
         })
     if hasattr(remote_bootstrap, "CUBEPART_REF"):
         sources.update({
@@ -162,6 +181,8 @@ def expected_validation_patches(remote_bootstrap) -> dict[str, str]:
     )
     if trellis_multiview_patch is not None:
         patches["trellisMultiview"] = trellis_multiview_patch
+    if hasattr(remote_bootstrap, "SKINTOKENS_REF"):
+        patches["skinTokens"] = SKINTOKENS_PATCH_ID
     return patches
 
 
