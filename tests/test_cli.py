@@ -145,6 +145,14 @@ class CliLifecycleTests(unittest.TestCase):
         self.assertEqual(args.profile, "core")
         self.assertTrue(args.colab_proxy)
         self.assertEqual(args.output, "ComfyColab.ipynb")
+        self.assertFalse(args.legacy_full)
+
+    def test_notebook_legacy_full_mode_is_explicit(self) -> None:
+        args = cli.build_parser().parse_args(
+            ["notebook", "--profile", "legacy-full", "--legacy-full"]
+        )
+        self.assertEqual(args.profile, "legacy-full")
+        self.assertTrue(args.legacy_full)
 
     def test_colab_proxy_opens_attached_page_and_embeds_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

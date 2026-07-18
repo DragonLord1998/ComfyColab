@@ -50,6 +50,7 @@ PIXAL3D_DIR = CONTENT / "Pixal3D"
 SKINTOKENS_DIR = CONTENT / "SkinTokens"
 CUBE_DIR = CONTENT / "cube"
 STATE_DIR = CONTENT / ".comfycolab"
+PACKS_DIR = STATE_DIR / "packs"
 STATE_FILE = STATE_DIR / "runtime.json"
 COMFY_LOG = STATE_DIR / "comfyui.log"
 TUNNEL_LOG = STATE_DIR / "cloudflared.log"
@@ -128,6 +129,17 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
+CLOUDFLARED_VERSION = "2026.7.2"
+CLOUDFLARED_ASSETS = {
+    "amd64": (
+        "cloudflared-linux-amd64",
+        "ec905ea7b7e327ff8abdde8cb64697a2152de74dbcdbf6aec9db8364eb3886cd",
+    ),
+    "arm64": (
+        "cloudflared-linux-arm64",
+        "405df476437e027fc6d18729a5a77155c0a33a6082aeee60a799a688f3052e66",
+    ),
+}
 TRIPOSPLAT_CORE_REQUIREMENTS = {
     "comfy_extras/nodes_triposplat.py": (
         "TripoSplatPreprocessImage",
@@ -234,6 +246,128 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validated_https_repository(value: object, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"{field} must be a string")
+    parsed = urlparse(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(f"{field} must be a credential-free HTTPS URL")
+    return value
+
+
+def _safe_relative_path(value: object, *, field: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"{field} must be a non-empty relative path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise RuntimeError(f"{field} is unsafe")
+    return Path(*path.parts)
+
+
+def prepare_configured_node_packs() -> dict[str, tuple[Path, dict[str, object]]]:
+    configured = CONFIG.get("packs", [])
+    if configured is None or configured == ():
+        return {}
+    if not isinstance(configured, list):
+        raise RuntimeError("Configured daughter packs must be an array")
+    prepared: dict[str, tuple[Path, dict[str, object]]] = {}
+    for pack in configured:
+        if not isinstance(pack, dict):
+            raise RuntimeError("Configured daughter pack entries must be objects")
+        pack_id = pack.get("id")
+        if (
+            not isinstance(pack_id, str)
+            or not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", pack_id)
+        ):
+            raise RuntimeError(f"Configured daughter pack ID is invalid: {pack_id!r}")
+        if pack_id in prepared:
+            raise RuntimeError(f"Configured daughter pack is duplicated: {pack_id}")
+        repository = _validated_https_repository(
+            pack.get("repository"),
+            field=f"pack {pack_id} repository",
+        )
+        commit = pack.get("commit")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise RuntimeError(f"Configured daughter pack commit is invalid: {pack_id}")
+        manifest_sha256 = pack.get("manifest_sha256")
+        if (
+            not isinstance(manifest_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256)
+        ):
+            raise RuntimeError(
+                f"Configured daughter pack manifest digest is invalid: {pack_id}"
+            )
+        root = PACKS_DIR / pack_id
+        if root.exists():
+            shutil.rmtree(root)
+        clone_or_update(repository, root, commit)
+        if git_commit(root) != commit:
+            raise RuntimeError(
+                f"Configured daughter pack {pack_id} did not resolve to {commit}"
+            )
+        manifest_path = root / "comfycolab-pack.json"
+        if not manifest_path.is_file():
+            raise RuntimeError(f"Configured daughter pack has no manifest: {pack_id}")
+        if sha256_file(manifest_path) != manifest_sha256:
+            raise RuntimeError(
+                f"Configured daughter pack manifest digest mismatch: {pack_id}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Configured daughter pack manifest is invalid JSON: {pack_id}"
+            ) from error
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema") != 1
+            or manifest.get("id") != pack_id
+        ):
+            raise RuntimeError(
+                f"Configured daughter pack manifest identity is invalid: {pack_id}"
+            )
+        prepared[pack_id] = (root, manifest)
+    return prepared
+
+
+def configured_accepted_licenses() -> tuple[str, ...]:
+    accepted_licenses = CONFIG.get("accepted_licenses", [])
+    if (
+        not isinstance(accepted_licenses, list)
+        or accepted_licenses != sorted(set(accepted_licenses))
+        or not all(isinstance(value, str) for value in accepted_licenses)
+    ):
+        raise RuntimeError(
+            "Configured accepted licenses must be a sorted unique array of strings"
+        )
+    return tuple(accepted_licenses)
+
+
+def prepare_cubepart_source() -> bool:
+    accepted_licenses = configured_accepted_licenses()
+    if "accept_research_license" not in accepted_licenses:
+        shutil.rmtree(CUBE_DIR, ignore_errors=True)
+        print(
+            "[comfycolab] CubePart source remains uninstalled until the "
+            "research-only license is explicitly accepted.",
+            flush=True,
+        )
+        return False
+    clone_or_update(
+        "https://github.com/Roblox/cube.git",
+        CUBE_DIR,
+        CUBEPART_REF,
+    )
+    return True
 
 
 def apply_pinned_patch(repository: Path, specification_path: Path) -> str:
@@ -1511,22 +1645,69 @@ def invalidate_comfyenv_metadata_cache(workspace: Path | None = None) -> list[Pa
     return removed
 
 
-def install_node_pack() -> None:
-    node_packs = (
-        (REPO_DIR / "custom_nodes" / "ComfyColab-ZImage", NODE_TARGET),
-        (REPO_DIR / "custom_nodes" / "ComfyColab-3D", NODE_3D_TARGET),
-        (
-            REPO_DIR / "custom_nodes" / "ComfyColab-Triposplat",
-            NODE_TRIPOSPLAT_TARGET,
-        ),
-        (
-            REPO_DIR / "custom_nodes" / "ComfyColab-LTXVideo",
-            NODE_LTX_TARGET,
-        ),
-    )
+def install_node_pack(
+    configured_packs: dict[str, tuple[Path, dict[str, object]]] | None = None,
+) -> None:
+    if configured_packs:
+        node_packs: list[tuple[Path, Path]] = []
+        seen_targets: set[str] = set()
+        for pack_id in sorted(configured_packs):
+            pack_root, manifest = configured_packs[pack_id]
+            node_roots = manifest.get("node_roots", [])
+            if not isinstance(node_roots, list):
+                raise RuntimeError(f"Pack {pack_id} node_roots must be an array")
+            for node_root in node_roots:
+                if not isinstance(node_root, dict):
+                    raise RuntimeError(f"Pack {pack_id} node root is invalid")
+                source_relative = _safe_relative_path(
+                    node_root.get("source"),
+                    field=f"pack {pack_id} node source",
+                )
+                target_relative = _safe_relative_path(
+                    node_root.get("target"),
+                    field=f"pack {pack_id} node target",
+                )
+                if len(target_relative.parts) != 1:
+                    raise RuntimeError(
+                        f"Pack {pack_id} node target must be one directory"
+                    )
+                if target_relative.name in seen_targets:
+                    raise RuntimeError(
+                        f"Configured daughter node target is duplicated: "
+                        f"{target_relative.name}"
+                    )
+                seen_targets.add(target_relative.name)
+                source = (pack_root / source_relative).resolve()
+                resolved_root = pack_root.resolve()
+                if (
+                    not source.is_dir()
+                    or source == resolved_root
+                    or resolved_root not in source.parents
+                ):
+                    raise RuntimeError(
+                        f"Pack {pack_id} node source is missing or unsafe: "
+                        f"{source_relative}"
+                    )
+                node_packs.append(
+                    (source, COMFY_DIR / "custom_nodes" / target_relative.name)
+                )
+    else:
+        node_packs = [
+            (REPO_DIR / "custom_nodes" / "ComfyColab-ZImage", NODE_TARGET),
+            (REPO_DIR / "custom_nodes" / "ComfyColab-3D", NODE_3D_TARGET),
+            (
+                REPO_DIR / "custom_nodes" / "ComfyColab-Triposplat",
+                NODE_TRIPOSPLAT_TARGET,
+            ),
+            (
+                REPO_DIR / "custom_nodes" / "ComfyColab-LTXVideo",
+                NODE_LTX_TARGET,
+            ),
+        ]
     for source, target in node_packs:
         if not source.is_dir():
             raise RuntimeError(f"Node pack is missing from repository: {source}")
+        target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_symlink() or target.is_file():
             target.unlink()
         elif target.exists():
@@ -1556,20 +1737,42 @@ def validate_triposplat_core_support() -> None:
 
 
 def cloudflared_path() -> Path:
-    existing = shutil.which("cloudflared")
-    if existing:
-        return Path(existing)
-
     machine = platform.machine().lower()
-    architecture = "arm64" if machine in {"aarch64", "arm64"} else "amd64"
-    destination = STATE_DIR / "cloudflared"
+    if machine in {"aarch64", "arm64"}:
+        architecture = "arm64"
+    elif machine in {"amd64", "x86_64"}:
+        architecture = "amd64"
+    else:
+        raise RuntimeError(
+            f"cloudflared has no authenticated asset for architecture {machine!r}"
+        )
+    asset, expected_sha256 = CLOUDFLARED_ASSETS[architecture]
+    destination = STATE_DIR / f"cloudflared-{CLOUDFLARED_VERSION}-{architecture}"
+    if destination.is_file() and sha256_file(destination) == expected_sha256:
+        destination.chmod(0o755)
+        return destination
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f"{destination.name}.part")
     url = (
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/"
-        f"cloudflared-linux-{architecture}"
+        "https://github.com/cloudflare/cloudflared/releases/download/"
+        f"{CLOUDFLARED_VERSION}/{asset}"
     )
-    print(f"[comfycolab] Downloading cloudflared ({architecture})...", flush=True)
-    with urllib.request.urlopen(url, timeout=120) as response, destination.open("wb") as output:
+    print(
+        f"[comfycolab] Downloading cloudflared {CLOUDFLARED_VERSION} "
+        f"({architecture})...",
+        flush=True,
+    )
+    with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as output:
         shutil.copyfileobj(response, output)
+    actual_sha256 = sha256_file(temporary)
+    if actual_sha256 != expected_sha256:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(
+            "cloudflared digest mismatch: "
+            f"expected {expected_sha256}, got {actual_sha256}"
+        )
+    temporary.chmod(0o755)
+    temporary.replace(destination)
     destination.chmod(0o755)
     return destination
 
@@ -1648,6 +1851,28 @@ def http_ready(port: int) -> bool:
         return False
 
 
+def running_comfy_matches(
+    previous: dict[str, object],
+    *,
+    lock_sha256: object,
+    cors_origin: str | None,
+    runtime_mode: object,
+    accepted_licenses: list[str],
+    port: int,
+    refresh: bool,
+) -> bool:
+    return (
+        not refresh
+        and previous.get("lockSha256") == lock_sha256
+        and previous.get("corsOrigin") == cors_origin
+        and previous.get("runtimeMode") == runtime_mode
+        and previous.get("acceptedLicenses") == accepted_licenses
+        and bool(previous.get("comfyUrl"))
+        and pid_alive(previous.get("comfyPid"))
+        and http_ready(port)
+    )
+
+
 def wait_for_comfy(port: int, process: subprocess.Popen[bytes], timeout: int = 180) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1658,6 +1883,49 @@ def wait_for_comfy(port: int, process: subprocess.Popen[bytes], timeout: int = 1
             return
         time.sleep(1)
     raise TimeoutError(f"ComfyUI did not become ready on port {port} within {timeout}s.")
+
+
+def validate_configured_node_discovery(
+    port: int,
+    configured_packs: dict[str, tuple[Path, dict[str, object]]],
+) -> dict[str, list[str]]:
+    if not configured_packs:
+        return {}
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{port}/object_info",
+        timeout=15,
+    ) as response:
+        inventory = json.load(response)
+    if not isinstance(inventory, dict):
+        raise RuntimeError("ComfyUI object_info returned a non-object")
+    discovered: dict[str, list[str]] = {}
+    for pack_id, (_root, manifest) in sorted(configured_packs.items()):
+        probes = manifest.get("probes", [])
+        if not isinstance(probes, list):
+            raise RuntimeError(f"Pack {pack_id} probes must be an array")
+        expected: set[str] = set()
+        for probe in probes:
+            if (
+                not isinstance(probe, dict)
+                or probe.get("phase") != "post_start"
+                or probe.get("type") != "comfy_node_ids"
+            ):
+                continue
+            values = probe.get("values")
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) and value for value in values
+            ):
+                raise RuntimeError(
+                    f"Pack {pack_id} post-start node probe is invalid"
+                )
+            expected.update(values)
+        missing = sorted(expected - set(inventory))
+        if missing:
+            raise RuntimeError(
+                f"Pack {pack_id} is missing ComfyUI nodes: {', '.join(missing)}"
+            )
+        discovered[pack_id] = sorted(expected)
+    return discovered
 
 
 def wait_for_tunnel(process: subprocess.Popen[bytes], timeout: int = 60) -> str:
@@ -1715,6 +1983,77 @@ def probe_colab_proxy_url(url: str, timeout: int = 15) -> bool:
     return eval_colab_js(expression, timeout) is True
 
 
+def validate_colab_proxy_url(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ValueError("Colab returned an invalid proxy URL.")
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Colab returned an invalid proxy URL.") from error
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    trusted_host = (
+        hostname.endswith(".prod.colab.dev")
+        and hostname != "prod.colab.dev"
+    ) or (
+        hostname.endswith(".colab.googleusercontent.com")
+        and hostname != "colab.googleusercontent.com"
+    )
+    if (
+        parsed.scheme != "https"
+        or not trusted_host
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Colab returned an untrusted proxy URL.")
+    return f"https://{hostname}/"
+
+
+def reserved_colab_proxy_url() -> str | None:
+    value = os.environ.get("COMFYCOLAB_PROXY_URL")
+    if value is None:
+        return None
+    return validate_colab_proxy_url(value)
+
+
+def colab_cors_origin() -> str:
+    value = os.environ.get(
+        "COMFYCOLAB_CORS_ORIGIN",
+        "https://colab.research.google.com",
+    )
+    if value == "https://colab.research.google.com":
+        return value
+    return validate_colab_proxy_url(value).removesuffix("/")
+
+
+def comfy_launch_command(port: int, *, colab_proxy: bool) -> list[str]:
+    command = [
+        sys.executable,
+        "main.py",
+        "--listen",
+        "127.0.0.1",
+        "--port",
+        str(port),
+    ]
+    if colab_proxy:
+        origin = colab_cors_origin()
+        reserved = reserved_colab_proxy_url()
+        if reserved is not None and origin != reserved.removesuffix("/"):
+            raise RuntimeError("Colab proxy URL and CORS origin do not match.")
+        command.extend(["--enable-cors-header", origin])
+    return command
+
+
 def request_colab_proxy_url(
     port: int,
     timeout: int = 15,
@@ -1722,6 +2061,9 @@ def request_colab_proxy_url(
 ) -> str | None:
     if not bool(CONFIG.get("colab_proxy", False)):
         return None
+    reserved = reserved_colab_proxy_url()
+    if reserved is not None:
+        return reserved
 
     print(
         "[comfycolab] Requesting a private Google Colab proxy URL...",
@@ -1744,13 +2086,7 @@ def request_colab_proxy_url(
                 raise TimeoutError("The attached Colab page did not return a proxy URL.")
             if not isinstance(value, str):
                 raise ValueError("Colab returned a non-string proxy value.")
-            parsed = urlparse(value)
-            hostname = (parsed.hostname or "").lower()
-            if parsed.scheme != "https" or not (
-                hostname == "googleusercontent.com"
-                or hostname.endswith(".googleusercontent.com")
-            ):
-                raise ValueError("Colab returned an untrusted proxy URL.")
+            value = validate_colab_proxy_url(value)
             if not probe_colab_proxy_url(value):
                 raise RuntimeError("ComfyUI did not pass the proxy HTTP/WebSocket probe.")
             return value
@@ -1796,13 +2132,20 @@ def main() -> None:
     port = int(CONFIG["port"])
     refresh = bool(CONFIG.get("refresh", False))
     colab_proxy = bool(CONFIG.get("colab_proxy", False))
+    cors_origin = colab_cors_origin() if colab_proxy else None
+    expected_lock_sha256 = CONFIG.get("lock_sha256")
+    expected_runtime_mode = CONFIG.get("runtime_mode", "legacy")
+    expected_accepted_licenses = list(configured_accepted_licenses())
     previous = load_state()
 
-    reusable_comfy = (
-        not refresh
-        and http_ready(port)
-        and pid_alive(previous.get("comfyPid"))
-        and bool(previous.get("comfyUrl"))
+    reusable_comfy = running_comfy_matches(
+        previous,
+        lock_sha256=expected_lock_sha256,
+        cors_origin=cors_origin,
+        runtime_mode=expected_runtime_mode,
+        accepted_licenses=expected_accepted_licenses,
+        port=port,
+        refresh=refresh,
     )
     reusable_tunnel = reusable_comfy and pid_alive(previous.get("tunnelPid"))
     if reusable_comfy:
@@ -1818,6 +2161,7 @@ def main() -> None:
                     "comfyUrl": proxy_url or cloudflare_url,
                     "cloudflareUrl": cloudflare_url,
                     "colabProxyUrl": proxy_url,
+                    "corsOrigin": cors_origin,
                     "tunnelPid": previous.get("tunnelPid") if reusable_tunnel else None,
                 }
             )
@@ -1865,16 +2209,13 @@ def main() -> None:
         SKINTOKENS_DIR,
         SKINTOKENS_REF,
     )
-    clone_or_update(
-        "https://github.com/Roblox/cube.git",
-        CUBE_DIR,
-        CUBEPART_REF,
-    )
+    cubepart_source_ready = prepare_cubepart_source()
     clone_or_update(
         str(CONFIG["repository_url"]),
         REPO_DIR,
         str(CONFIG["repository_ref"]),
     )
+    configured_node_packs = prepare_configured_node_packs()
     trellis_patch = apply_pinned_patch(
         TRELLIS_DIR,
         REPO_DIR / "patches" / "trellis2-no-1536-downgrade.json",
@@ -1892,7 +2233,10 @@ def main() -> None:
         REPO_DIR / "patches" / "ultrashape-inference-only-imports.json",
     )
     validate_triposplat_core_support()
-    install_node_pack()
+    if configured_node_packs:
+        install_node_pack(configured_node_packs)
+    else:
+        install_node_pack()
     environment_cache_profile = install_dependencies()
     pixal3d_cache_profile = install_pixal3d()
     if pixal3d_cache_profile != "unavailable":
@@ -1930,14 +2274,7 @@ def main() -> None:
     try:
         with COMFY_LOG.open("wb") as comfy_log:
             comfy = subprocess.Popen(
-                [
-                    sys.executable,
-                    "main.py",
-                    "--listen",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
+                comfy_launch_command(port, colab_proxy=colab_proxy),
                 cwd=COMFY_DIR,
                 stdout=comfy_log,
                 stderr=subprocess.STDOUT,
@@ -1946,6 +2283,10 @@ def main() -> None:
             )
         save_state({"status": "starting_comfy", "comfyPid": comfy.pid, "port": port})
         wait_for_comfy(port, comfy)
+        discovered_node_ids = validate_configured_node_discovery(
+            port,
+            configured_node_packs,
+        )
 
         proxy_url = request_colab_proxy_url(port) if colab_proxy else None
         cloudflare_url: str | None = None
@@ -1985,15 +2326,30 @@ def main() -> None:
                 flush=True,
             )
 
+        pack_state = {
+            pack_id: {
+                "status": "ready",
+                "commit": git_commit(root),
+                "version": manifest.get("version"),
+                "nodeIds": discovered_node_ids.get(pack_id, []),
+            }
+            for pack_id, (root, manifest) in sorted(configured_node_packs.items())
+        }
         payload: dict[str, object] = {
+            "schema": 1,
             "status": "ready",
             "comfyUrl": proxy_url or cloudflare_url,
             "cloudflareUrl": cloudflare_url,
             "colabProxyUrl": proxy_url,
+            "corsOrigin": cors_origin,
             "comfyPid": comfy.pid,
             "tunnelPid": tunnel.pid if tunnel is not None else None,
             "port": port,
             "storage": "temporary",
+            "runtimeMode": expected_runtime_mode,
+            "lockSha256": expected_lock_sha256,
+            "acceptedLicenses": expected_accepted_licenses,
+            "packs": pack_state,
             "repositoryUrl": CONFIG["repository_url"],
             "repositoryRef": CONFIG["repository_ref"],
             "repositoryCommit": git_commit(REPO_DIR),
@@ -2005,7 +2361,8 @@ def main() -> None:
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
             "pixal3dCommit": git_commit(PIXAL3D_DIR),
             "skinTokensCommit": git_commit(SKINTOKENS_DIR),
-            "cubePartCommit": git_commit(CUBE_DIR),
+            "cubePartCommit": git_commit(CUBE_DIR) if cubepart_source_ready else None,
+            "cubePartSourceReady": cubepart_source_ready,
             "skinTokensModelRef": SKINTOKENS_MODEL_REF,
             "skinTokensQwenRef": SKINTOKENS_QWEN_REF,
             "cubePartModelRef": CUBEPART_MODEL_REF,

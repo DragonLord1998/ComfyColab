@@ -32,6 +32,7 @@ class Stage0ConfigTests(unittest.TestCase):
             port=8188,
             refresh=True,
             colab_proxy=True,
+            runtime_mode="legacy-full",
         )
 
     def test_round_trip_and_lock_digest(self) -> None:
@@ -40,6 +41,18 @@ class Stage0ConfigTests(unittest.TestCase):
         self.assertEqual(restored, config)
         self.assertEqual(restored.lock_bytes(), LOCK)
         self.assertEqual(restored.lock_sha256, hashlib.sha256(LOCK).hexdigest())
+        self.assertEqual(restored.runtime_mode, "legacy-full")
+
+    def test_rejects_unknown_runtime_mode(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "runtime_mode"):
+            CoreStage0ConfigV1.create(
+                core_repository="https://github.com/example/ComfyColab.git",
+                core_commit=CORE_COMMIT,
+                stage1_entrypoint="src/comfycolab/runtime.py",
+                stage1_sha256=STAGE1_SHA,
+                lock_bytes=LOCK,
+                runtime_mode="unknown",
+            )
 
     def test_rejects_mutable_core_ref_and_unsafe_entrypoint(self) -> None:
         with self.assertRaisesRegex(ConfigError, "40-character"):

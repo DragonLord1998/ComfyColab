@@ -20,7 +20,11 @@ an unreleased `0.2.0.dev1` candidate; GitHub `main` and its installer
 still represent the legacy release. The user-selectable official pack registry
 remains empty until each pack passes its clean-lock Colab gate. Legacy
 all-in-one sources remain in this checkout until the matching daughter is proven
-installable and rollback-safe. See [the migration status](docs/modularization-status.md).
+installable and rollback-safe. The public full-node notebook uses the explicit
+`legacy-full` compatibility runtime in the meantime: it verifies and links the
+exact Image, Video, 3D, and 3DGS daughter commits while reusing the previously
+working full dependency bootstrap. See
+[the migration status](docs/modularization-status.md).
 
 Everything inside `/content` disappears when the Colab runtime is released.
 
@@ -63,9 +67,10 @@ Open the `ComfyUI` link in Safari, Chrome, or another browser.
 ## Core and pack commands
 
 Core-only start becomes the public default with the 0.2 release. Pack aliases
-and `legacy-full` remain unavailable until the corresponding published commits
-pass their runtime gates and are promoted into the authenticated official
-registry.
+and the generic `legacy-full` start remain unavailable until the corresponding
+published commits pass their runtime gates and are promoted into the
+authenticated official registry. The explicit notebook-only `--legacy-full`
+compatibility path is available now.
 
 ```bash
 # Core-only
@@ -74,7 +79,12 @@ comfycolab start
 # After runtime promotion, official pack aliases can be composed
 comfycolab start --pack image --pack video
 
-# After all five packs pass their gates, legacy-full becomes available
+# Current full-node notebook compatibility path
+comfycolab notebook --profile legacy-full --legacy-full \
+  --accept-license accept_research_license \
+  --output ComfyColab-Full.ipynb
+
+# After all five packs pass their generic-runtime gates
 comfycolab start --profile legacy-full
 comfycolab pack resolve --pack image --pack video
 comfycolab pack doctor
@@ -102,6 +112,16 @@ for contract CI. `registry/official-packs.json` is intentionally empty until a
 pack also passes clean dependency installation, ComfyUI startup, node discovery,
 its accelerator smoke test, and rollback. This prevents an apparently valid
 alias from resolving to a pack that is public but not yet runnable.
+
+`--legacy-full` is deliberately limited to notebook rendering. It does not
+promote the daughter refs into `registry/official-packs.json`; it selects the
+immutable refs embedded in `profiles/legacy-full.json`, verifies their manifest
+digests inside Colab, and links their declared node roots. `ComfyColab-WM` is
+excluded because it does not contain nodes yet. CubePart's source and weights
+carry research-only terms. The published notebook is rendered with
+`--accept-license accept_research_license` at the repository owner's explicit
+direction; review and accept those upstream terms before running Cell 2. The
+CubePart node still requires its per-request acceptance checkbox.
 
 Always run `comfycolab stop` when you are finished so the Colab runtime is not
 left consuming compute units.
