@@ -207,7 +207,13 @@ def run(
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
-def clone_or_update(url: str, destination: Path, ref: str = "main") -> None:
+def clone_or_update(
+    url: str,
+    destination: Path,
+    ref: str = "main",
+    *,
+    reset: bool = False,
+) -> None:
     if not (destination / ".git").is_dir():
         if destination.exists():
             shutil.rmtree(destination)
@@ -227,6 +233,9 @@ def clone_or_update(url: str, destination: Path, ref: str = "main") -> None:
 
     run(["git", "fetch", "origin", ref, "--depth", "1"], cwd=destination)
     run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=destination)
+    if reset:
+        run(["git", "reset", "--hard", "FETCH_HEAD"], cwd=destination)
+        run(["git", "clean", "-fdx"], cwd=destination)
 
 
 def git_commit(destination: Path) -> str:
@@ -2227,6 +2236,7 @@ def main() -> None:
         "https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2.git",
         TRELLIS_DIR,
         TRELLIS_REF,
+        reset=True,
     )
     clone_or_update(
         "https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git",
@@ -2237,6 +2247,7 @@ def main() -> None:
         "https://github.com/PKU-YuanGroup/UltraShape-1.0.git",
         ULTRASHAPE_DIR,
         ULTRASHAPE_REF,
+        reset=True,
     )
     clone_or_update(
         "https://github.com/TencentARC/Pixal3D.git",
