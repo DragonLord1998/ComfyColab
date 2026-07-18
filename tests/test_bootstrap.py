@@ -18,6 +18,50 @@ from comfycolab import remote_bootstrap
 
 
 class BootstrapRenderingTests(unittest.TestCase):
+    def test_patch_target_checkout_resets_tracked_and_untracked_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "repository"
+            (destination / ".git").mkdir(parents=True)
+            with mock.patch.object(remote_bootstrap, "run") as run:
+                remote_bootstrap.clone_or_update(
+                    "https://example.test/repository.git",
+                    destination,
+                    "a" * 40,
+                    reset=True,
+                )
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(
+                    ["git", "fetch", "origin", "a" * 40, "--depth", "1"],
+                    cwd=destination,
+                ),
+                mock.call(
+                    ["git", "checkout", "--detach", "FETCH_HEAD"],
+                    cwd=destination,
+                ),
+                mock.call(
+                    ["git", "reset", "--hard", "FETCH_HEAD"],
+                    cwd=destination,
+                ),
+                mock.call(["git", "clean", "-fdx"], cwd=destination),
+            ],
+        )
+
+    def test_default_checkout_preserves_untracked_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "repository"
+            (destination / ".git").mkdir(parents=True)
+            with mock.patch.object(remote_bootstrap, "run") as run:
+                remote_bootstrap.clone_or_update(
+                    "https://example.test/repository.git",
+                    destination,
+                    "b" * 40,
+                )
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertNotIn(["git", "reset", "--hard", "FETCH_HEAD"], commands)
+        self.assertNotIn(["git", "clean", "-fdx"], commands)
+
     def test_patch_specs_pin_expected_upstream_revisions(self) -> None:
         root = Path(__file__).resolve().parents[1]
         trellis = json.loads(
@@ -144,7 +188,9 @@ class BootstrapRenderingTests(unittest.TestCase):
             ), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(
-                remote_bootstrap, "clone_or_update", side_effect=lambda *_args: calls.append("clone")
+                remote_bootstrap,
+                "clone_or_update",
+                side_effect=lambda *_args, **_kwargs: calls.append("clone"),
             ), mock.patch.object(
                 remote_bootstrap, "install_node_pack", side_effect=lambda: calls.append("install_node_pack")
             ), mock.patch.object(
