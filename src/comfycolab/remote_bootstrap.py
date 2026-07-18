@@ -98,14 +98,19 @@ PIXAL3D_NAF_REPO = "valeoai/NAF"
 PIXAL3D_NAF_CHECKPOINT_SHA256 = (
     "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
 )
+PIXAL3D_NVDIFFRAST_REF = "253ac4fcea7de5f396371124af597e6cc957bfae"
 PIXAL3D_UTILS3D_WHEEL = (
     "https://github.com/LDYang694/Storages/releases/download/"
     "20260430/utils3d-0.0.2-py3-none-any.whl"
 )
 PIXAL3D_WORKER_ENVIRONMENT = "pixal3d-worker"
-PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1"
+PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v2"
 PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
 PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
+PIXAL3D_NVDIFFRAST_PACKAGE = (
+    "git+https://github.com/NVlabs/nvdiffrast.git@"
+    f"{PIXAL3D_NVDIFFRAST_REF}"
+)
 PIXAL3D_NATTEN_PACKAGE = "natten==0.21.6+torch2110cu128"
 PIXAL3D_NATTEN_WHEEL_INDEX = "https://whl.natten.org"
 PIXAL3D_INFERENCE_REQUIREMENTS = (
@@ -920,6 +925,7 @@ def expected_pixal3d_sources() -> dict[str, str]:
         "nafCheckpoint": PIXAL3D_NAF_CHECKPOINT_SHA256,
         "utils3d": PIXAL3D_UTILS3D_WHEEL,
         "natten": PIXAL3D_NATTEN_PACKAGE,
+        "nvdiffrast": PIXAL3D_NVDIFFRAST_REF,
         "environment": PIXAL3D_ENVIRONMENT_REF,
         "comfyEnv": COMFY_ENV_VERSION,
     }
@@ -1101,6 +1107,7 @@ def validate_pixal3d_runtime(python: Path | None = None) -> None:
         "if importlib.util.find_spec(candidate) is not None))) if importlib.util.find_spec(name) is None "
         "else None) for name, candidates in aliases.items()]; "
         "import pixal3d, utils3d, moge, o_voxel, cumesh, flex_gemm, drtk, trimesh; "
+        "import nvdiffrast.torch; "
         "from pixal3d.pipelines import Pixal3DImageTo3DPipeline; "
         "natten = importlib.import_module('natten'); "
         "assert getattr(natten, 'HAS_LIBNATTEN', False); "
@@ -1262,6 +1269,16 @@ def install_pixal3d_source() -> str:
     python = pixal3d_python(workspace)
     run([str(python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     run([str(python), "-m", "pip", "install", *PIXAL3D_INFERENCE_REQUIREMENTS])
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            PIXAL3D_NVDIFFRAST_PACKAGE,
+        ]
+    )
     run([str(python), "-m", "pip", "install", PIXAL3D_UTILS3D_WHEEL])
     natten_env = os.environ.copy()
     natten_env.setdefault("NATTEN_CUDA_ARCH", "120")

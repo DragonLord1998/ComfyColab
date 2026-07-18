@@ -1070,6 +1070,33 @@ class ThreeDNodePackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no primitives"):
                 file3d.validate_glb(path)
 
+    def test_glb_validation_accepts_extension_backed_texture_sources(self):
+        load_package()
+        file3d = importlib.import_module("comfycolab_3d_test.file3d")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.glb"
+            for extension in ("EXT_texture_webp", "KHR_texture_basisu"):
+                write_glb(path, textured=True)
+                rewrite_glb_document(
+                    path,
+                    lambda document, extension=extension: document["textures"][0].update(
+                        {"extensions": {extension: {"source": 0}}}
+                    ),
+                )
+                rewrite_glb_document(
+                    path,
+                    lambda document: document["textures"][0].pop("source"),
+                )
+                document = file3d.validate_glb(
+                    path,
+                    require_texture=True,
+                    require_uv=True,
+                )
+                self.assertEqual(
+                    document["textures"][0]["extensions"][extension]["source"],
+                    0,
+                )
+
     def test_glb_validation_enforces_triangle_accessor_semantics(self):
         load_package()
         file3d = importlib.import_module("comfycolab_3d_test.file3d")

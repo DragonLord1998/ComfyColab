@@ -117,6 +117,9 @@ def expected_validation_sources(remote_bootstrap) -> dict[str, str]:
             "pixal3dNafCheckpoint": pinned["nafCheckpoint"],
             "pixal3dUtils3d": pinned["utils3d"],
             "pixal3dNatten": pinned["natten"],
+            "pixal3dNvdiffrast": (
+                f"NVlabs/nvdiffrast@{pinned['nvdiffrast']}"
+            ),
             "pixal3dEnvironment": pinned["environment"],
         })
     elif hasattr(remote_bootstrap, "PIXAL3D_REF"):

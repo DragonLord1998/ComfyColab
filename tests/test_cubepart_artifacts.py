@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -73,6 +74,58 @@ class CubePartArtifactProvisioningTests(unittest.TestCase):
                 )
 
         self.assertEqual(resolved.python, Path(sys.executable))
+
+    def test_environment_installs_required_runtime_versions_before_cube_part(self) -> None:
+        artifacts = load_artifacts()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "cube" / "cubepart"
+            source.mkdir(parents=True)
+            (source / "pyproject.toml").write_text("[project]\nname='cube_part'\n")
+            environment = root / "env"
+            base_python = root / "trellis-python"
+            base_python.touch()
+            calls: list[list[str]] = []
+
+            def fake_check_call(command):
+                calls.append(command)
+                if "-m" in command and "venv" in command:
+                    (environment / "bin").mkdir(parents=True)
+                    (environment / "bin" / "python").touch()
+
+            with mock.patch.object(
+                artifacts, "_git_revision", return_value=artifacts.CUBEPART_SOURCE_REF
+            ), mock.patch.object(
+                artifacts.subprocess, "check_call", side_effect=fake_check_call
+            ), mock.patch.dict(
+                os.environ,
+                {"COMFYCOLAB_CUBEPART_BASE_PYTHON": str(base_python)},
+            ):
+                python = artifacts._ensure_environment(source, environment)
+
+            self.assertEqual(python, environment / "bin" / "python")
+            self.assertEqual(
+                calls[2],
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    *artifacts.CUBEPART_RUNTIME_REQUIREMENTS,
+                ],
+            )
+            self.assertEqual(
+                calls[3],
+                [str(python), "-m", "pip", "install", "-e", str(source)],
+            )
+            marker = json.loads(
+                (environment / ".comfycolab-cubepart-env.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                marker["runtime_requirements"],
+                list(artifacts.CUBEPART_RUNTIME_REQUIREMENTS),
+            )
+            self.assertTrue(marker["environment_ref"].endswith("-v2"))
 
 
 if __name__ == "__main__":

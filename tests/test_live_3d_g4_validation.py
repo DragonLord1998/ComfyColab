@@ -49,7 +49,12 @@ def options(**overrides):
     return argparse.Namespace(**values)
 
 
-def minimal_glb(path: Path, *, textured: bool = True) -> None:
+def minimal_glb(
+    path: Path,
+    *,
+    textured: bool = True,
+    texture_extension: str | None = None,
+) -> None:
     document = {
         "asset": {"version": "2.0"},
         "buffers": [{"byteLength": 48}],
@@ -71,7 +76,11 @@ def minimal_glb(path: Path, *, textured: bool = True) -> None:
         primitive["attributes"]["TEXCOORD_0"] = 2
         primitive["material"] = 0
         document["materials"] = [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}]
-        document["textures"] = [{"source": 0}]
+        document["textures"] = (
+            [{"extensions": {texture_extension: {"source": 0}}}]
+            if texture_extension
+            else [{"source": 0}]
+        )
         document["images"] = [{"bufferView": 3, "mimeType": "image/png"}]
     json_chunk = json.dumps(document, separators=(",", ":")).encode()
     json_chunk += b" " * ((-len(json_chunk)) % 4)
@@ -577,6 +586,17 @@ class Live3DG4ValidationTests(unittest.TestCase):
             self.assertEqual(record["faces"], 1)
             self.assertEqual(record["vertices"], 3)
             self.assertTrue(record["embeddedTextureValidated"])
+            for extension in ("EXT_texture_webp", "KHR_texture_basisu"):
+                minimal_glb(
+                    textured,
+                    textured=True,
+                    texture_extension=extension,
+                )
+                extension_record = self.module.inspect_glb(
+                    textured,
+                    require_textured=True,
+                )
+                self.assertTrue(extension_record["embeddedTextureValidated"])
             with self.assertRaisesRegex(ValueError, "UV accessor"):
                 self.module.inspect_glb(neutral, require_textured=True)
 

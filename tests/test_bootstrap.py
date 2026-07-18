@@ -252,8 +252,20 @@ class BootstrapRenderingTests(unittest.TestCase):
         command = run.call_args.args[0]
         source = command[2]
         self.assertIn("import pixal3d", source)
+        self.assertIn("import nvdiffrast.torch", source)
         self.assertIn("torch.cuda.is_available()", source)
         self.assertIn("export_glb", source)
+
+    def test_pixal3d_nvdiffrast_source_is_pinned_and_manifested(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        environment = (
+            root / "worker" / "pixal3d" / "environment.toml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_REF, environment)
+        self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE, environment)
+        self.assertIn('"nvdiffrast.torch"', environment)
+        self.assertTrue(remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-v2"))
 
     def test_trellis_category_patch_changes_categories_only(self) -> None:
         root = Path(__file__).resolve().parents[1]

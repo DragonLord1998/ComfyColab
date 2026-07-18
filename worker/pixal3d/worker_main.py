@@ -90,6 +90,48 @@ def _load_official_inference(source_dir: Path) -> ModuleType:
     return module
 
 
+def _init_pipeline_without_rmbg(
+    official: ModuleType,
+    checkpoint_dir: Path,
+):
+    """Load Pixal3D without constructing its unused gated background model."""
+
+    pipeline_config = checkpoint_dir / "pipeline.json"
+    try:
+        payload = json.loads(pipeline_config.read_text(encoding="utf-8"))
+        rembg_config = payload["args"]["rembg_model"]
+        factory_name = str(rembg_config["name"])
+    except (KeyError, OSError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"Pinned Pixal3D pipeline config has no valid rembg_model: {pipeline_config}"
+        ) from error
+
+    pipeline_class = getattr(official, "Pixal3DImageTo3DPipeline", None)
+    pipeline_module_name = getattr(pipeline_class, "__module__", "")
+    if not pipeline_module_name:
+        raise RuntimeError("Pinned Pixal3D inference omitted its pipeline class")
+    pipeline_module = sys.modules.get(pipeline_module_name)
+    if pipeline_module is None:
+        pipeline_module = importlib.import_module(pipeline_module_name)
+    rembg_module = getattr(pipeline_module, "rembg", None)
+    original_factory = getattr(rembg_module, factory_name, None)
+    if not callable(original_factory):
+        raise RuntimeError(
+            f"Pinned Pixal3D rembg factory is unavailable: {factory_name}"
+        )
+
+    setattr(rembg_module, factory_name, lambda **_kwargs: None)
+    try:
+        pipeline = official.init_pipeline(
+            str(checkpoint_dir), device="cuda", low_vram=True
+        )
+    finally:
+        setattr(rembg_module, factory_name, original_factory)
+    if getattr(pipeline, "rembg_model", None) is not None:
+        raise RuntimeError("Pixal3D unexpectedly loaded a background-removal model")
+    return pipeline
+
+
 def _install_native_aliases() -> None:
     """Expose Comfy-env's ABI-pinned package names under upstream import names."""
 
@@ -115,6 +157,21 @@ def _install_native_aliases() -> None:
             raise ImportError(
                 f"Pixal3D native module {canonical} is missing (tried {', '.join(alternatives)})"
             )
+    o_voxel = importlib.import_module("o_voxel")
+    _install_ovoxel_postprocess(o_voxel)
+
+
+def _install_ovoxel_postprocess(o_voxel: ModuleType) -> None:
+    """Restore the pure-Python exporter omitted by the ABI-pinned native wheel."""
+
+    existing = getattr(o_voxel, "postprocess", None)
+    if callable(getattr(existing, "to_glb", None)):
+        return
+    postprocess = importlib.import_module("ovoxel_postprocess")
+    if not callable(getattr(postprocess, "to_glb", None)):
+        raise ImportError("Vendored O-Voxel postprocess module omitted to_glb")
+    o_voxel.postprocess = postprocess
+    sys.modules["o_voxel.postprocess"] = postprocess
 
 
 def _prepare_image_without_rmbg(image_path: Path):
@@ -266,8 +323,9 @@ class Pixal3DRuntime:
         original_load = self.torch.hub.load
         self.torch.hub.load = self._pinned_torch_hub_loader(original_load)
         try:
-            self.pipeline = self.official.init_pipeline(
-                str(self.args.checkpoint_dir), device="cuda", low_vram=True
+            self.pipeline = _init_pipeline_without_rmbg(
+                self.official,
+                self.args.checkpoint_dir,
             )
         finally:
             self.torch.hub.load = original_load

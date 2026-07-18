@@ -23,7 +23,8 @@ ID, completion time, and passed-gate list for auditability.
 | TripoSplat model | `VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974` |
 | Pixal3D source | `cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af` |
 | Pixal3D model | `0b31f9160aa400719af409098bff7936a932f726` |
-| Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1` |
+| Pixal3D nvdiffrast | `NVlabs/nvdiffrast@253ac4fcea7de5f396371124af597e6cc957bfae` |
+| Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v2` |
 | SkinTokens source/model | `273b691d35989d71cd17ff2895fdc735097b92d1` / `VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33` |
 | CubePart source/model | `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50` / `Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |

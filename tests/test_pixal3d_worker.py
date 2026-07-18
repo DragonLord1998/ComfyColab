@@ -5,6 +5,7 @@ import importlib.util
 import io as stdio
 import json
 import math
+import sys
 import tempfile
 import types
 import unittest
@@ -170,6 +171,88 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no visible foreground"):
                 worker_main._prepare_image_without_rmbg(path)
 
+    def test_pipeline_init_skips_and_restores_gated_rmbg_factory(self) -> None:
+        worker_main = load_worker_main()
+        module_name = "comfycolab_test_pixal3d_pipeline"
+        pipeline_module = types.ModuleType(module_name)
+        original_factory = mock.Mock(
+            side_effect=AssertionError("gated RMBG factory must not be called")
+        )
+        pipeline_module.rembg = types.SimpleNamespace(BiRefNet=original_factory)
+        pipeline_class = type("FakePixal3DPipeline", (), {})
+        pipeline_class.__module__ = module_name
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint_dir = Path(directory)
+            (checkpoint_dir / "pipeline.json").write_text(
+                json.dumps(
+                    {
+                        "args": {
+                            "rembg_model": {
+                                "name": "BiRefNet",
+                                "args": {"model_name": "briaai/RMBG-2.0"},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def init_pipeline(*_args, **_kwargs):
+                return types.SimpleNamespace(
+                    rembg_model=pipeline_module.rembg.BiRefNet(
+                        model_name="briaai/RMBG-2.0"
+                    )
+                )
+
+            official = types.SimpleNamespace(
+                Pixal3DImageTo3DPipeline=pipeline_class,
+                init_pipeline=mock.Mock(side_effect=init_pipeline),
+            )
+            sys.modules[module_name] = pipeline_module
+            try:
+                pipeline = worker_main._init_pipeline_without_rmbg(
+                    official, checkpoint_dir
+                )
+            finally:
+                sys.modules.pop(module_name, None)
+
+        self.assertIsNone(pipeline.rembg_model)
+        self.assertIs(pipeline_module.rembg.BiRefNet, original_factory)
+        original_factory.assert_not_called()
+        official.init_pipeline.assert_called_once_with(
+            str(checkpoint_dir), device="cuda", low_vram=True
+        )
+
+    def test_native_ovoxel_alias_restores_vendored_postprocess_exporter(self) -> None:
+        worker_main = load_worker_main()
+        o_voxel = types.ModuleType("o_voxel")
+        postprocess = types.ModuleType("ovoxel_postprocess")
+        postprocess.to_glb = mock.Mock()
+
+        with mock.patch.object(
+            worker_main.importlib,
+            "import_module",
+            return_value=postprocess,
+        ) as import_module:
+            worker_main._install_ovoxel_postprocess(o_voxel)
+
+        self.assertIs(o_voxel.postprocess, postprocess)
+        self.assertIs(sys.modules["o_voxel.postprocess"], postprocess)
+        import_module.assert_called_once_with("ovoxel_postprocess")
+        sys.modules.pop("o_voxel.postprocess", None)
+
+    def test_native_ovoxel_alias_preserves_complete_package(self) -> None:
+        worker_main = load_worker_main()
+        postprocess = types.SimpleNamespace(to_glb=mock.Mock())
+        o_voxel = types.SimpleNamespace(postprocess=postprocess)
+
+        with mock.patch.object(worker_main.importlib, "import_module") as import_module:
+            worker_main._install_ovoxel_postprocess(o_voxel)
+
+        self.assertIs(o_voxel.postprocess, postprocess)
+        import_module.assert_not_called()
+
     def test_worker_accepts_moge_model_pt_and_loads_the_checkpoint_file(self) -> None:
         worker_main = load_worker_main()
         with tempfile.TemporaryDirectory() as directory:
@@ -182,7 +265,19 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             dinov3_dir.mkdir()
             moge_dir.mkdir()
             naf_source_dir.mkdir()
-            (checkpoint_dir / "pipeline.json").write_text("{}", encoding="utf-8")
+            (checkpoint_dir / "pipeline.json").write_text(
+                json.dumps(
+                    {
+                        "args": {
+                            "rembg_model": {
+                                "name": "BiRefNet",
+                                "args": {"model_name": "briaai/RMBG-2.0"},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             (dinov3_dir / "config.json").write_text("{}", encoding="utf-8")
             (moge_dir / "model.pt").write_bytes(b"checkpoint-with-embedded-config")
             naf_checkpoint = root / "naf_release.pth"
@@ -197,9 +292,19 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
                 naf_checkpoint=naf_checkpoint,
             )
             moge_model = types.SimpleNamespace(cpu=mock.Mock())
+            module_name = "comfycolab_test_pixal3d_runtime_pipeline"
+            pipeline_module = types.ModuleType(module_name)
+            pipeline_module.rembg = types.SimpleNamespace(
+                BiRefNet=mock.Mock(return_value=object())
+            )
+            pipeline_class = type("FakePixal3DRuntimePipeline", (), {})
+            pipeline_class.__module__ = module_name
             official = types.SimpleNamespace(
+                Pixal3DImageTo3DPipeline=pipeline_class,
                 IMAGE_COND_CONFIGS={"shape": {}},
-                init_pipeline=mock.Mock(return_value=object()),
+                init_pipeline=mock.Mock(
+                    return_value=types.SimpleNamespace(rembg_model=None)
+                ),
                 load_moge_model=mock.Mock(return_value=moge_model),
                 get_camera_params_wild_moge=mock.Mock(
                     return_value={
@@ -219,14 +324,18 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             )
             runtime = worker_main.Pixal3DRuntime(args)
 
-            with mock.patch.object(
-                worker_main, "_install_native_aliases"
-            ), mock.patch.object(
-                worker_main, "_load_official_inference", return_value=official
-            ), mock.patch.object(
-                worker_main.importlib, "import_module", return_value=torch_module
-            ):
-                runtime.ensure_pipeline("test-request")
+            sys.modules[module_name] = pipeline_module
+            try:
+                with mock.patch.object(
+                    worker_main, "_install_native_aliases"
+                ), mock.patch.object(
+                    worker_main, "_load_official_inference", return_value=official
+                ), mock.patch.object(
+                    worker_main.importlib, "import_module", return_value=torch_module
+                ):
+                    runtime.ensure_pipeline("test-request")
+            finally:
+                sys.modules.pop(module_name, None)
 
             camera = runtime._camera_params(
                 {"camera_fov_radians": None}, root / "prepared.png"

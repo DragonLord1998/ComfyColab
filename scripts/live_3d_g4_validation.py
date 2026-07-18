@@ -1211,6 +1211,17 @@ def require_noncollapsed_geometry(metrics: dict[str, Any], *, stage: str) -> Non
     )
 
 
+def _texture_image_index(texture: dict[str, Any]) -> int | None:
+    extensions = texture.get("extensions")
+    if isinstance(extensions, dict):
+        for name in ("EXT_texture_webp", "KHR_texture_basisu"):
+            extension = extensions.get(name)
+            if isinstance(extension, dict) and isinstance(extension.get("source"), int):
+                return int(extension["source"])
+    source = texture.get("source")
+    return int(source) if isinstance(source, int) else None
+
+
 def inspect_glb(
     path: Path,
     *,
@@ -1289,7 +1300,7 @@ def inspect_glb(
                 texture_index = texture.get("index") if isinstance(texture, dict) else None
                 if not isinstance(texture_index, int) or not 0 <= texture_index < len(textures):
                     raise ValueError("Textured GLB has no base-color texture")
-                image_index = textures[texture_index].get("source")
+                image_index = _texture_image_index(textures[texture_index])
                 if not isinstance(image_index, int) or not 0 <= image_index < len(images):
                     raise ValueError("Textured GLB texture has no image")
                 image = images[image_index]
