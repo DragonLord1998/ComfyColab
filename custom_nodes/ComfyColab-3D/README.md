@@ -1,12 +1,13 @@
 # ComfyColab 3D facade nodes
 
-This pack exposes seven normal-search ComfyUI V3 nodes:
+This pack exposes eight normal-search ComfyUI V3 nodes:
 
 - **ComfyColab TRELLIS.2 — Image to 3D**
 - **ComfyColab TRELLIS2MV — Multi-View to 3D**
 - **ComfyColab UltraShape — Refine Geometry**
 - **ComfyColab Pixal3D — Image to 3D**
 - **ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D**
+- **ComfyColab Pixal3DMV — Advanced Weighted Multi-View to 3D**
 - **ComfyColab SkinTokens — Auto Rig 3D**
 - **ComfyColab CubePart — Segment 3D Parts**
 
@@ -20,6 +21,10 @@ Pixal3DMV is an explicitly experimental ReconViaGen-inspired projection-feature
 adapter, not official Pixal3D multiview support. SkinTokens and CubePart run in
 isolated workers. All graph/worker adapters are development-only, so the
 complete upstream TRELLIS suite remains available without cluttering search.
+
+Pixal3DMV Advanced keeps the same public multiview contract but adds per-view
+quality weights for uneven reference sets, such as Flux-generated views that do
+not all have the same visual confidence.
 
 All public outputs are native string-path-backed `FILE_3D_GLB` values that
 connect directly to ComfyUI's Preview 3D and Save GLB nodes. Result cache data

@@ -886,6 +886,174 @@ class ComfyColabPixal3DMV:
         )
 
 
+class ComfyColabPixal3DMVAdvanced:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id="ComfyColabPixal3DMVAdvanced",
+            display_name="ComfyColab Pixal3DMV — Advanced Weighted Multi-View to 3D",
+            category="ComfyColab/3D",
+            description=(
+                "Advanced experimental multiview adapter for Pixal3D. It keeps the "
+                "existing labeled-view fusion path but lets you weight each view "
+                "explicitly, which is useful for Flux-generated or otherwise uneven "
+                "reference sets."
+            ),
+            enable_expand=True,
+            inputs=[
+                io.Image.Input("front_image", tooltip="Object viewed from the front."),
+                io.Image.Input("back_image", tooltip="Object viewed from directly behind."),
+                io.Image.Input("left_image", tooltip="Object viewed from its left side."),
+                io.Image.Input("right_image", tooltip="Object viewed from its right side."),
+                io.Image.Input("top_image", optional=True, tooltip="Optional top-down view; connect bottom_image too."),
+                io.Image.Input("bottom_image", optional=True, tooltip="Optional bottom-up view; connect top_image too."),
+                io.Combo.Input("quality", options=list(PIXAL3D_PRESETS), default="1024 — Stable"),
+                io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
+                io.Float.Input("front_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("back_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("left_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("right_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("top_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
+                io.Float.Input("bottom_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
+                io.Combo.Input(
+                    "fusion_strategy",
+                    options=["Directional projection", "Average projection"],
+                    default="Directional projection",
+                    advanced=True,
+                ),
+                io.Float.Input("fusion_temperature", default=2.0, min=0.1, max=10.0, step=0.1, advanced=True),
+                io.Combo.Input("remove_background", options=["Auto", "On", "Off"], default="Auto", advanced=True),
+                io.Float.Input("camera_fov_degrees", default=0.0, min=0.0, max=178.0, step=0.1, advanced=True),
+                io.Int.Input("sampling_steps", default=0, min=0, max=100, advanced=True),
+                io.Int.Input("target_face_count", default=0, min=0, max=2_000_000, advanced=True),
+                io.Int.Input("texture_size", default=0, min=0, max=8192, advanced=True),
+                io.Int.Input("max_tokens", default=49_152, min=16_384, max=262_144, advanced=True),
+                io.Boolean.Input("keep_worker_loaded", default=True, advanced=True),
+                io.Combo.Input("cache_mode", options=list(CACHE_MODES), default="Use cache", advanced=True),
+            ],
+            outputs=[io.File3DGLB.Output("model_3d")],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        front_image,
+        back_image,
+        left_image,
+        right_image,
+        top_image=None,
+        bottom_image=None,
+        quality="1024 — Stable",
+        seed=0,
+        front_quality=1.0,
+        back_quality=1.0,
+        left_quality=1.0,
+        right_quality=1.0,
+        top_quality=1.0,
+        bottom_quality=1.0,
+        fusion_strategy="Directional projection",
+        fusion_temperature=2.0,
+        remove_background="Auto",
+        camera_fov_degrees=0.0,
+        sampling_steps=0,
+        target_face_count=0,
+        texture_size=0,
+        max_tokens=49_152,
+        keep_worker_loaded=True,
+        cache_mode="Use cache",
+    ):
+        if (top_image is None) != (bottom_image is None):
+            raise ValueError("Pixal3DMV requires both top_image and bottom_image for six-view mode")
+        seed = int(seed)
+        fov = float(camera_fov_degrees)
+        if seed < 0 or seed > (2**31) - 1:
+            raise ValueError("Pixal3DMV seed must be between 0 and 2147483647")
+        if not 0.0 <= fov < 179.0:
+            raise ValueError("camera_fov_degrees must be 0 or between 0 and 179")
+        strategy_map = {
+            "Directional projection": "directional_softmax",
+            "Average projection": "average",
+        }
+        if fusion_strategy not in strategy_map:
+            raise ValueError(f"Unknown Pixal3DMV fusion strategy: {fusion_strategy}")
+        if not 0.1 <= float(fusion_temperature) <= 10.0:
+            raise ValueError("fusion_temperature must be between 0.1 and 10.0")
+        settings = resolve_pixal3d_settings(
+            quality,
+            sampling_steps=int(sampling_steps),
+            target_face_count=int(target_face_count),
+            texture_size=int(texture_size),
+            max_tokens=int(max_tokens),
+        )
+        repo_root = Path(__file__).resolve().parents[2]
+        artifacts = _load_pixal3d_artifact_provisioner(repo_root)
+        views = {
+            "front": front_image,
+            "back": back_image,
+            "left": left_image,
+            "right": right_image,
+        }
+        if top_image is not None:
+            views.update(top=top_image, bottom=bottom_image)
+        resolved_strategy = strategy_map[fusion_strategy]
+        quality_map = {
+            "front": float(front_quality),
+            "back": float(back_quality),
+            "left": float(left_quality),
+            "right": float(right_quality),
+        }
+        if top_image is not None:
+            quality_map.update(top=float(top_quality), bottom=float(bottom_quality))
+        key = pixal3d_multiview_cache_key(
+            views,
+            settings=settings,
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            fusion_strategy=resolved_strategy,
+            fusion_temperature=float(fusion_temperature),
+            view_quality=quality_map,
+            source_ref=artifacts.PIXAL3D_SOURCE_REF,
+            model_ref=artifacts.PIXAL3D_MODEL_REF,
+            dinov3_ref=artifacts.DINOV3_MODEL_REF,
+            moge_ref=artifacts.MOGE_MODEL_REF,
+            naf_ref=artifacts.NAF_SOURCE_REF,
+            environment_ref=artifacts.PIXAL3D_ENVIRONMENT_REF,
+        )
+        destination = cache_path(_cache_root(), "pixal3d", key)
+        progress_node_id = _hidden_value(cls, "unique_id")
+        if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
+            _send_progress_text(progress_node_id, "Complete - Loaded cached advanced Pixal3DMV model")
+            return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
+        if remove_background != "Off":
+            _require_upstream_nodes({"Trellis2RemoveBackground"})
+        _send_progress_text(
+            progress_node_id,
+            f"Stage 1/3 - Preparing {len(views)} weighted views for advanced Pixal3D fusion...",
+        )
+        return build_pixal3d_multiview_graph(
+            front_image,
+            settings,
+            back_image=back_image,
+            left_image=left_image,
+            right_image=right_image,
+            top_image=top_image,
+            bottom_image=bottom_image,
+            view_quality=quality_map,
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            fusion_strategy=resolved_strategy,
+            fusion_temperature=float(fusion_temperature),
+            keep_worker_loaded=bool(keep_worker_loaded),
+            cache_mode=cache_mode,
+            cache_key=key,
+            progress_node_id=progress_node_id,
+        )
+
+
 class ComfyColabSkinTokensAutoRig:
     @classmethod
     def define_schema(cls):
@@ -1714,12 +1882,16 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
             [
                 io.Image.Input("front_image"),
                 io.Mask.Input("front_mask"),
+                io.Float.Input("front_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("back_image"),
                 io.Mask.Input("back_mask"),
+                io.Float.Input("back_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("left_image"),
                 io.Mask.Input("left_mask"),
+                io.Float.Input("left_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("right_image"),
                 io.Mask.Input("right_mask"),
+                io.Float.Input("right_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.String.Input("pipeline_type"),
                 io.Int.Input("seed"),
                 io.Int.Input("sampling_steps"),
@@ -1734,8 +1906,10 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 io.String.Input("cache_key"),
                 io.Image.Input("top_image", optional=True),
                 io.Mask.Input("top_mask", optional=True),
+                io.Float.Input("top_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
                 io.Image.Input("bottom_image", optional=True),
                 io.Mask.Input("bottom_mask", optional=True),
+                io.Float.Input("bottom_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
             ],
             [io.String.Output("glb_path")],
         )
@@ -1745,12 +1919,16 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         cls,
         front_image,
         front_mask,
+        front_quality,
         back_image,
         back_mask,
+        back_quality,
         left_image,
         left_mask,
+        left_quality,
         right_image,
         right_mask,
+        right_quality,
         pipeline_type,
         seed,
         sampling_steps,
@@ -1765,8 +1943,10 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         cache_key="",
         top_image=None,
         top_mask=None,
+        top_quality=1.0,
         bottom_image=None,
         bottom_mask=None,
+        bottom_quality=1.0,
     ):
         del cache_mode, cache_key
         if any(value is None for value in (top_image, top_mask, bottom_image, bottom_mask)) and any(
@@ -1781,21 +1961,26 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         output = output_directory / "model.glb"
         metadata = output_directory / "model.json"
         view_values = [
-            ("front", front_image, front_mask),
-            ("back", back_image, back_mask),
-            ("left", left_image, left_mask),
-            ("right", right_image, right_mask),
+            ("front", front_image, front_mask, float(front_quality)),
+            ("back", back_image, back_mask, float(back_quality)),
+            ("left", left_image, left_mask, float(left_quality)),
+            ("right", right_image, right_mask, float(right_quality)),
         ]
         if top_image is not None:
             view_values.extend(
-                (("top", top_image, top_mask), ("bottom", bottom_image, bottom_mask))
+                (
+                    ("top", top_image, top_mask, float(top_quality)),
+                    ("bottom", bottom_image, bottom_mask, float(bottom_quality)),
+                )
             )
         try:
             serialized_views = []
-            for name, image, mask in view_values:
+            for name, image, mask, quality in view_values:
                 image_path = input_directory / f"{name}.png"
                 _save_reference_image(image, mask, image_path)
-                serialized_views.append({"name": name, "image_path": str(image_path)})
+                serialized_views.append(
+                    {"name": name, "image_path": str(image_path), "quality": quality}
+                )
 
             artifact_module = _load_pixal3d_artifact_provisioner(repo_root)
             progress, cancelled = _worker_callbacks()
@@ -2058,6 +2243,7 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColabUltraShapeRefine": ComfyColabUltraShapeRefine,
     "ComfyColabPixal3DImageTo3D": ComfyColabPixal3DImageTo3D,
     "ComfyColabPixal3DMV": ComfyColabPixal3DMV,
+    "ComfyColabPixal3DMVAdvanced": ComfyColabPixal3DMVAdvanced,
     "ComfyColabSkinTokensAutoRig": ComfyColabSkinTokensAutoRig,
     "ComfyColabCubePartSegment": ComfyColabCubePartSegment,
     "ComfyColab3DProgressCheckpoint": ComfyColab3DProgressCheckpoint,
@@ -2082,6 +2268,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabUltraShapeRefine": "ComfyColab UltraShape — Refine Geometry",
     "ComfyColabPixal3DImageTo3D": "ComfyColab Pixal3D — Image to 3D",
     "ComfyColabPixal3DMV": "ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D",
+    "ComfyColabPixal3DMVAdvanced": "ComfyColab Pixal3DMV — Advanced Weighted Multi-View to 3D",
     "ComfyColabSkinTokensAutoRig": "ComfyColab SkinTokens — Auto Rig 3D",
     "ComfyColabCubePartSegment": "ComfyColab CubePart — Segment 3D Parts",
 }

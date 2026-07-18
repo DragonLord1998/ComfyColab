@@ -99,9 +99,9 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
                 **{
                     **command.__dict__,
                     "views": (
-                        {"name": "front", "image_path": str(root / "front.png")},
-                        {"name": "back", "image_path": str(root / "back.png")},
-                        {"name": "left", "image_path": str(root / "left.png")},
+                        {"name": "front", "image_path": str(root / "front.png"), "quality": 1.5},
+                        {"name": "back", "image_path": str(root / "back.png"), "quality": 0.75},
+                        {"name": "left", "image_path": str(root / "left.png"), "quality": 0.25},
                     ),
                     "fusion_temperature": 3.5,
                     "fusion_strategy": "directional_softmax",
@@ -112,6 +112,8 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
 
         self.assertEqual([view["name"] for view in request["views"]], ["front", "back", "left"])
         self.assertEqual(request["views"][0]["image_path"], str(root / "front.png"))
+        self.assertEqual(request["views"][0]["quality"], 1.5)
+        self.assertEqual(request["views"][2]["quality"], 0.25)
         self.assertEqual(request["fusion_temperature"], 3.5)
         self.assertEqual(request["fusion_strategy"], "directional_softmax")
         self.assertEqual(request["image_path"], str(root / "input.png"))
@@ -143,6 +145,23 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             self.worker.build_pixal3d_request(missing_front)
         with self.assertRaisesRegex(ValueError, "ordered front"):
             self.worker.build_pixal3d_request(duplicate)
+
+    def test_multiview_request_rejects_invalid_quality_and_defaults_missing_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root)
+            invalid = self.worker.Pixal3DWorkerCommand(
+                **{
+                    **command.__dict__,
+                    "views": (
+                        {"name": "front", "image_path": str(root / "front.png"), "quality": 12.0},
+                        {"name": "back", "image_path": str(root / "back.png")},
+                    ),
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "[0, 10]"):
+            self.worker.build_pixal3d_request(invalid)
 
     @unittest.skipUnless(module_available("PIL"), "Pillow is not installed")
     def test_external_preprocess_crops_rgba_without_loading_rmbg(self) -> None:

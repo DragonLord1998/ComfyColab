@@ -419,6 +419,15 @@ blend. Both modes average global image features and preserve the official
 single-view tensor contracts downstream. This zero-shot adapter has local
 contract tests only and remains pending a real G4 quality/VRAM validation.
 
+### Pixal3DMV — Advanced Weighted Multi-View to 3D
+
+The advanced Pixal3DMV facade keeps the same six-view labeled contract but adds
+per-view quality weights so stronger views can dominate the fusion pass. Use it
+when the source set is uneven, such as a Flux-generated multiview batch where
+some angles are noticeably cleaner than others. The node is still an
+experimental adapter, not official Pixal3D multiview support, and it shares the
+same live G4 validation requirement as the base multiview node.
+
 ### SkinTokens — Auto Rig 3D
 
 Connect a GLB and run **ComfyColab SkinTokens — Auto Rig 3D** to generate a

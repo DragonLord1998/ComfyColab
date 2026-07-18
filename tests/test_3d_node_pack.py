@@ -273,6 +273,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 "ComfyColabUltraShapeRefine",
                 "ComfyColabPixal3DImageTo3D",
                 "ComfyColabPixal3DMV",
+                "ComfyColabPixal3DMVAdvanced",
                 "ComfyColabSkinTokensAutoRig",
                 "ComfyColabCubePartSegment",
             ],
@@ -283,6 +284,7 @@ class ThreeDNodePackTests(unittest.TestCase):
         pixal = schemas_by_id["ComfyColabPixal3DImageTo3D"]
         trellis_mv = schemas_by_id["ComfyColabTrellis2MV"]
         pixal_mv = schemas_by_id["ComfyColabPixal3DMV"]
+        pixal_mv_advanced = schemas_by_id["ComfyColabPixal3DMVAdvanced"]
         skintokens = schemas_by_id["ComfyColabSkinTokensAutoRig"]
         cubepart = schemas_by_id["ComfyColabCubePartSegment"]
         self.assertEqual(trellis.display_name, "ComfyColab TRELLIS.2 — Image to 3D")
@@ -291,6 +293,7 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(pixal.display_name, "ComfyColab Pixal3D — Image to 3D")
         self.assertEqual(trellis_mv.display_name, "ComfyColab TRELLIS2MV — Multi-View to 3D")
         self.assertIn("not official Pixal3D multiview support", pixal_mv.description)
+        self.assertIn("weighted multi-view", pixal_mv_advanced.display_name.lower())
         self.assertEqual(skintokens.outputs[0]["name"], "rigged_model_3d")
         self.assertEqual(cubepart.outputs[0]["name"], "segmented_model_3d")
         self.assertIn("not unlabeled", cubepart.description)
@@ -324,6 +327,39 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(pixal_inputs["cache_mode"]["default"], "Use cache")
         self.assertNotIn("mode", pixal_inputs)
         self.assertNotIn("num_views", pixal_inputs)
+        pixal_mv_advanced_inputs = {item["name"]: item for item in pixal_mv_advanced.inputs}
+        self.assertEqual(
+            list(pixal_mv_advanced_inputs),
+            [
+                "front_image",
+                "back_image",
+                "left_image",
+                "right_image",
+                "top_image",
+                "bottom_image",
+                "quality",
+                "seed",
+                "front_quality",
+                "back_quality",
+                "left_quality",
+                "right_quality",
+                "top_quality",
+                "bottom_quality",
+                "fusion_strategy",
+                "fusion_temperature",
+                "remove_background",
+                "camera_fov_degrees",
+                "sampling_steps",
+                "target_face_count",
+                "texture_size",
+                "max_tokens",
+                "keep_worker_loaded",
+                "cache_mode",
+            ],
+        )
+        self.assertEqual(pixal_mv_advanced_inputs["front_quality"]["default"], 1.0)
+        self.assertTrue(pixal_mv_advanced_inputs["top_quality"]["optional"])
+        self.assertTrue(pixal_mv_advanced_inputs["bottom_quality"]["optional"])
         encoded_schema = next(schema for schema in schemas if schema.node_id == "ComfyColab3DEncodedMeshToTrimesh")
         self.assertEqual(encoded_schema.inputs[0]["io_type"], "TRELLIS2_SHAPE_LATENT")
 
@@ -427,6 +463,40 @@ class ThreeDNodePackTests(unittest.TestCase):
             [name for name in pixal_worker["inputs"] if name.endswith("_image")],
             ["front_image", "back_image", "left_image", "right_image"],
         )
+        self.assertEqual(pixal_worker["inputs"]["front_quality"], 1.0)
+        self.assertNotIn("top_quality", pixal_worker["inputs"])
+
+        advanced_result = graph.build_pixal3d_multiview_graph(
+            "front",
+            presets.resolve_pixal3d_settings("1024 — Stable"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            top_image="top",
+            bottom_image="bottom",
+            view_quality={
+                "front": 1.5,
+                "back": 1.25,
+                "left": 0.75,
+                "right": 1.0,
+                "top": 0.5,
+                "bottom": 0.25,
+            },
+            seed=3,
+            remove_background="Off",
+            camera_fov_degrees=0.0,
+            fusion_strategy="average",
+            fusion_temperature=2.0,
+            keep_worker_loaded=True,
+            cache_mode="Disable cache",
+            cache_key="c" * 64,
+        )
+        advanced_worker = next(
+            item for item in advanced_result.expand
+            if item["class_type"] == "ComfyColab3DPixal3DMultiViewWorker"
+        )
+        self.assertEqual(advanced_worker["inputs"]["top_quality"], 0.5)
+        self.assertEqual(advanced_worker["inputs"]["bottom_quality"], 0.25)
 
     def test_cubepart_public_node_blocks_before_provisioning_without_license_acceptance(self):
         load_package()

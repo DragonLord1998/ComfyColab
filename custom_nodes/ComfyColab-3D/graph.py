@@ -618,6 +618,7 @@ def build_pixal3d_multiview_graph(
     right_image: Any = None,
     top_image: Any = None,
     bottom_image: Any = None,
+    view_quality: dict[str, float] | None = None,
     seed: int,
     remove_background: str,
     camera_fov_degrees: float,
@@ -664,6 +665,7 @@ def build_pixal3d_multiview_graph(
     for name, (image, mask) in prepared.items():
         worker_inputs[f"{name}_image"] = image
         worker_inputs[f"{name}_mask"] = mask
+        worker_inputs[f"{name}_quality"] = float((view_quality or {}).get(name, 1.0))
     worker = graph.node("ComfyColab3DPixal3DMultiViewWorker", **worker_inputs)
     glb_path = _progress_checkpoint(
         graph,

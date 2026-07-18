@@ -17,6 +17,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
             WORKFLOWS / "comfycolab_pixal3d_image_to_3d.json",
             WORKFLOWS / "comfycolab_trellis2mv_to_3d.json",
             WORKFLOWS / "comfycolab_pixal3dmv_to_3d.json",
+            WORKFLOWS / "comfycolab_pixal3dmv_advanced_to_3d.json",
             WORKFLOWS / "comfycolab_skintokens_auto_rig.json",
             WORKFLOWS / "comfycolab_cubepart_segment.json",
         ]
@@ -76,6 +77,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
         expected = {
             "comfycolab_trellis2mv_to_3d.json": "ComfyColabTrellis2MV",
             "comfycolab_pixal3dmv_to_3d.json": "ComfyColabPixal3DMV",
+            "comfycolab_pixal3dmv_advanced_to_3d.json": "ComfyColabPixal3DMVAdvanced",
             "comfycolab_skintokens_auto_rig.json": "ComfyColabSkinTokensAutoRig",
             "comfycolab_cubepart_segment.json": "ComfyColabCubePartSegment",
         }

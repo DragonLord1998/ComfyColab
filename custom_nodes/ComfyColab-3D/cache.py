@@ -232,6 +232,7 @@ def pixal3d_multiview_cache_key(
     camera_fov_degrees: float,
     fusion_strategy: str,
     fusion_temperature: float,
+    view_quality: dict[str, float] | None = None,
     source_ref: str,
     model_ref: str,
     dinov3_ref: str,
@@ -247,6 +248,7 @@ def pixal3d_multiview_cache_key(
     return deterministic_cache_key(
         "pixal3d-multiview",
         views=views,
+        view_quality={name: float(view_quality.get(name, 1.0)) for name in sorted(view_quality)} if view_quality else {},
         background_policy=remove_background,
         camera_policy=camera_policy,
         fusion_strategy=fusion_strategy,

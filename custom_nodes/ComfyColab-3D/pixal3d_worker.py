@@ -54,7 +54,7 @@ class Pixal3DWorkerCommand:
     naf_checkpoint_ref: str = ""
     environment_ref: str = ""
     keep_worker_loaded: bool = True
-    views: tuple[dict[str, str], ...] | None = None
+    views: tuple[dict[str, str | float], ...] | None = None
     fusion_temperature: float = 2.0
     fusion_strategy: str = "directional_softmax"
 
@@ -151,11 +151,13 @@ def _validate_fusion_temperature(value: float) -> float:
     return temperature
 
 
-def _validate_pixal3d_views(views: tuple[dict[str, str], ...] | list[dict[str, str]]) -> list[dict[str, str]]:
+def _validate_pixal3d_views(
+    views: tuple[dict[str, str | float], ...] | list[dict[str, str | float]]
+) -> list[dict[str, str | float]]:
     if not 2 <= len(views) <= len(PIXAL3D_VIEW_ORDER):
         raise ValueError("Pixal3D multiview requires 2 to 6 ordered views")
     expected = PIXAL3D_VIEW_ORDER[: len(views)]
-    serialized: list[dict[str, str]] = []
+    serialized: list[dict[str, str | float]] = []
     seen: set[str] = set()
     for index, view in enumerate(views):
         name = str(view.get("name", ""))
@@ -168,8 +170,11 @@ def _validate_pixal3d_views(views: tuple[dict[str, str], ...] | list[dict[str, s
         image_path = str(view.get("image_path", ""))
         if not image_path:
             raise ValueError(f"Pixal3D multiview view {name} omitted image_path")
+        quality = float(view.get("quality", 1.0))
+        if not math.isfinite(quality) or quality < 0.0 or quality > 10.0:
+            raise ValueError("Pixal3D multiview view quality must be in [0, 10]")
         seen.add(name)
-        serialized.append({"name": name, "image_path": image_path})
+        serialized.append({"name": name, "image_path": image_path, "quality": quality})
     if serialized[0]["name"] != "front":
         raise ValueError("Pixal3D multiview requires front as the first view")
     return serialized

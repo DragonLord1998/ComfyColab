@@ -484,6 +484,10 @@ class Pixal3DRuntime:
                         view_images,
                         camera_params,
                         labels=[str(view["name"]) for view in views],
+                        view_qualities={
+                            str(view["name"]): float(view.get("quality", 1.0))
+                            for view in views
+                        },
                         seed=int(request["seed"]),
                         sparse_structure_sampler_params=sampler_ss,
                         shape_slat_sampler_params=sampler_shape,
@@ -595,6 +599,7 @@ class Pixal3DRuntime:
                         {
                             "name": str(view["name"]),
                             "image_path": str(Path(str(view["image_path"])).resolve()),
+                            "quality": float(view.get("quality", 1.0)),
                         }
                         for view in views
                     ],
