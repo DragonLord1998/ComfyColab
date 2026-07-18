@@ -1,0 +1,912 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://comfycolab.dev/schemas/pack-manifest-v1.schema.json",
+  "title": "ComfyColab Pack Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "display_name",
+    "compatibility",
+    "node_roots",
+    "dependencies",
+    "patches",
+    "environments",
+    "hooks",
+    "workflows",
+    "probes",
+    "health_checks",
+    "licenses"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    },
+    "node_roots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nodeRoot"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/gitDependency"
+          },
+          {
+            "$ref": "#/$defs/huggingFaceDependency"
+          },
+          {
+            "$ref": "#/$defs/artifactDependency"
+          }
+        ]
+      }
+    },
+    "patches": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/patch"
+      }
+    },
+    "environments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/environment"
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configure": {
+          "$ref": "#/$defs/hook"
+        },
+        "doctor": {
+          "$ref": "#/$defs/hook"
+        },
+        "runtime_env": {
+          "$ref": "#/$defs/hook"
+        }
+      }
+    },
+    "runtime_env": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "workflows": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/relativePath"
+      }
+    },
+    "probes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/probe"
+      }
+    },
+    "health_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_ids"
+      ],
+      "properties": {
+        "node_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        }
+      }
+    },
+    "licenses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/license"
+      }
+    },
+    "cache_profiles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/relativePath"
+      }
+    },
+    "accelerators": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/logicalName"
+      }
+    },
+    "validation_commands": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonemptyCommand"
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "fields"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^packs\\."
+        },
+        "fields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/logicalName"
+          }
+        }
+      }
+    },
+    "license_gate": {
+      "$ref": "#/$defs/logicalName"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "logicalName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://[^/@?#]+(?:\\.[^/@?#]+)+/[^?#]+$"
+    },
+    "gitUrl": {
+      "type": "string",
+      "pattern": "^https://[^/@?#]+(?:\\.[^/@?#]+)+/[^?#]+\\.git$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$)).+$"
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nonemptyCommand": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/command"
+        },
+        {
+          "minItems": 1
+        }
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_manifest_api",
+        "comfyui"
+      ],
+      "properties": {
+        "core_manifest_api": {
+          "const": 1
+        },
+        "comfyui": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "compatible_refs",
+            "tested_refs"
+          ],
+          "properties": {
+            "compatible_refs": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/commit"
+              }
+            },
+            "tested_refs": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/commit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "nodeRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "target"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[^/\\\\]+$"
+        }
+      }
+    },
+    "installPhase": {
+      "enum": [
+        "bootstrap",
+        "lazy"
+      ]
+    },
+    "gitDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "repository",
+        "ref",
+        "destination",
+        "scope"
+      ],
+      "properties": {
+        "kind": {
+          "const": "git"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "repository": {
+          "$ref": "#/$defs/gitUrl"
+        },
+        "ref": {
+          "$ref": "#/$defs/commit"
+        },
+        "destination": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "scope": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "install_phase": {
+          "$ref": "#/$defs/installPhase"
+        },
+        "requirements_file": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "requirements_source": {
+          "enum": [
+            "dependency",
+            "pack"
+          ]
+        },
+        "requirements_format": {
+          "enum": [
+            "requirements.txt",
+            "pyproject.toml",
+            "comfycolab-environment-toml"
+          ]
+        },
+        "license_gate": {
+          "$ref": "#/$defs/logicalName"
+        }
+      },
+      "dependentRequired": {
+        "requirements_source": [
+          "requirements_file"
+        ],
+        "requirements_format": [
+          "requirements_file"
+        ]
+      }
+    },
+    "huggingFaceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "huggingFaceDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "repository",
+        "ref",
+        "destination",
+        "scope"
+      ],
+      "properties": {
+        "kind": {
+          "const": "huggingface"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "ref": {
+          "$ref": "#/$defs/commit"
+        },
+        "destination": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "scope": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "install_phase": {
+          "$ref": "#/$defs/installPhase"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huggingFaceArtifact"
+          }
+        },
+        "license_gate": {
+          "$ref": "#/$defs/logicalName"
+        }
+      }
+    },
+    "artifactDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "url",
+        "sha256",
+        "destination",
+        "scope"
+      ],
+      "properties": {
+        "kind": {
+          "const": "artifact"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "destination": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "scope": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "install_phase": {
+          "$ref": "#/$defs/installPhase"
+        },
+        "license_gate": {
+          "$ref": "#/$defs/logicalName"
+        }
+      }
+    },
+    "pythonRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "specifier"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$"
+        },
+        "specifier": {
+          "type": "string"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "dependentRequired": {
+        "url": [
+          "sha256"
+        ],
+        "sha256": [
+          "url"
+        ]
+      }
+    },
+    "systemDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "name",
+        "scope"
+      ],
+      "properties": {
+        "manager": {
+          "enum": [
+            "apt",
+            "conda",
+            "pixi",
+            "binary"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "enum": [
+            "runtime",
+            "environment"
+          ]
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "main",
+            "isolated"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "profile": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "python": {
+          "type": "string",
+          "minLength": 1
+        },
+        "python_requirements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pythonRequirement"
+          }
+        },
+        "system_dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/systemDependency"
+          }
+        },
+        "cache_profile": {
+          "$ref": "#/$defs/logicalName"
+        },
+        "license_gate": {
+          "$ref": "#/$defs/logicalName"
+        }
+      }
+    },
+    "patchFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before_sha256",
+        "after_sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "before_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "after_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "target": {
+          "$ref": "#/$defs/id"
+        },
+        "target_ref": {
+          "$ref": "#/$defs/commit"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/commit"
+        },
+        "specification": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "specification_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/patchFile"
+          }
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "composition": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "target_ref"
+              ]
+            },
+            {
+              "required": [
+                "source_ref"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "specification"
+              ]
+            },
+            {
+              "required": [
+                "path"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "network",
+        "write_roots"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "network": {
+          "const": "none"
+        },
+        "write_roots": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/logicalName"
+          }
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        }
+      }
+    },
+    "probe": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "type",
+            "path"
+          ],
+          "properties": {
+            "phase": {
+              "enum": [
+                "post_clone",
+                "post_start"
+              ]
+            },
+            "type": {
+              "const": "path_exists"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "type",
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "phase": {
+              "enum": [
+                "post_clone",
+                "post_start"
+              ]
+            },
+            "type": {
+              "const": "file_sha256"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "type",
+            "path",
+            "symbol"
+          ],
+          "properties": {
+            "phase": {
+              "enum": [
+                "post_clone",
+                "post_start"
+              ]
+            },
+            "type": {
+              "const": "python_symbol"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "symbol": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "type",
+            "target",
+            "path",
+            "symbols"
+          ],
+          "properties": {
+            "phase": {
+              "const": "post_clone"
+            },
+            "type": {
+              "const": "file_symbols"
+            },
+            "target": {
+              "const": "comfyui"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "symbols": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "type",
+            "values"
+          ],
+          "properties": {
+            "phase": {
+              "enum": [
+                "post_clone",
+                "post_start"
+              ]
+            },
+            "type": {
+              "const": "comfy_node_ids"
+            },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "license": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "path"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "acceptance"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "acceptance": {
+              "$ref": "#/$defs/logicalName"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name",
+            "url",
+            "notice",
+            "scope"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "url": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "notice": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "scope": {
+              "enum": [
+                "code",
+                "model",
+                "data"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

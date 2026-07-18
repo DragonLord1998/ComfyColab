@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://comfycolab.dev/schemas/pack-ref-v1.schema.json",
+  "title": "ComfyColab Pack Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "repository",
+    "ref",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^https://[^/@?#]+(?:\\.[^/@?#]+)+/[^?#]+\\.git$"
+    },
+    "ref": {
+      "$ref": "#/$defs/commit"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

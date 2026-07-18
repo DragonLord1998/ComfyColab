@@ -1,0 +1,526 @@
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from comfycolab import runtime
+
+
+def canonical(payload: dict[str, object]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+class RuntimeContractTests(unittest.TestCase):
+    def core_lock(self) -> dict[str, object]:
+        return {
+            "schema": 1,
+            "core": {
+                "version": "0.2.0",
+                "repository": "https://github.com/example/ComfyColab.git",
+                "commit": "a" * 40,
+            },
+            "comfyui": {
+                "repository": "https://github.com/Comfy-Org/ComfyUI.git",
+                "commit": "b" * 40,
+            },
+            "packs": [],
+            "dependencies": [],
+            "patches": [],
+            "environments": [],
+            "runtime_env": [],
+        }
+
+    def test_load_lock_requires_digest_and_canonical_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lock.json"
+            data = canonical(self.core_lock())
+            path.write_bytes(data)
+            digest = hashlib.sha256(data).hexdigest()
+            self.assertEqual(runtime.load_lock(path, digest), self.core_lock())
+            with self.assertRaisesRegex(runtime.RuntimeContractError, "digest mismatch"):
+                runtime.load_lock(path, "0" * 64)
+            path.write_text(json.dumps(self.core_lock(), indent=2), encoding="utf-8")
+            pretty_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(runtime.RuntimeContractError, "canonical"):
+                runtime.load_lock(path, pretty_digest)
+
+    def test_unsupported_installers_fail_local_runtime_preflight(self) -> None:
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "environment-TOML"):
+            runtime.validate_runtime_support(
+                {
+                    "dependencies": [
+                        {
+                            "kind": "git",
+                            "id": "three-d",
+                            "requirements_file": "environment.toml",
+                            "requirements_format": "comfycolab-environment-toml",
+                        }
+                    ],
+                    "environments": [],
+                }
+            )
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "system manager"):
+            runtime.validate_runtime_support(
+                {
+                    "dependencies": [],
+                    "environments": [
+                        {
+                            "id": "worker",
+                            "kind": "isolated",
+                            "python_requirements": [],
+                            "system_dependencies": [
+                                {"manager": "pixi", "name": "cuda"}
+                            ],
+                        }
+                    ],
+                }
+            )
+
+    def test_pack_license_gate_is_enforced_before_runtime_mutation(self) -> None:
+        lock = {
+            "packs": [
+                {
+                    "id": "research",
+                    "license_gate": "accept_research_terms",
+                }
+            ]
+        }
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "accept-license"):
+            runtime.validate_pack_license_gates(
+                lock,
+                accepted_licenses=set(),
+            )
+        runtime.validate_pack_license_gates(
+            lock,
+            accepted_licenses={"accept_research_terms"},
+        )
+
+    def test_dependency_destination_rejects_escape(self) -> None:
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "unsafe"):
+            runtime.dependency_destination(
+                {
+                    "id": "escape",
+                    "destination": "../outside",
+                    "scope": "comfyui",
+                }
+            )
+
+    def test_runtime_pack_ids_match_the_public_schema(self) -> None:
+        self.assertEqual(runtime.safe_pack_id("image_v2"), "image_v2")
+        self.assertEqual(runtime.safe_pack_id("world.models"), "world.models")
+        for value in ("Image", "image--v2", ".image", "image/escape"):
+            with self.subTest(value=value):
+                with self.assertRaises(runtime.RuntimeContractError):
+                    runtime.safe_pack_id(value)
+
+    def test_link_node_roots_preserves_declared_legacy_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy = root / "ComfyUI"
+            pack = root / "pack"
+            source = pack / "custom_nodes" / "ComfyColab-ZImage"
+            source.mkdir(parents=True)
+            with mock.patch.object(runtime, "COMFY_DIR", comfy):
+                runtime.link_node_roots(
+                    {
+                        "image": {
+                            "node_roots": [
+                                {
+                                    "source": "custom_nodes/ComfyColab-ZImage",
+                                    "target": "ComfyColab-ZImage",
+                                }
+                            ]
+                        }
+                    },
+                    pack_roots={"image": pack},
+                )
+            target = comfy / "custom_nodes" / "ComfyColab-ZImage"
+            self.assertTrue(target.is_symlink())
+            self.assertEqual(target.resolve(), source.resolve())
+
+    def test_duplicate_node_targets_are_rejected_before_second_link(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy = root / "ComfyUI"
+            first = root / "first"
+            second = root / "second"
+            for pack in (first, second):
+                (pack / "node").mkdir(parents=True)
+            manifests = {
+                "one": {"node_roots": [{"source": "node", "target": "same"}]},
+                "two": {"node_roots": [{"source": "node", "target": "same"}]},
+            }
+            with mock.patch.object(runtime, "COMFY_DIR", comfy):
+                with self.assertRaisesRegex(runtime.RuntimeContractError, "duplicate"):
+                    runtime.link_node_roots(
+                        manifests,
+                        pack_roots={"one": first, "two": second},
+                    )
+
+    def test_license_gated_environment_requires_explicit_acceptance(self) -> None:
+        lock = {
+            "environments": [
+                {
+                    "id": "research",
+                    "kind": "isolated",
+                    "scope": "worker",
+                    "python_requirements": [],
+                    "system_dependencies": [],
+                    "license_gate": "accept_research_license",
+                }
+            ]
+        }
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "accept-license"):
+            runtime.install_environments(lock, accepted_licenses=set())
+
+    def test_duplicate_environment_ids_fail_before_runtime_mutation(self) -> None:
+        lock = {
+            "environments": [
+                {
+                    "id": "worker",
+                    "kind": "isolated",
+                    "scope": "worker",
+                    "python_requirements": [],
+                    "system_dependencies": [],
+                    "owner": owner,
+                }
+                for owner in ("image", "video")
+            ]
+        }
+        with mock.patch.object(runtime, "run") as run:
+            with self.assertRaisesRegex(runtime.RuntimeContractError, "duplicate"):
+                runtime.install_environments(lock, accepted_licenses=set())
+        run.assert_not_called()
+
+    def test_pack_requirements_with_multiple_owners_fail_before_install(self) -> None:
+        dependency = {
+            "kind": "git",
+            "id": "shared",
+            "repository": "https://github.com/example/shared.git",
+            "ref": "a" * 40,
+            "destination": "custom_nodes/shared",
+            "scope": "comfyui",
+            "requirements_file": "requirements.txt",
+            "requirements_source": "pack",
+            "requested_by": ["image", "video"],
+        }
+        with mock.patch.object(runtime, "install_dependency") as install:
+            with self.assertRaisesRegex(runtime.RuntimeContractError, "exactly one owner"):
+                runtime.install_dependencies(
+                    {"dependencies": [dependency]},
+                    pack_roots={
+                        "image": Path("/tmp/image"),
+                        "video": Path("/tmp/video"),
+                    },
+                    accepted_licenses=set(),
+                )
+        install.assert_not_called()
+
+    def test_reset_installation_roots_removes_previous_lock_owned_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            managed = {
+                "COMFY_DIR": root / "ComfyUI",
+                "PACKS_DIR": root / "state" / "packs",
+                "DEPENDENCIES_DIR": root / "state" / "dependencies",
+                "ENVIRONMENTS_DIR": root / "state" / "environments",
+                "PACK_STATE_DIR": root / "state" / "pack-state",
+            }
+            for path in managed.values():
+                path.mkdir(parents=True)
+                (path / "stale").write_text("old lock", encoding="utf-8")
+            with mock.patch.multiple(runtime, **managed):
+                runtime.reset_installation_roots()
+            self.assertTrue(all(not path.exists() for path in managed.values()))
+
+    def test_resolved_runtime_environment_is_generic(self) -> None:
+        environment = runtime.resolved_runtime_environment(
+            {
+                "runtime_env": [
+                    {
+                        "name": "COMFYCOLAB_WORKER",
+                        "value": "/content/worker",
+                        "requested_by": ["example"],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(environment, {"COMFYCOLAB_WORKER": "/content/worker"})
+
+    def test_lazy_dependency_records_path_without_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(runtime, "DEPENDENCIES_DIR", root / "dependencies"):
+                resolved: dict[str, str] = {}
+                runtime.install_dependency(
+                    {
+                        "id": "model",
+                        "kind": "huggingface",
+                        "repository": "example/model",
+                        "ref": "a" * 40,
+                        "destination": "models/example",
+                        "scope": "isolated",
+                        "install_phase": "lazy",
+                    },
+                    resolved_paths=resolved,
+                    pack_roots={},
+                    accepted_licenses=set(),
+                )
+            self.assertEqual(
+                resolved["model"],
+                str(root / "dependencies" / "models" / "example"),
+            )
+            self.assertFalse((root / "dependencies" / "models" / "example").exists())
+
+    def test_eager_huggingface_dependency_verifies_declared_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dependencies = root / "dependencies"
+            payload = b"pinned model bytes"
+            expected = hashlib.sha256(payload).hexdigest()
+
+            def fake_run(command: list[str], **_: object) -> object:
+                destination = Path(command[command.index("--local-dir") + 1])
+                (destination / "weights").mkdir(parents=True, exist_ok=True)
+                (destination / "weights" / "model.bin").write_bytes(payload)
+                return mock.Mock(stdout="")
+
+            with (
+                mock.patch.object(runtime, "DEPENDENCIES_DIR", dependencies),
+                mock.patch.object(runtime, "run", side_effect=fake_run),
+            ):
+                resolved: dict[str, str] = {}
+                runtime.install_dependency(
+                    {
+                        "id": "model",
+                        "kind": "huggingface",
+                        "repository": "example/model",
+                        "ref": "a" * 40,
+                        "destination": "models/example",
+                        "scope": "isolated",
+                        "artifacts": [
+                            {
+                                "path": "weights/model.bin",
+                                "bytes": len(payload),
+                                "sha256": expected,
+                            }
+                        ],
+                    },
+                    resolved_paths=resolved,
+                    pack_roots={},
+                    accepted_licenses=set(),
+                )
+
+            self.assertEqual(
+                resolved["model"],
+                str(dependencies / "models" / "example"),
+            )
+
+    def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            (destination / "model.bin").write_bytes(b"actual")
+            with self.assertRaisesRegex(
+                runtime.RuntimeContractError,
+                "digest mismatch",
+            ):
+                runtime.verify_huggingface_artifacts(
+                    "model",
+                    destination,
+                    [
+                        {
+                            "path": "model.bin",
+                            "bytes": len(b"actual"),
+                            "sha256": hashlib.sha256(b"expected").hexdigest(),
+                        }
+                    ],
+                )
+
+    def test_hook_sandbox_blocks_undeclared_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pack = root / "pack"
+            pack.mkdir()
+            hook = pack / "hook.py"
+            hook.write_text(
+                "from pathlib import Path\n"
+                "Path('forbidden.txt').write_text('no')\n"
+                "print('{\"status\":\"ok\"}')\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(runtime, "PACK_STATE_DIR", root / "pack-state"),
+                self.assertRaisesRegex(runtime.RuntimeContractError, "filesystem write blocked"),
+            ):
+                runtime.run_hook(
+                    "example",
+                    pack,
+                    "configure",
+                    {
+                        "path": "hook.py",
+                        "network": "none",
+                        "write_roots": [],
+                        "timeout_seconds": 30,
+                    },
+                    {"schema": 1},
+                )
+            self.assertFalse((pack / "forbidden.txt").exists())
+
+    def test_hook_sandbox_allows_declared_pack_state_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pack = root / "pack"
+            pack.mkdir()
+            hook = pack / "hook.py"
+            hook.write_text(
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "context = json.load(sys.stdin)\n"
+                "target = Path(context['write_roots']['pack_state']) / 'configured.json'\n"
+                "target.write_text('{}')\n"
+                "print(json.dumps({'status': 'ok', 'writes': "
+                "[{'root': 'pack_state', 'path': 'configured.json'}]}))\n",
+                encoding="utf-8",
+            )
+            pack_state = root / "pack-state"
+            with mock.patch.object(runtime, "PACK_STATE_DIR", pack_state):
+                result = runtime.run_hook(
+                    "example",
+                    pack,
+                    "configure",
+                    {
+                        "path": "hook.py",
+                        "network": "none",
+                        "write_roots": ["pack_state"],
+                        "timeout_seconds": 30,
+                    },
+                    {"schema": 1},
+                )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(
+                (pack_state / "example" / "configured.json").read_text(
+                    encoding="utf-8"
+                ),
+                "{}",
+            )
+
+    def test_post_clone_file_symbols_can_target_comfyui(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy = root / "ComfyUI"
+            target = comfy / "comfy_extras" / "nodes_example.py"
+            target.parent.mkdir(parents=True)
+            target.write_text("class RequiredNode:\n    pass\n", encoding="utf-8")
+            with mock.patch.object(runtime, "COMFY_DIR", comfy):
+                runtime.run_post_clone_probes(
+                    {
+                        "example": {
+                            "probes": [
+                                {
+                                    "phase": "post_clone",
+                                    "type": "file_symbols",
+                                    "target": "comfyui",
+                                    "path": "comfy_extras/nodes_example.py",
+                                    "symbols": ["RequiredNode"],
+                                }
+                            ]
+                        }
+                    },
+                    pack_roots={"example": root / "pack"},
+                    resolved_paths={},
+                )
+
+    def test_post_start_probe_and_health_command_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pack = root / "pack"
+            (pack / "runtime").mkdir(parents=True)
+            (pack / "runtime" / "doctor.py").write_text(
+                "import json\n"
+                "print(json.dumps({'status': 'ok', 'checked': True}))\n",
+                encoding="utf-8",
+            )
+            manifests = {
+                "image": {
+                    "probes": [
+                        {
+                            "phase": "post_start",
+                            "type": "comfy_node_ids",
+                            "values": ["ExampleNode"],
+                        }
+                    ],
+                    "health_checks": {
+                        "node_ids": ["ExampleNode"],
+                        "command": ["python", "runtime/doctor.py"],
+                    },
+                }
+            }
+            with (
+                mock.patch.object(runtime, "COMFY_DIR", root / "ComfyUI"),
+                mock.patch.object(runtime, "PACK_STATE_DIR", root / "pack-state"),
+                mock.patch.object(
+                    runtime,
+                    "object_info",
+                    return_value={"ExampleNode": {}},
+                ),
+            ):
+                result = runtime.validate_post_start_nodes(
+                    8188,
+                    manifests,
+                    lock={"schema": 1},
+                    lock_sha256="a" * 64,
+                    pack_roots={"image": pack},
+                    resolved_paths={"comfyui": str(root / "ComfyUI")},
+                )
+            self.assertEqual(result["image"]["nodeIds"], ["ExampleNode"])
+            self.assertTrue(result["image"]["command"]["checked"])
+
+    def test_cloudflared_download_is_versioned_and_digest_verified(self) -> None:
+        payload = b"authenticated cloudflared"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            response = io.BytesIO(payload)
+            with (
+                mock.patch.object(runtime, "STATE_DIR", state),
+                mock.patch.object(runtime.platform, "machine", return_value="x86_64"),
+                mock.patch.dict(
+                    runtime.CLOUDFLARED_ASSETS,
+                    {"amd64": ("cloudflared-linux-amd64", digest)},
+                    clear=False,
+                ),
+                mock.patch.object(
+                    runtime.urllib.request,
+                    "urlopen",
+                    return_value=response,
+                ) as download,
+            ):
+                path = runtime.cloudflared_path()
+            self.assertEqual(path.read_bytes(), payload)
+            self.assertIn(
+                f"/download/{runtime.CLOUDFLARED_VERSION}/",
+                download.call_args.args[0],
+            )
+            self.assertNotIn("/latest/", download.call_args.args[0])
+
+    def test_manifest_compatibility_fails_before_engine_install(self) -> None:
+        with self.assertRaisesRegex(runtime.RuntimeContractError, "incompatible"):
+            runtime.validate_manifest_compatibility(
+                {
+                    "image": {
+                        "compatibility": {
+                            "comfyui": {"compatible_refs": ["a" * 40]}
+                        }
+                    }
+                },
+                comfyui_commit="b" * 40,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

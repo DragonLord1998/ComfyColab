@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comfycolab"
-version = "0.1.0"
-description = "Start ComfyUI on temporary Colab and load curated image-model bundles."
+version = "0.2.0.dev1"
+description = "Install and run pinned ComfyUI on temporary Google Colab runtimes."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -14,6 +14,12 @@ authors = [
 ]
 dependencies = [
   "google-colab-cli>=0.6,<0.7",
+]
+
+[project.optional-dependencies]
+test = [
+  "numpy>=1.26",
+  "Pillow>=10",
 ]
 
 [project.scripts]

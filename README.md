@@ -1,33 +1,40 @@
 # ComfyColab
 
-Run ComfyUI on a temporary Google Colab GPU from your Mac with one command.
+ComfyColab is the Colab engine for pinned ComfyUI installations. Output-domain
+nodes, workflows, model catalogs, environments, and optimizations are owned by
+independently versioned daughter repositories:
 
-ComfyColab creates a Colab session, installs pinned ComfyUI extensions, adds
-curated image, video, and 3D facade nodes, and prints a Cloudflare URL you can
-open in any browser. No Google Drive is mounted and no model setup is required
-in the Colab terminal.
+- `ComfyColab-Image`
+- `ComfyColab-Video`
+- `ComfyColab-3D`
+- `ComfyColab-3DGS`
+- `ComfyColab-WM` (World Model)
 
-## What you get
+Core owns Colab session transport, authenticated bootstrap, ComfyUI lifecycle,
+immutable pack resolution, runtime state, endpoints, and model-agnostic engine
+optimizations. It defaults to installing ComfyUI with no daughter pack.
 
-- A temporary **G4 / NVIDIA RTX PRO 6000** Colab runtime by default
-- ComfyUI and `city96/ComfyUI-GGUF`, pinned to tested revisions
-- Bundle-loader nodes for Z-Image, Qwen Image Edit, Krea 2, and FLUX.2
-- LTX-2.3 text/image-to-video with selectable GGUF, FPS, and spatial upscaling
-- Simple 3D nodes for TRELLIS.2, TRELLIS2MV, TripoSplat, Pixal3D,
-  experimental Pixal3DMV, UltraShape, SkinTokens rigging, and CubePart decomposition
-- The complete advanced TRELLIS.2 and GeometryPack node suites
-- On-demand model downloads with checksums and resume support
-- A public Cloudflare URL for the ComfyUI interface
-- No Google Drive and no permanent cloud storage
+The five daughter repositories are public and their exact commits and manifest
+digests are recorded in `registry/published-packs.json`. This core branch remains
+an unreleased `0.2.0.dev1` candidate; GitHub `main` and its installer
+still represent the legacy release. The user-selectable official pack registry
+remains empty until each pack passes its clean-lock Colab gate. Legacy
+all-in-one sources remain in this checkout until the matching daughter is proven
+installable and rollback-safe. See [the migration status](docs/modularization-status.md).
 
 Everything inside `/content` disappears when the Colab runtime is released.
 
-## Quick start on Mac
+## Quick start on Mac after 0.2 publication
 
-Before installing ComfyColab, make sure the official `colab` command already
-works on your Mac and can create a session. ComfyColab reuses that CLI's Google
-authentication; the installer below adds the friendly wrapper and does not
-replace your Colab login setup.
+Prerequisites:
+
+- Python 3.10 or newer (`python3 --version`)
+- the official `colab` command, authenticated and able to create a session
+
+ComfyColab reuses the Colab CLI's Google authentication. The installer creates
+an isolated environment under `~/.local/share/comfycolab/venv`, links the
+command into `~/.local/bin`, and does not replace your Colab login setup. If
+your supported Python has a versioned command, set `COMFYCOLAB_PYTHON` to it.
 
 Install the command once:
 
@@ -41,9 +48,9 @@ Start ComfyUI:
 comfycolab start
 ```
 
-The first launch downloads ComfyUI, its Python dependencies, and a prebuilt
-TRELLIS.2 environment into the new runtime. On the default G4, the reusable
-TRELLIS cache avoids resolving and rebuilding that environment from scratch.
+The launcher resolves the selected profile into an immutable lock before it
+allocates or mutates a Colab runtime. Authenticated stage 0 verifies the exact
+core commit and stage-1 digest; stage 1 installs the locked ComfyUI revision.
 When everything is ready, the terminal prints:
 
 ```text
@@ -53,44 +60,74 @@ Session: comfycolab
 
 Open the `ComfyUI` link in Safari, Chrome, or another browser.
 
-## Everyday commands
+## Core and pack commands
+
+Core-only start becomes the public default with the 0.2 release. Pack aliases
+and `legacy-full` remain unavailable until the corresponding published commits
+pass their runtime gates and are promoted into the authenticated official
+registry.
 
 ```bash
-# Start or reuse the runtime
+# Core-only
 comfycolab start
 
-# Show whether the runtime is active
+# After runtime promotion, official pack aliases can be composed
+comfycolab start --pack image --pack video
+
+# After all five packs pass their gates, legacy-full becomes available
+comfycolab start --profile legacy-full
+comfycolab pack resolve --pack image --pack video
+comfycolab pack doctor
+comfycolab pack rollback
+
+# Deterministic two-cell notebook with the same embedded lock
+comfycolab notebook --pack image --output ComfyColab-Image.ipynb
+
+# Lifecycle
 comfycolab status
-
-# Print the saved ComfyUI URL again
 comfycolab url
-
-# Pull the newest node-pack changes and restart ComfyUI
 comfycolab start --refresh
-
-# Release the Colab runtime
 comfycolab stop
 ```
+
+`--refresh` reuses the saved lock and never silently advances core, ComfyUI, or
+pack versions. `comfycolab pack update` is the explicit version-resolution
+operation. When an update changes the lock, the prior canonical lock is retained
+for `comfycolab pack rollback`. That command restores lock selection only; until
+fresh-environment rollback is proven, stop and recreate the Colab runtime before
+applying the restored lock.
+
+`registry/published-packs.json` authenticates the five public daughter commits
+for contract CI. `registry/official-packs.json` is intentionally empty until a
+pack also passes clean dependency installation, ComfyUI startup, node discovery,
+its accelerator smoke test, and rollback. This prevents an apparently valid
+alias from resolving to a pack that is public but not yet runnable.
 
 Always run `comfycolab stop` when you are finished so the Colab runtime is not
 left consuming compute units.
 
-## What happens when you start it?
+## Authenticated launch flow
 
-1. The launcher creates or reuses a named Colab session.
-2. It requests the `G4` accelerator unless you configured another one.
-3. It clones tested versions of ComfyUI, ComfyUI-GGUF, and the official
-   Lighttricks ComfyUI-LTXVideo extension into `/content`.
-4. On a matching G4 runtime, it restores the checksum-verified combined 3D
-   cache when available, with the existing TRELLIS.2 cache as a rollback path.
-5. It clones pinned TRELLIS.2, GeometryPack, UltraShape, Pixal3D, SkinTokens,
-   and CubePart sources, applies revision-checked compatibility patches, and
-   links all first-party ComfyColab node packs.
-6. It starts ComfyUI and a Cloudflare quick tunnel.
-7. It prints the browser URL in your Mac terminal.
+1. Resolve the authenticated core profile and selected pack manifests.
+2. Reject dependency, environment, runtime-variable, destination, and patch
+   conflicts before runtime mutation.
+3. Persist canonical lock bytes under
+   `~/.config/comfycolab/locks/<session>.lock.json`.
+4. Create or reuse the requested Colab session.
+5. Stage 0 clones the exact core commit and verifies the stage-1 file digest.
+6. Stage 1 installs exact locked sources, links declared node roots, runs
+   offline hooks and health checks, and starts ComfyUI.
+7. The CLI verifies that the readiness payload reports the same lock digest.
+8. ComfyColab prints the browser URL.
 
 Cloudflare only carries the browser traffic. Model files are downloaded directly
 from Hugging Face to the Colab VM.
+
+## Legacy domain documentation
+
+The sections below document the pre-split node packs. They remain temporarily
+for behavioral parity and will be removed from core one pack at a time only
+after exact-lock installation, rollback, and live validation succeed.
 
 ## Using the model nodes
 
@@ -568,7 +605,7 @@ git clone https://github.com/DragonLord1998/ComfyColab.git
 cd ComfyColab
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e ".[test]"
 ```
 
 Requirements are Python 3.10 or newer, Git, and a Google account with Colab

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "comfyui": {
+    "repository": "https://github.com/Comfy-Org/ComfyUI.git",
+    "commit": "8b099de36acd81acd1afa3b5442951dc847e0a52"
+  }
+}
