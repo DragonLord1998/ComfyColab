@@ -49,7 +49,12 @@ def options(**overrides):
     return argparse.Namespace(**values)
 
 
-def minimal_glb(path: Path, *, textured: bool = True) -> None:
+def minimal_glb(
+    path: Path,
+    *,
+    textured: bool = True,
+    texture_source_extension: str | None = None,
+) -> None:
     document = {
         "asset": {"version": "2.0"},
         "buffers": [{"byteLength": 48}],
@@ -71,13 +76,157 @@ def minimal_glb(path: Path, *, textured: bool = True) -> None:
         primitive["attributes"]["TEXCOORD_0"] = 2
         primitive["material"] = 0
         document["materials"] = [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}]
-        document["textures"] = [{"source": 0}]
-        document["images"] = [{"bufferView": 3, "mimeType": "image/png"}]
+        if texture_source_extension:
+            document["textures"] = [
+                {"extensions": {texture_source_extension: {"source": 0}}}
+            ]
+            document["extensionsUsed"] = [texture_source_extension]
+        else:
+            document["textures"] = [{"source": 0}]
+        document["images"] = [
+            {
+                "bufferView": 3,
+                "mimeType": (
+                    "image/webp"
+                    if texture_source_extension == "EXT_texture_webp"
+                    else "image/png"
+                ),
+            }
+        ]
     json_chunk = json.dumps(document, separators=(",", ":")).encode()
     json_chunk += b" " * ((-len(json_chunk)) % 4)
     binary = bytes(48)
     payload = (
         struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(json_chunk) + 8 + len(binary))
+        + struct.pack("<I4s", len(json_chunk), b"JSON")
+        + json_chunk
+        + struct.pack("<I4s", len(binary), b"BIN\x00")
+        + binary
+    )
+    path.write_bytes(payload)
+
+
+def minimal_rigged_glb(path: Path, *, weight_sum: float = 1.0) -> None:
+    binary = bytearray()
+    views: list[dict[str, int]] = []
+
+    def append_view(payload: bytes) -> int:
+        offset = len(binary)
+        binary.extend(payload)
+        views.append(
+            {
+                "buffer": 0,
+                "byteOffset": offset,
+                "byteLength": len(payload),
+            }
+        )
+        binary.extend(b"\x00" * ((-len(binary)) % 4))
+        return len(views) - 1
+
+    position_view = append_view(
+        struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
+    )
+    index_view = append_view(struct.pack("<3H", 0, 1, 2))
+    uv_view = append_view(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
+    joints_view = append_view(struct.pack("<12H", *([0, 0, 0, 0] * 3)))
+    weights_view = append_view(
+        struct.pack("<12f", *([weight_sum, 0.0, 0.0, 0.0] * 3))
+    )
+    identity = (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+    inverse_bind_view = append_view(struct.pack("<32f", *(identity * 2)))
+    image_view = append_view(b"fake-png")
+    document = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": views,
+        "accessors": [
+            {
+                "bufferView": position_view,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC3",
+            },
+            {
+                "bufferView": index_view,
+                "componentType": 5123,
+                "count": 3,
+                "type": "SCALAR",
+            },
+            {
+                "bufferView": uv_view,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC2",
+            },
+            {
+                "bufferView": joints_view,
+                "componentType": 5123,
+                "count": 3,
+                "type": "VEC4",
+            },
+            {
+                "bufferView": weights_view,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC4",
+            },
+            {
+                "bufferView": inverse_bind_view,
+                "componentType": 5126,
+                "count": 2,
+                "type": "MAT4",
+            },
+        ],
+        "materials": [
+            {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}
+        ],
+        "textures": [{"source": 0}],
+        "images": [{"bufferView": image_view, "mimeType": "image/png"}],
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "attributes": {
+                            "POSITION": 0,
+                            "TEXCOORD_0": 2,
+                            "JOINTS_0": 3,
+                            "WEIGHTS_0": 4,
+                        },
+                        "indices": 1,
+                        "material": 0,
+                    }
+                ]
+            }
+        ],
+        "nodes": [
+            {"mesh": 0, "skin": 0},
+            {"name": "root", "children": [2]},
+            {"name": "tip"},
+        ],
+        "skins": [
+            {
+                "joints": [1, 2],
+                "skeleton": 1,
+                "inverseBindMatrices": 5,
+            }
+        ],
+        "scenes": [{"nodes": [0, 1]}],
+        "scene": 0,
+    }
+    json_chunk = json.dumps(document, separators=(",", ":")).encode()
+    json_chunk += b" " * ((-len(json_chunk)) % 4)
+    payload = (
+        struct.pack(
+            "<4sII",
+            b"glTF",
+            2,
+            12 + 8 + len(json_chunk) + 8 + len(binary),
+        )
         + struct.pack("<I4s", len(json_chunk), b"JSON")
         + json_chunk
         + struct.pack("<I4s", len(binary), b"BIN\x00")
@@ -243,6 +392,18 @@ class Live3DG4ValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "escaped"):
                 self.module.preview_event_paths({"glbs": ["../outside.glb"]}, output)
 
+    def test_inspect_glb_accepts_embedded_webp_extension_texture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "webp.glb"
+            minimal_glb(
+                path,
+                texture_source_extension="EXT_texture_webp",
+            )
+            inspection = self.module.inspect_glb(path, require_textured=True)
+
+        self.assertTrue(inspection["embeddedTextureValidated"])
+        self.assertEqual(inspection["textureCount"], 1)
+
     def test_fresh_trellis_run_wires_five_stage_and_explicit_save_verification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -371,6 +532,182 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
         self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
         self.assertIn("pixal-run-pixal3d_cold_1024", prompt["91"]["inputs"]["filename_prefix"])
+
+    def test_skintokens_prompt_uses_file3d_adapter_without_an_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "input.glb"
+            model.write_bytes(b"placeholder")
+            spec = self.module.CASES["skintokens_auto_rig"]
+            prompt = self.module.build_prompt(
+                spec,
+                options(model=model, keep_worker_loaded=False),
+                "",
+                "skin-run",
+            )
+
+        self.assertFalse(self.module.required_image(spec))
+        self.assertEqual(prompt["1"]["class_type"], "ComfyColab3DPathToFile3D")
+        self.assertEqual(prompt["2"]["class_type"], "ComfyColabSkinTokensAutoRig")
+        self.assertEqual(prompt["2"]["inputs"]["model_3d"], ["1", 0])
+        self.assertTrue(prompt["2"]["inputs"]["preserve_texture"])
+        self.assertFalse(prompt["2"]["inputs"]["use_postprocess"])
+        self.assertFalse(prompt["2"]["inputs"]["keep_worker_loaded"])
+        self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
+        self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
+        self.assertNotIn("LoadImage", {node["class_type"] for node in prompt.values()})
+
+    def test_skintokens_inspection_reads_real_joint_and_weight_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rigged = root / "rigged.glb"
+            minimal_rigged_glb(rigged)
+            contract = self.module.inspect_skinning(rigged)
+            self.assertEqual(contract["skins"], 1)
+            self.assertEqual(contract["joints"], 2)
+            self.assertEqual(contract["skinnedPrimitives"], 1)
+            self.assertEqual(contract["weightedVertices"], 3)
+            self.assertEqual(contract["minimumWeightSum"], 1.0)
+            self.assertEqual(contract["maximumWeightSum"], 1.0)
+            self.assertEqual(contract["inverseBindMatrices"], 1)
+
+            invalid = root / "invalid-weights.glb"
+            minimal_rigged_glb(invalid, weight_sum=0.5)
+            with self.assertRaisesRegex(ValueError, "not normalized"):
+                self.module.inspect_skinning(invalid)
+
+    def test_skintokens_run_records_skin_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            model = root / "input.glb"
+            model.write_bytes(b"placeholder")
+            rigged = output / "rigged.glb"
+            minimal_rigged_glb(rigged)
+            history = {
+                "status": {"completed": True},
+                "outputs": {
+                    "91": {
+                        "glbs": [
+                            {
+                                "filename": rigged.name,
+                                "subfolder": "",
+                                "type": "output",
+                            }
+                        ]
+                    }
+                },
+            }
+            worker_result = {
+                "schema": "comfycolab-skintokens-worker-result-v1",
+                "request_id": "skin-request",
+                "revisions": {
+                    "source": "source-ref",
+                    "model": "model-ref",
+                    "qwen": "qwen-ref",
+                    "environment": "environment-ref",
+                },
+                "environment": {
+                    "environment_ref": "environment-ref",
+                    "versions": {
+                        "python": "3.11.15",
+                        "bpy": "4.2.22",
+                    },
+                },
+                "environment_versions": {
+                    "python": "3.11.15",
+                    "bpy": "4.2.22",
+                },
+                "generation": {
+                    "attempt_count": 1,
+                    "retry_count": 0,
+                    "base_seed": 7,
+                    "selected_seed": 7,
+                    "selected_settings": {"top_k": 5},
+                    "attempts": [
+                        {
+                            "attempt": 1,
+                            "seed": 7,
+                            "settings": {"top_k": 5},
+                            "status": "ok",
+                        }
+                    ],
+                },
+                "rig_contract": {"skins": 1, "joints": 1},
+                "runtime_seconds": 1.0,
+                "model_load_count": 1,
+                "bytes": rigged.stat().st_size,
+                "sha256": self.module.sha256_file(rigged),
+            }
+            args = options(
+                base_url="http://127.0.0.1:8188",
+                comfy_root=root,
+                comfy_log=root / "comfy.log",
+                timeout=60.0,
+                vram_interval=0.01,
+                model=model,
+            )
+            recorder = mock.Mock()
+            spec = self.module.CASES["skintokens_auto_rig"]
+            with mock.patch.object(
+                self.module,
+                "check_object_info",
+                return_value={"previewNode": "90", "saveNode": "91"},
+            ), mock.patch.object(
+                self.module,
+                "queue_prompt",
+                return_value="prompt-skin",
+            ), mock.patch.object(
+                self.module,
+                "wait_prompt",
+                return_value=history,
+            ), mock.patch.object(
+                self.module,
+                "changed_glbs",
+                return_value=[rigged.resolve()],
+            ), mock.patch.object(
+                self.module,
+                "read_settled_log_since",
+                return_value=(
+                    "COMFYCOLAB_SKINTOKENS_RESULT="
+                    + json.dumps(worker_result, sort_keys=True),
+                    0,
+                ),
+            ), mock.patch.object(self.module.VramSampler, "sample", return_value=4096):
+                result = self.module.run_prompt_once(
+                    spec,
+                    args,
+                    "skin-run",
+                    "",
+                    recorder,
+                )
+
+        self.assertEqual(result["glb"]["path"], str(rigged.resolve()))
+        self.assertEqual(result["glb"]["skinContract"]["skins"], 1)
+        self.assertEqual(result["glb"]["skinContract"]["weightedVertices"], 3)
+        self.assertTrue(result["previewSaveProof"]["saveArtifactValidated"])
+        self.assertEqual(
+            result["workerSkinTokensResult"]["revisions"]["environment"],
+            "environment-ref",
+        )
+
+    def test_skintokens_requires_saveglb_history_and_worker_provenance(self) -> None:
+        marker = {
+            "revisions": {
+                "source": "source",
+                "model": "model",
+                "qwen": "qwen",
+                "environment": "environment",
+            },
+            "environment": {
+                "environment_ref": "environment",
+                "versions": {"python": "3.11.15"},
+            },
+        }
+        line = "COMFYCOLAB_SKINTOKENS_RESULT=" + json.dumps(marker)
+        self.assertEqual(self.module.skintokens_worker_result_events(line), [marker])
+        compacted = self.module.compact_log_evidence(line + "\n" + ("verbose\n" * 5000))
+        self.assertIn(line, compacted)
 
     def test_pixal3d_benchmark_requires_machine_resolution_and_tokens(self) -> None:
         spec = self.module.CASES["pixal3d_cold_1024"]

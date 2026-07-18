@@ -1070,6 +1070,40 @@ class ThreeDNodePackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no primitives"):
                 file3d.validate_glb(path)
 
+    def test_glb_validation_accepts_embedded_webp_extension_texture(self):
+        load_package()
+        file3d = importlib.import_module("comfycolab_3d_test.file3d")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.glb"
+            write_glb(path, textured=True)
+
+            def use_webp_extension(document):
+                document["textures"][0] = {
+                    "extensions": {"EXT_texture_webp": {"source": 0}}
+                }
+                document["images"][0]["mimeType"] = "image/webp"
+                document["extensionsUsed"] = ["EXT_texture_webp"]
+
+            rewrite_glb_document(path, use_webp_extension)
+            self.assertIn(
+                "meshes",
+                file3d.validate_glb(
+                    path,
+                    require_material=True,
+                    require_texture=True,
+                    require_uv=True,
+                ),
+            )
+
+            rewrite_glb_document(
+                path,
+                lambda document: document["textures"][0]["extensions"][
+                    "EXT_texture_webp"
+                ].update(source=99),
+            )
+            with self.assertRaisesRegex(ValueError, "invalid image"):
+                file3d.validate_glb(path, require_texture=True)
+
     def test_glb_validation_enforces_triangle_accessor_semantics(self):
         load_package()
         file3d = importlib.import_module("comfycolab_3d_test.file3d")

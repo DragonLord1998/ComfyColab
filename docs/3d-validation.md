@@ -25,6 +25,7 @@ ID, completion time, and passed-gate list for auditability.
 | Pixal3D model | `0b31f9160aa400719af409098bff7936a932f726` |
 | Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1` |
 | SkinTokens source/model | `273b691d35989d71cd17ff2895fdc735097b92d1` / `VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33` |
+| SkinTokens worker profile | `g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2` |
 | CubePart source/model | `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50` / `Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
 | cubvh | `757b913bfbf19ed65e3a379d159391a8e29efa0f` |
@@ -64,11 +65,13 @@ ID, completion time, and passed-gate list for auditability.
 - [x] TRELLIS2MV and experimental Pixal3DMV expose ordered four-view inputs
       with optional paired top/bottom views. Pixal3DMV serializes real
       view-aligned projection fusion and never uses a contact sheet.
-- [x] SkinTokens worker protocol validates skeleton/skin bindings and cleans
-      cancelled outputs. CubePart gates provisioning on explicit research
-      license acceptance and validates ordered per-part manifests.
-- [x] `scripts/check.sh` passes: 243 tests on 2026-07-16 (two optional Pillow
-      preprocess tests skipped in the minimal local environment).
+- [x] SkinTokens uses a measured Python 3.11.15 environment, validates real
+      `JOINTS_0`/`WEIGHTS_0` payloads, and applies deterministic bounded retries
+      only to malformed autoregressive skeleton/skin sequences. Cancellation
+      still cleans partial outputs. CubePart gates provisioning on explicit
+      research license acceptance and validates ordered per-part manifests.
+- [x] `scripts/check.sh` passes: 385 tests on 2026-07-19 (four optional tests
+      skipped in the minimal local environment).
 
 ## Live G4 benchmark table
 
@@ -97,7 +100,7 @@ path rather than a manual 512 override.
 | Pixal3D 1536 experimental | 1536 requested | n/a | pending | pending | pending | pending | 4096 requested | pending live G4 |
 | TRELLIS2MV four-view | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
 | Pixal3DMV four-view experimental | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
-| SkinTokens auto-rig | n/a | n/a | pending | pending | pending rigged GLB | pending joints/skins | preserve input | pending live G4 |
+| SkinTokens auto-rig | n/a | n/a | 141.39 s | 8,027,897,856 B | 8,972,012 | 149,162 | 2 embedded textures | passed after retry: 1 skin, 20 joints, 131,757 weighted vertices |
 | CubePart schema decomposition | n/a | n/a | pending | pending | pending combined/per-part GLBs | pending part count | colored parts | pending live G4 |
 
 `Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
@@ -120,6 +123,23 @@ recommending at least 50,146 tokens or manual 1024 selection. It did not retry
 at a lower resolution. The later genuine-1536 attempt progressed through the
 high-density tiled sparse-convolution path, but the Colab backend became
 unavailable before completion, so it is not counted as a passed benchmark.
+
+SkinTokens passed its repository-native live case on run
+`g4-2fe26f88b4b04666` (prompt
+`64b6a922-b740-4971-bc2a-9948e7f0a285`). The G4 output SHA-256 is
+`04b871e54542480c72f95b9ffcea9d8725f8d370beee23a254bd39d3bf36e8c9`;
+the durable validator read the actual `JOINTS_0` and `WEIGHTS_0` buffers and
+confirmed one skin, 20 joints, one inverse-bind-matrix accessor, one skinned
+primitive, and normalized weights for all 131,757 vertices. It also verified
+the preserved embedded textures, native Preview3D/SaveGLB compatibility, and
+non-collapsed rank-3 geometry. The worker attested Python 3.11.15, PyTorch
+2.7.0+cu128, NumPy 1.26.4, bpy 4.2.22, transformers 4.57.3, diffusers 0.37.1,
+and flash-attn 2.8.3.post1 from the active environment marker. The exact-source
+G4 run exercised the recovery path: attempts one through three (seeds 550593027
+through 550593029) produced incomplete per-joint skin tokens, while attempt four
+used the conservative sampling profile with seed 550593030 and completed.
+Evidence:
+`live-g4:g4-2fe26f88b4b04666:skintokens_auto_rig:4a74198dd1ccadc824ce7b604e3be500b892f12d8ce41dc9ad2738b2a137f779`.
 
 Also proven on the same live G4 run:
 
@@ -154,11 +174,11 @@ Preview3D compatibility, and SaveGLB compatibility are all pending live G4
 gates. Do not promote the Pixal3D worker cache or mark any Pixal3D gate passed
 from local workflow JSON or unit tests alone.
 
-The same evidence boundary applies to the new nodes. TRELLIS2MV needs genuine
-four- and six-view GLBs, Pixal3DMV needs quality and VRAM evidence from its
-experimental four-view projection fusion, SkinTokens needs a GLB with verified
-skins/joints, and CubePart needs a combined scene plus ordered per-part GLBs.
-Local protocol/schema tests do not satisfy those gates.
+The same evidence boundary still applies to the remaining new nodes.
+TRELLIS2MV needs genuine four- and six-view GLBs, Pixal3DMV needs quality and
+VRAM evidence from its experimental four-view projection fusion, and CubePart
+needs a combined scene plus ordered per-part GLBs. SkinTokens now has separate
+live G4 proof; local protocol/schema tests alone do not satisfy any other gate.
 
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
@@ -208,5 +228,6 @@ provenance.
 - [ ] Pixal3D 1536 experimental completes without silent downgrade
 - [ ] TRELLIS2MV four-view and six-view runs produce textured GLBs
 - [ ] Pixal3DMV four-view experimental run produces a textured GLB without a contact sheet
-- [ ] SkinTokens produces a rigged GLB with valid skin, joints, and skinned mesh nodes
+- [x] SkinTokens produces a textured rigged GLB with 1 skin, 17 joints, 1
+      skinned primitive, and normalized weights for all 131,757 vertices
 - [ ] CubePart produces a combined GLB, ordered per-part GLBs, and matching manifest

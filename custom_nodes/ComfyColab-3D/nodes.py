@@ -991,10 +991,31 @@ class ComfyColabSkinTokensAutoRig:
                 keep_worker_loaded=bool(keep_worker_loaded),
             )
             _send_progress_text(progress_node_id, "Stage 2/2 - Generating skeleton and skin weights...")
-            global_skintokens_worker_pool().run(
+            worker_result = global_skintokens_worker_pool().run(
                 command,
                 is_cancelled=cancelled,
                 on_progress=progress,
+            )
+            worker_evidence = {
+                key: worker_result.get(key)
+                for key in (
+                    "schema",
+                    "request_id",
+                    "revisions",
+                    "environment",
+                    "environment_versions",
+                    "generation",
+                    "rig_contract",
+                    "runtime_seconds",
+                    "model_load_count",
+                    "bytes",
+                    "sha256",
+                )
+            }
+            print(
+                "COMFYCOLAB_SKINTOKENS_RESULT="
+                + json.dumps(worker_evidence, sort_keys=True),
+                flush=True,
             )
             final_glb = output_glb
             if cache_mode != "Disable cache":
