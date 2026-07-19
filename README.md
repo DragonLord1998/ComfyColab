@@ -80,7 +80,8 @@ comfycolab start
 comfycolab start --pack image --pack video
 
 # Current full-node notebook compatibility path
-comfycolab notebook --profile legacy-full --legacy-full \
+comfycolab notebook --runtime-resolve-main \
+  --profile legacy-full --legacy-full \
   --accept-license accept_research_license \
   --output ComfyColab-Full.ipynb
 
@@ -119,9 +120,12 @@ immutable refs embedded in `profiles/legacy-full.json`, verifies their manifest
 digests inside Colab, and links their declared node roots. `ComfyColab-WM` is
 excluded because it does not contain nodes yet. CubePart's source and weights
 carry research-only terms. The published notebook is rendered with
-`--accept-license accept_research_license` at the repository owner's explicit
-direction; review and accept those upstream terms before running Cell 2. The
-CubePart node still requires its per-request acceptance checkbox.
+`--runtime-resolve-main --accept-license accept_research_license` at the
+repository owner's explicit direction so Cell 2 resolves the latest public
+`main` commit inside Colab before converting it into the normal immutable
+CoreStage0ConfigV1, lock, and stage-1 digest flow. Review and accept those
+upstream terms before running Cell 2. The CubePart node still requires its
+per-request acceptance checkbox.
 
 Always run `comfycolab stop` when you are finished so the Colab runtime is not
 left consuming compute units.

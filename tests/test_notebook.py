@@ -13,10 +13,14 @@ from unittest import mock
 
 from comfycolab.config import CoreStage0ConfigV1
 from comfycolab.notebook import (
+    NotebookConfigError,
+    RuntimeResolvedMainNotebookConfig,
     _bootstrap_proxy_prelude,
     _proxy_helpers_source,
     notebook_bytes,
     render_notebook,
+    render_runtime_resolved_main_notebook,
+    runtime_resolved_main_notebook_bytes,
 )
 
 
@@ -257,6 +261,53 @@ class NotebookTests(unittest.TestCase):
         self.assertNotIn("serve_kernel_port_as_iframe", bootstrap)
         self.assertNotIn("COMFYCOLAB_CORS_ORIGIN", bootstrap)
         self.assertIn("CONFIG_B64 =", bootstrap)
+
+    def test_runtime_resolved_main_notebook_defers_immutable_config_to_colab(self) -> None:
+        config = RuntimeResolvedMainNotebookConfig.create(
+            core_repository="https://github.com/example/ComfyColab.git",
+            profile="legacy-full",
+            runtime_mode="legacy-full",
+            accepted_licenses=["accept_research_license"],
+        )
+        first = runtime_resolved_main_notebook_bytes(config)
+        second = runtime_resolved_main_notebook_bytes(config)
+        self.assertEqual(first, second)
+        notebook = json.loads(first)
+        self.assertEqual(len(notebook["cells"]), 2)
+        bootstrap = "".join(notebook["cells"][1]["source"])
+        self.assertNotIn("CONFIG_B64 =", bootstrap)
+        self.assertNotIn('"core_commit"', bootstrap)
+        self.assertIn('COMFYCOLAB_CORE_REF = "main"', bootstrap)
+        self.assertIn('["git", "rev-parse", "HEAD"]', bootstrap)
+        self.assertIn("COMFYCOLAB_COMMIT_RE.fullmatch(COMFYCOLAB_CORE_COMMIT)", bootstrap)
+        self.assertIn("prepare_launch(", bootstrap)
+        self.assertIn("core_ref=COMFYCOLAB_CORE_COMMIT", bootstrap)
+        self.assertIn("COMFYCOLAB_PROFILE = 'legacy-full'", bootstrap)
+        self.assertIn("COMFYCOLAB_RUNTIME_MODE = 'legacy-full'", bootstrap)
+        self.assertIn("COMFYCOLAB_ACCEPTED_LICENSES = ['accept_research_license']", bootstrap)
+        self.assertIn("prepared.config.core_commit", bootstrap)
+        self.assertIn("exec(compile(prepared.source", bootstrap)
+        self.assertIn("ComfyUI Colab proxy URL", bootstrap)
+
+    def test_runtime_resolved_main_notebook_can_disable_proxy(self) -> None:
+        notebook = render_runtime_resolved_main_notebook(
+            RuntimeResolvedMainNotebookConfig.create(
+                core_repository="https://github.com/example/ComfyColab.git",
+                colab_proxy=False,
+            )
+        )
+        proxy = "".join(notebook["cells"][0]["source"])
+        bootstrap = "".join(notebook["cells"][1]["source"])
+        self.assertIn("Colab proxy disabled", proxy)
+        self.assertNotIn("proxyPort", proxy)
+        self.assertNotIn("COMFYCOLAB_CORS_ORIGIN", bootstrap)
+        self.assertIn('COMFYCOLAB_CORE_REF = "main"', bootstrap)
+
+    def test_runtime_resolved_main_notebook_requires_git_repository_url(self) -> None:
+        with self.assertRaisesRegex(NotebookConfigError, "must end with .git"):
+            RuntimeResolvedMainNotebookConfig.create(
+                core_repository="https://github.com/example/ComfyColab",
+            )
 
     @staticmethod
     def fake_colab_modules(
