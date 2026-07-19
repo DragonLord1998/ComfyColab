@@ -23,25 +23,11 @@ _TEXTURE_SOURCE_EXTENSIONS = ("EXT_texture_webp", "KHR_texture_basisu")
 
 
 def _texture_image_index(texture: dict[str, Any]) -> int | None:
-    source = texture.get("source")
-    if isinstance(source, int):
-        return source
-    extensions = texture.get("extensions")
-    if not isinstance(extensions, dict):
-        return None
-    for name in _TEXTURE_SOURCE_EXTENSIONS:
-        extension = extensions.get(name)
-        if isinstance(extension, dict) and isinstance(extension.get("source"), int):
-            return extension["source"]
-    return None
-
-
-def _texture_image_index(texture: dict[str, Any]) -> int | None:
     """Resolve core or extension-backed glTF texture image sources."""
 
     extensions = texture.get("extensions")
     if isinstance(extensions, dict):
-        for name in ("EXT_texture_webp", "KHR_texture_basisu"):
+        for name in _TEXTURE_SOURCE_EXTENSIONS:
             extension = extensions.get(name)
             if isinstance(extension, dict) and isinstance(extension.get("source"), int):
                 return int(extension["source"])

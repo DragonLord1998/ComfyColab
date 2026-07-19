@@ -80,7 +80,7 @@ ID, completion time, and passed-gate list for auditability.
       only to malformed autoregressive skeleton/skin sequences. Cancellation
       still cleans partial outputs. CubePart gates provisioning on explicit
       research license acceptance and validates ordered per-part manifests.
-- [x] `scripts/check.sh` passes: 385 tests on 2026-07-19 (four optional tests
+- [x] `scripts/check.sh` passes: 417 tests on 2026-07-19 (five optional tests
       skipped in the minimal local environment).
 
 ## Live G4 benchmark table

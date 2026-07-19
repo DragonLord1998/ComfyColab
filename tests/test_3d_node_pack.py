@@ -256,7 +256,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             else:
                 sys.modules[name] = module
 
-    def test_import_is_lazy_and_exactly_seven_nodes_are_public(self):
+    def test_import_is_lazy_and_exactly_eight_nodes_are_public(self):
         before = set(sys.modules)
         package = load_package()
         imported = set(sys.modules) - before
