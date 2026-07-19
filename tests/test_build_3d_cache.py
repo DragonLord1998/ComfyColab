@@ -29,6 +29,11 @@ def fake_remote_bootstrap():
         GEOMETRY_REF="geometry-ref",
         ULTRASHAPE_REF="ultrashape-ref",
         PIXAL3D_REF="pixal3d-ref",
+        SKINTOKENS_REF="skintokens-ref",
+        SKINTOKENS_MODEL_REPO="VAST-AI/SkinTokens",
+        SKINTOKENS_MODEL_REF="skintokens-model-ref",
+        SKINTOKENS_QWEN_REPO="Qwen/Qwen3-0.6B",
+        SKINTOKENS_QWEN_REF="skintokens-qwen-ref",
         ULTRASHAPE_CUBVH_REF="cubvh-ref",
         BIREFNET_MODEL_REF="birefnet-ref",
         COMFY_ENV_VERSION="comfy-env-version",
@@ -146,6 +151,14 @@ class Build3DCacheTests(unittest.TestCase):
             wrong_source = passed_validation_record(module, remote)
             wrong_source["sources"]["cubvh"] = "mutable-source"
             cases.append((wrong_source, "sources"))
+            wrong_skintokens_environment = passed_validation_record(module, remote)
+            wrong_skintokens_environment["sources"]["skinTokensEnvironment"] = (
+                "mutable-skintokens-environment"
+            )
+            cases.append((wrong_skintokens_environment, "sources"))
+            wrong_skintokens_patch = passed_validation_record(module, remote)
+            wrong_skintokens_patch["patches"]["skinTokens"] = "mutable-skintokens-patch"
+            cases.append((wrong_skintokens_patch, "patches"))
             false_1536 = passed_validation_record(module, remote)
             false_1536["benchmarks"]["trellis_1536_cascade"]["actualResolution"] = 1408
             cases.append((false_1536, "benchmarks are incomplete"))
@@ -254,6 +267,34 @@ class Build3DCacheTests(unittest.TestCase):
         self.assertEqual(manifest["sources"]["pixal3d"], "pixal3d-ref")
         self.assertEqual(manifest["patches"]["pixal3d"], "pixal3d-patch")
 
+    def test_expected_sources_and_patches_include_current_skintokens_provenance(self) -> None:
+        module = load_module()
+        remote = fake_remote_bootstrap()
+        sources = module.expected_validation_sources(remote)
+        patches = module.expected_validation_patches(remote)
+
+        self.assertEqual(
+            sources["skinTokensEnvironment"],
+            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2",
+        )
+        self.assertEqual(
+            patches["skinTokens"],
+            "skintokens-py31115-bpy4222-webp-retry-validation-v3",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "validation.json"
+            record = passed_validation_record(module, remote)
+            path.write_text(json.dumps(record), encoding="utf-8")
+            loaded = module.load_live_validation_record(
+                path,
+                expected_profile="combined-profile",
+                remote_bootstrap=remote,
+            )
+
+        self.assertEqual(loaded["sources"]["skinTokensEnvironment"], sources["skinTokensEnvironment"])
+        self.assertEqual(loaded["patches"]["skinTokens"], patches["skinTokens"])
+
     def test_real_pixal3d_validation_source_schema_matches_checked_in_record(self) -> None:
         module = load_module()
         from comfycolab import remote_bootstrap
@@ -262,12 +303,19 @@ class Build3DCacheTests(unittest.TestCase):
         expected_patches = module.expected_validation_patches(remote_bootstrap)
         record = json.loads((ROOT / "docs/3d-validation.json").read_text(encoding="utf-8"))
         pixal_keys = {key for key in expected if key.startswith("pixal3d")}
+        skintokens_keys = {key for key in expected if key.startswith("skinTokens")}
         self.assertTrue(pixal_keys)
+        self.assertTrue(skintokens_keys)
         self.assertEqual(
             {key: record["sources"][key] for key in pixal_keys},
             {key: expected[key] for key in pixal_keys},
         )
+        self.assertEqual(
+            {key: record["sources"][key] for key in skintokens_keys},
+            {key: expected[key] for key in skintokens_keys},
+        )
         self.assertEqual(record["patches"]["pixal3d"], expected_patches["pixal3d"])
+        self.assertEqual(record["patches"]["skinTokens"], expected_patches["skinTokens"])
 
 
 if __name__ == "__main__":

@@ -256,7 +256,7 @@ class ThreeDNodePackTests(unittest.TestCase):
             else:
                 sys.modules[name] = module
 
-    def test_import_is_lazy_and_exactly_seven_nodes_are_public(self):
+    def test_import_is_lazy_and_exactly_eight_nodes_are_public(self):
         before = set(sys.modules)
         package = load_package()
         imported = set(sys.modules) - before
@@ -1439,18 +1439,23 @@ class ThreeDNodePackTests(unittest.TestCase):
             path = Path(directory) / "model.glb"
             for extension in ("EXT_texture_webp", "KHR_texture_basisu"):
                 write_glb(path, textured=True)
+
+                def use_extension(document, extension=extension):
+                    document["textures"][0] = {
+                        "extensions": {extension: {"source": 0}}
+                    }
+                    document["textures"][0].pop("source", None)
+                    if extension == "EXT_texture_webp":
+                        document["images"][0]["mimeType"] = "image/webp"
+                    document["extensionsUsed"] = [extension]
+
                 rewrite_glb_document(
                     path,
-                    lambda document, extension=extension: document["textures"][0].update(
-                        {"extensions": {extension: {"source": 0}}}
-                    ),
-                )
-                rewrite_glb_document(
-                    path,
-                    lambda document: document["textures"][0].pop("source"),
+                    use_extension,
                 )
                 document = file3d.validate_glb(
                     path,
+                    require_material=True,
                     require_texture=True,
                     require_uv=True,
                 )
@@ -1458,6 +1463,35 @@ class ThreeDNodePackTests(unittest.TestCase):
                     document["textures"][0]["extensions"][extension]["source"],
                     0,
                 )
+
+            write_glb(path, textured=True)
+
+            def use_webp_extension(document):
+                document["textures"][0] = {
+                    "extensions": {"EXT_texture_webp": {"source": 0}}
+                }
+                document["images"][0]["mimeType"] = "image/webp"
+                document["extensionsUsed"] = ["EXT_texture_webp"]
+
+            rewrite_glb_document(path, use_webp_extension)
+            self.assertIn(
+                "meshes",
+                file3d.validate_glb(
+                    path,
+                    require_material=True,
+                    require_texture=True,
+                    require_uv=True,
+                ),
+            )
+
+            rewrite_glb_document(
+                path,
+                lambda document: document["textures"][0]["extensions"][
+                    "EXT_texture_webp"
+                ].update(source=99),
+            )
+            with self.assertRaisesRegex(ValueError, "invalid image"):
+                file3d.validate_glb(path, require_texture=True)
 
     def test_glb_validation_enforces_triangle_accessor_semantics(self):
         load_package()

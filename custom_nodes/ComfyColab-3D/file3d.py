@@ -19,6 +19,7 @@ _COMPONENT_FORMATS = {
     5126: ("f", 4),
 }
 _TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+_TEXTURE_SOURCE_EXTENSIONS = ("EXT_texture_webp", "KHR_texture_basisu")
 
 
 def _texture_image_index(texture: dict[str, Any]) -> int | None:
@@ -26,7 +27,7 @@ def _texture_image_index(texture: dict[str, Any]) -> int | None:
 
     extensions = texture.get("extensions")
     if isinstance(extensions, dict):
-        for name in ("EXT_texture_webp", "KHR_texture_basisu"):
+        for name in _TEXTURE_SOURCE_EXTENSIONS:
             extension = extensions.get(name)
             if isinstance(extension, dict) and isinstance(extension.get("source"), int):
                 return int(extension["source"])

@@ -18,7 +18,22 @@ SKINTOKENS_MODEL_REPO = "VAST-AI/SkinTokens"
 SKINTOKENS_MODEL_REF = "79736cad0fd84de384d5eede659b4ebd24effe33"
 SKINTOKENS_QWEN_REPO = "Qwen/Qwen3-0.6B"
 SKINTOKENS_QWEN_REF = "c1899de289a04d12100db370d81485cdf75e47ca"
-SKINTOKENS_ENVIRONMENT_REF = "g4-linux64-py311-torch270-cu128-skintokens-v1"
+SKINTOKENS_ENVIRONMENT_REF = (
+    "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2"
+)
+SKINTOKENS_PYTHON_VERSION = "3.11.15"
+SKINTOKENS_TORCH_PACKAGES = (
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "torchaudio==2.7.0",
+)
+SKINTOKENS_RUNTIME_PINS = (
+    "numpy==1.26.4",
+    "bpy==4.2.22",
+    "transformers==4.57.3",
+    "diffusers==0.37.1",
+)
+SKINTOKENS_FLASH_ATTN_PACKAGE = "flash-attn==2.8.3.post1"
 SKINTOKENS_LICENSE = {
     "name": "MIT",
     "copyright": "Copyright (c) 2025 VAST-AI-Research",
@@ -214,6 +229,65 @@ def _env_python(env_dir: Path) -> Path:
     return env_dir / "bin" / "python"
 
 
+def _probe_environment(python: Path) -> dict[str, str]:
+    completed = subprocess.run(
+        [
+            str(python),
+            "-c",
+            (
+                "import json,sys,bpy,diffusers,flash_attn,numpy,torch,transformers;"
+                "print(json.dumps({"
+                "'python':'.'.join(map(str,sys.version_info[:3])),"
+                "'bpy':'.'.join(map(str,bpy.app.version)),"
+                "'diffusers':diffusers.__version__,"
+                "'flash_attn':flash_attn.__version__,"
+                "'numpy':numpy.__version__,"
+                "'torch':torch.__version__,"
+                "'transformers':transformers.__version__"
+                "},sort_keys=True))"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    try:
+        versions = json.loads(completed.stdout.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as error:
+        raise RuntimeError("SkinTokens environment probe returned invalid output") from error
+    expected = {
+        "python": SKINTOKENS_PYTHON_VERSION,
+        "bpy": "4.2.22",
+        "diffusers": "0.37.1",
+        "flash_attn": "2.8.3.post1",
+        "numpy": "1.26.4",
+        "torch": "2.7.0+cu128",
+        "transformers": "4.57.3",
+    }
+    if versions != expected:
+        raise RuntimeError(
+            f"SkinTokens environment versions do not match the pinned recipe: {versions}"
+        )
+    return versions
+
+
+def _promote_environment(staging: Path, env_dir: Path) -> None:
+    backup = env_dir.with_name(f".{env_dir.name}.{os.getpid()}.backup")
+    shutil.rmtree(backup, ignore_errors=True)
+    had_existing = env_dir.exists()
+    if had_existing:
+        os.replace(env_dir, backup)
+    try:
+        os.replace(staging, env_dir)
+    except BaseException:
+        if had_existing and backup.exists() and not env_dir.exists():
+            os.replace(backup, env_dir)
+        raise
+    finally:
+        shutil.rmtree(backup, ignore_errors=True)
+
+
 def _ensure_environment(source_dir: Path, env_dir: Path, progress: Callable[[dict], None]) -> Path:
     python = _env_python(env_dir)
     marker = env_dir / ".comfycolab-environment.json"
@@ -221,8 +295,20 @@ def _ensure_environment(source_dir: Path, env_dir: Path, progress: Callable[[dic
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         payload = {}
-    if payload.get("environment_ref") == SKINTOKENS_ENVIRONMENT_REF and python.is_file():
-        return python
+    if (
+        payload.get("schema") == ARTIFACT_SCHEMA
+        and payload.get("environment_ref") == SKINTOKENS_ENVIRONMENT_REF
+        and payload.get("python_version") == SKINTOKENS_PYTHON_VERSION
+        and not payload.get("skipped")
+        and isinstance(payload.get("versions"), dict)
+        and python.is_file()
+    ):
+        try:
+            measured_versions = _probe_environment(python)
+        except Exception:
+            measured_versions = None
+        if measured_versions == payload["versions"]:
+            return python
 
     env_dir.parent.mkdir(parents=True, exist_ok=True)
     _emit(progress, "environment", path=str(env_dir), environment_ref=SKINTOKENS_ENVIRONMENT_REF)
@@ -238,54 +324,97 @@ def _ensure_environment(source_dir: Path, env_dir: Path, progress: Callable[[dic
         )
         return Path(sys.executable)
 
-    base_python = Path(
-        os.environ.get(
-            "COMFYCOLAB_SKINTOKENS_BASE_PYTHON",
-            str(Path.home() / ".ce/.pixi/envs/trellis2-nodes/bin/python"),
-        )
-    )
-    if not base_python.is_file():
+    uv = os.environ.get("COMFYCOLAB_SKINTOKENS_UV") or shutil.which("uv")
+    if not uv:
         raise RuntimeError(
-            "SkinTokens requires the verified ComfyColab TRELLIS Python runtime as its base"
+            "SkinTokens requires uv to create its pinned Python 3.11 runtime"
         )
-    subprocess.check_call([str(base_python), "-m", "venv", str(env_dir)])
-    subprocess.check_call(
-        [
-            str(python),
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "pip",
-            "setuptools",
-            "wheel",
-            "packaging",
-            "ninja",
-        ]
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{env_dir.name}-", dir=env_dir.parent)
     )
-    install = [
-        str(python),
-        "-m",
-        "pip",
-        "install",
-        "torch==2.7.0",
-        "torchvision==0.22.0",
-        "torchaudio==2.7.0",
-        "--index-url",
-        "https://download.pytorch.org/whl/cu128",
-    ]
-    subprocess.check_call(install)
-    subprocess.check_call([str(python), "-m", "pip", "install", "-r", str(source_dir / "requirements.txt")])
-    subprocess.check_call([str(python), "-m", "pip", "install", "flash-attn", "--no-build-isolation"])
-    _atomic_write_json(
-        marker,
-        {
-            "schema": ARTIFACT_SCHEMA,
-            "environment_ref": SKINTOKENS_ENVIRONMENT_REF,
-            "python": str(python),
-            "source_ref": SKINTOKENS_SOURCE_REF,
-        },
-    )
+    try:
+        subprocess.check_call(
+            [
+                uv,
+                "venv",
+                "--python",
+                SKINTOKENS_PYTHON_VERSION,
+                "--managed-python",
+                "--seed",
+                str(staging),
+            ]
+        )
+        staging_python = _env_python(staging)
+        subprocess.check_call(
+            [
+                str(staging_python),
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "pip",
+                "setuptools",
+                "wheel",
+                "packaging",
+                "ninja",
+            ]
+        )
+        subprocess.check_call(
+            [
+                str(staging_python),
+                "-m",
+                "pip",
+                "install",
+                *SKINTOKENS_TORCH_PACKAGES,
+                "--index-url",
+                "https://download.pytorch.org/whl/cu128",
+            ]
+        )
+        subprocess.check_call(
+            [
+                str(staging_python),
+                "-m",
+                "pip",
+                "install",
+                *SKINTOKENS_RUNTIME_PINS,
+            ]
+        )
+        subprocess.check_call(
+            [
+                str(staging_python),
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(source_dir / "requirements.txt"),
+            ]
+        )
+        subprocess.check_call(
+            [
+                str(staging_python),
+                "-m",
+                "pip",
+                "install",
+                SKINTOKENS_FLASH_ATTN_PACKAGE,
+                "--no-build-isolation",
+            ],
+            env={**os.environ, "MAX_JOBS": "8"},
+        )
+        versions = _probe_environment(staging_python)
+        _atomic_write_json(
+            staging / ".comfycolab-environment.json",
+            {
+                "schema": ARTIFACT_SCHEMA,
+                "environment_ref": SKINTOKENS_ENVIRONMENT_REF,
+                "python": str(_env_python(env_dir)),
+                "python_version": SKINTOKENS_PYTHON_VERSION,
+                "source_ref": SKINTOKENS_SOURCE_REF,
+                "versions": versions,
+            },
+        )
+        _promote_environment(staging, env_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return python
 
 
@@ -349,13 +478,17 @@ __all__ = [
     "DEFAULT_MODEL_ROOT",
     "DEFAULT_SOURCE_DIR",
     "SKINTOKENS_ENVIRONMENT_REF",
+    "SKINTOKENS_FLASH_ATTN_PACKAGE",
     "SKINTOKENS_LICENSE",
     "SKINTOKENS_MODEL_REF",
     "SKINTOKENS_MODEL_REPO",
+    "SKINTOKENS_PYTHON_VERSION",
     "SKINTOKENS_QWEN_REF",
     "SKINTOKENS_QWEN_REPO",
+    "SKINTOKENS_RUNTIME_PINS",
     "SKINTOKENS_SOURCE_REF",
     "SKINTOKENS_SOURCE_REPO",
+    "SKINTOKENS_TORCH_PACKAGES",
     "SkinTokensArtifacts",
     "ensure_skintokens_artifacts",
 ]

@@ -154,6 +154,68 @@ class CliLifecycleTests(unittest.TestCase):
         self.assertEqual(args.profile, "legacy-full")
         self.assertTrue(args.legacy_full)
 
+    def test_notebook_runtime_resolve_main_mode_is_explicit(self) -> None:
+        args = cli.build_parser().parse_args(
+            [
+                "notebook",
+                "--runtime-resolve-main",
+                "--profile",
+                "legacy-full",
+                "--legacy-full",
+                "--accept-license",
+                "accept_research_license",
+            ]
+        )
+        self.assertTrue(args.runtime_resolve_main)
+        self.assertEqual(args.repo_ref, "main")
+        self.assertEqual(args.profile, "legacy-full")
+        self.assertTrue(args.legacy_full)
+        self.assertTrue(args.colab_proxy)
+        self.assertEqual(args.accept_license, ["accept_research_license"])
+
+    def test_runtime_resolve_main_notebook_writes_without_local_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "ComfyColab.ipynb"
+            args = cli.build_parser().parse_args(
+                [
+                    "notebook",
+                    "--runtime-resolve-main",
+                    "--profile",
+                    "legacy-full",
+                    "--legacy-full",
+                    "--accept-license",
+                    "accept_research_license",
+                    "--lock-dir",
+                    str(Path(directory) / "locks"),
+                    "--output",
+                    str(output),
+                ]
+            )
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                result = cli._render_notebook(args)
+
+            self.assertEqual(result, 0)
+            self.assertTrue(output.is_file())
+            self.assertFalse(cli._lock_path(args).exists())
+            rendered = output.read_text(encoding="utf-8")
+            self.assertIn('"runtime-resolved-comfycolab-bootstrap"', rendered)
+            self.assertIn("resolved inside Colab", stdout.getvalue())
+
+    def test_runtime_resolve_main_rejects_local_pack_ref_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pack_ref = Path(directory) / "pack-ref.json"
+            pack_ref.write_text("{}", encoding="utf-8")
+            args = cli.build_parser().parse_args(
+                [
+                    "notebook",
+                    "--runtime-resolve-main",
+                    "--pack-ref",
+                    str(pack_ref),
+                ]
+            )
+            with self.assertRaisesRegex(ValueError, "local --pack-ref"):
+                cli._render_notebook(args)
+
     def test_colab_proxy_opens_attached_page_and_embeds_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "runtime.json"

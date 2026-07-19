@@ -5,8 +5,8 @@
       "schema": 1,
       "id": "3d",
       "repository": "https://github.com/DragonLord1998/ComfyColab-3D.git",
-      "ref": "92a7a2b4b48f3ab144e122b262a406f1ce8c4aba",
-      "manifest_sha256": "f0fd4648bf91fb417a824517024b2fd3f425d5cc4fded4d6a65a90c3d24ed405"
+      "ref": "8ee520ca38a51f08d4243a255e2eedb8b6c9a19b",
+      "manifest_sha256": "b5e878800388ad44309df1fafe9e825a759015d20c316fa32d9100074dbd78cd"
     },
     "3dgs": {
       "schema": 1,

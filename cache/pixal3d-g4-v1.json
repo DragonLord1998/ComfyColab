@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "awaiting-build",
-  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
+  "profile": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3",
   "releaseTag": "",
   "sources": {
     "pixal3d": "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af",
@@ -13,12 +13,18 @@
     "nafCheckpoint": "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f",
     "utils3d": "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
     "natten": "natten==0.21.6+torch2110cu128",
-    "environment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1",
+    "nvdiffrast": "253ac4fcea7de5f396371124af597e6cc957bfae",
+    "vggtOmega": "39a0cb8af88554f15ddcb5354cd52bde588fa014",
+    "vggtOmegaModel": "05654241adc2f218dfb089c373a011f8a7040576",
+    "vggtOmegaFallbackModel": "a8c3a718e0cf78e9e4c6847229efea793d37f060",
+    "vggtOmegaFallbackCheckpointUrl": "https://huggingface.co/1kaiser/vggt-omega-jax/resolve/a8c3a718e0cf78e9e4c6847229efea793d37f060/vggt_omega_1b_512.pt?download=true",
+    "vggtOmegaCheckpointSha256": "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934",
+    "environment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3",
     "comfyEnv": "0.3.89"
   },
   "inputs": {
-    "environmentTomlSha256": "6e19a0cd3a26940b863a6e63c7537e9a8382f98c176eb43f40e90a3de536c01b",
-    "installHash": "cea07d87e1e6fc6b5506587b6ade76ec73b6f91cddb6395bc9ce0bdfee715515"
+    "environmentTomlSha256": "118266675a106c3b864f5742413536db384539c3ba8f0cc5ac6063e37c9dfeee",
+    "installHash": "31d7e34cd7f477d267d0c6e23a42ea9a71dfc981013d25d28ce24ae877e81502"
   },
   "archive": {
     "name": "",

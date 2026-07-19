@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Sequence
 
 from .colab import ColabClient, parse_ready_payload
-from .notebook import write_notebook
+from .notebook import RuntimeResolvedMainNotebookConfig, write_notebook
+from .notebook import write_runtime_resolved_main_notebook
 from .packs.io import load_registry
 from .packs.lock import ComfyColabLockV1
 from .repositories import temporary_checkout
@@ -273,6 +274,27 @@ def _pack_rollback(args: argparse.Namespace) -> int:
 
 
 def _render_notebook(args: argparse.Namespace) -> int:
+    if args.runtime_resolve_main:
+        if args.repo_ref != "main":
+            raise ValueError("--runtime-resolve-main always resolves the public main ref")
+        if args.pack_ref:
+            raise ValueError("--runtime-resolve-main does not support local --pack-ref paths")
+        output = Path(args.output).expanduser().resolve()
+        config = RuntimeResolvedMainNotebookConfig.create(
+            core_repository=resolve_repository_url(args.repo_url),
+            profile=args.profile,
+            pack_aliases=args.pack,
+            port=args.port,
+            refresh=args.refresh,
+            colab_proxy=args.colab_proxy,
+            runtime_mode="legacy-full" if args.legacy_full else "generic",
+            accepted_licenses=args.accept_license,
+        )
+        write_runtime_resolved_main_notebook(output, config)
+        print(f"Notebook: {output}")
+        print("Core ref: main (resolved inside Colab at runtime)")
+        print("Lock: generated inside Colab after main resolves to an immutable commit")
+        return 0
     prepared = _prepare_launch(args)
     lock_path = _lock_path(args)
     _write_lock(lock_path, prepared.lock)
@@ -490,6 +512,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Use the authenticated compatibility runtime for the exact Image, Video, "
             "3D, and 3DGS daughter refs selected by the profile."
+        ),
+    )
+    notebook.add_argument(
+        "--runtime-resolve-main",
+        action="store_true",
+        help=(
+            "Render an opt-in public notebook that resolves the latest main commit "
+            "inside Colab, then converts it to the normal immutable stage-0 lock."
         ),
     )
     notebook.add_argument("--output", default="ComfyColab.ipynb")
