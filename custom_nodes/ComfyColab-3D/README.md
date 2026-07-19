@@ -1,12 +1,13 @@
 # ComfyColab 3D facade nodes
 
-This pack exposes seven normal-search ComfyUI V3 nodes:
+This pack exposes eight normal-search ComfyUI V3 nodes:
 
 - **ComfyColab TRELLIS.2 — Image to 3D**
 - **ComfyColab TRELLIS2MV — Multi-View to 3D**
 - **ComfyColab UltraShape — Refine Geometry**
 - **ComfyColab Pixal3D — Image to 3D**
 - **ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D**
+- **ComfyColab Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D**
 - **ComfyColab SkinTokens — Auto Rig 3D**
 - **ComfyColab CubePart — Segment 3D Parts**
 
@@ -20,6 +21,20 @@ Pixal3DMV is an explicitly experimental ReconViaGen-inspired projection-feature
 adapter, not official Pixal3D multiview support. SkinTokens and CubePart run in
 isolated workers. All graph/worker adapters are development-only, so the
 complete upstream TRELLIS suite remains available without cluttering search.
+
+Pixal3DMV Advanced keeps the same public multiview contract and per-view quality
+weights, then adds frozen VGGT-Ω-1B-512 depth/confidence guidance. One
+sequence-level Sim(3) aligns the predicted geometry to the exact labeled Pixal
+cameras. Geometry weights affect projected DINO/VAE conditioning only; global
+DINO tokens remain on the existing path, and VGGT register tokens are not
+injected. This is an experimental inference-time adapter, not official/native
+Pixal3D support or a trained Pixal/VGGT residual adapter.
+
+The official checkpoint is gated and noncommercial-research licensed.
+ComfyColab prefers it, then may use a revision-pinned community mirror only
+when its byte size and SHA-256 exactly match the official file. Strict mode is
+the default and is required for live validation. The optional weighted Pixal3D
+fallback is explicit in result metadata and never claims that VGGT-Ω ran.
 
 All public outputs are native string-path-backed `FILE_3D_GLB` values that
 connect directly to ComfyUI's Preview 3D and Save GLB nodes. Result cache data
@@ -52,8 +67,15 @@ The original Pixal3D facade stays single-image-only and retains its exact
 `1024 — Stable` / `1536 — Experimental` contract. Pixal3DMV is a separate node
 with required front/back/left/right views and an optional top/bottom pair; it
 never routes through a contact sheet. `keep_worker_loaded` keeps the isolated
-worker warm between requests. Every Pixal3D multiview live G4 gate remains
-pending until the validation runner records actual GPU evidence.
+worker warm between requests. The Advanced node additionally requires the
+pinned official VGGT-Ω source and the exact verified checkpoint in strict mode;
+checkpoint retrieval is official-first with a pinned public mirror fallback.
+The mirror path can bypass a failing Xet public-token request through the same
+revision-pinned immutable `resolve` URL, while retaining exact size/SHA checks.
+Local tests, schema registration, and weighted fallback behavior do not replace
+its strict live G4 proof. The base four-view Pixal3DMV path and strict Advanced
+VGGT-Ω path each have a validated FLUX.2 Klein 9B G4 run; six-view and broader
+input-quality coverage remain pending.
 
 SkinTokens returns a rigged GLB containing a skeleton and skin weights. Its
 texture-preserving transfer mode is enabled by default. CubePart requires a

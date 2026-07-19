@@ -23,7 +23,12 @@ ID, completion time, and passed-gate list for auditability.
 | TripoSplat model | `VAST-AI/TripoSplat@de3b99ab2627d565a8d5fc40f2db52557b82b974` |
 | Pixal3D source | `cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af` |
 | Pixal3D model | `0b31f9160aa400719af409098bff7936a932f726` |
-| Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1` |
+| Pixal3D nvdiffrast | `NVlabs/nvdiffrast@253ac4fcea7de5f396371124af597e6cc957bfae` |
+| VGGT-Ω source | `facebookresearch/vggt-omega@39a0cb8af88554f15ddcb5354cd52bde588fa014` |
+| VGGT-Ω model | `facebook/VGGT-Omega@05654241adc2f218dfb089c373a011f8a7040576` (gated) |
+| VGGT-Ω fallback | `1kaiser/vggt-omega-jax@a8c3a718e0cf78e9e4c6847229efea793d37f060` |
+| VGGT-Ω checkpoint SHA-256 | `c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934` |
+| Pixal3D worker profile | `g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3` |
 | SkinTokens source/model | `273b691d35989d71cd17ff2895fdc735097b92d1` / `VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33` |
 | CubePart source/model | `3c6d06ddbef3160a1e1950cb13ab63dd12a61e50` / `Roblox/cubepart@28431d124e77040fcaf34c0a71623ff61d35a6c0` |
 | DINOv2 Large | `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c` |
@@ -64,6 +69,11 @@ ID, completion time, and passed-gate list for auditability.
 - [x] TRELLIS2MV and experimental Pixal3DMV expose ordered four-view inputs
       with optional paired top/bottom views. Pixal3DMV serializes real
       view-aligned projection fusion and never uses a contact sheet.
+- [x] Advanced Pixal3DMV pins the official VGGT-Ω source/model revisions plus
+      a digest-verified public retrieval fallback, preserves exact Pixal
+      cameras and global tokens, applies depth/confidence weights only to
+      projection features, and labels strict/fallback behavior without
+      claiming a trained residual/register adapter.
 - [x] SkinTokens worker protocol validates skeleton/skin bindings and cleans
       cancelled outputs. CubePart gates provisioning on explicit research
       license acceptance and validates ordered per-part manifests.
@@ -95,10 +105,39 @@ path rather than a manual 512 override.
 | Pixal3D worker reuse 1024 | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
 | Pixal3D preview/save GLB reader | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
 | Pixal3D 1536 experimental | 1536 requested | n/a | pending | pending | pending | pending | 4096 requested | pending live G4 |
-| TRELLIS2MV four-view | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
-| Pixal3DMV four-view experimental | 1024 requested | n/a | pending | pending | pending | pending | 2048 requested | pending live G4 |
+| TRELLIS2MV four-view / FLUX.2 Klein 9B | 512 | n/a | 182.76 s | not captured | 9,023,296 | 149,099 | 1024 | passed live G4; textured, rank 3 |
+| Pixal3DMV four-view experimental / FLUX.2 Klein 9B | 1024 | 15,808 | 128.88 s worker / 232.58 s workflow | 57,337,375,616 B | 6,295,492 | 149,162 | 1024 | passed live G4; textured, rank 3 |
+| Pixal3DMV Advanced / VGGT-Ω strict | 1024 | 15,416 | 74.86 s worker / 101.25 s workflow | 57,337,113,280 B worker / 63,888,687,104 B workflow | 6,062,468 | 143,940 | 1024 | passed live G4; textured, rank 3; Sim(3) normalized RMS 0.0655 |
 | SkinTokens auto-rig | n/a | n/a | pending | pending | pending rigged GLB | pending joints/skins | preserve input | pending live G4 |
 | CubePart schema decomposition | n/a | n/a | pending | pending | pending combined/per-part GLBs | pending part count | colored parts | pending live G4 |
+
+The multiview probe used one camera-faithful four-view toy-van set generated
+live by FLUX.2 Klein 9B (front, back, left, right). The same four files were
+fed unchanged to both reconstruction nodes. The FLUX contact sheet SHA-256 is
+`2c54479647c7b13782ef6e9faf9a3fcdb0ddca4f825a338882fec2a9f4199ba8`.
+TRELLIS2MV prompt `8035c2d3-3978-4d5d-8ca6-29af1069cdce` produced GLB
+`d7face8d0a9c4c6975c7d091a6f252717598eab51297a582d43f34cbe0fd03c4`;
+Pixal3DMV prompt `7d5bd370-331c-4581-a586-c0c5d97c8fe5` produced GLB
+`1941019ca59d07a9936ab5a73a90f3e1c041aa93f365c647180bed70214aa951`.
+Both outputs passed exact volumetric validation with no collapse reasons.
+
+The Advanced facade still prefers the official gated checkpoint. If that
+download fails, it may retrieve the byte-identical checkpoint from the pinned
+`1kaiser/vggt-omega-jax` mirror. Both sources must resolve to the exact
+4,576,706,117-byte file and SHA-256 recorded above. A weighted Pixal3D fallback
+is not counted as Advanced-node validation. If the Hub Xet client rejects its
+public-token request, the mirror downloader may use the same pinned revision's
+immutable direct `resolve` URL, still gated by the exact size and SHA-256.
+
+Strict run `g4-7aa0844849334f72`, prompt
+`fc9dbe5b-5378-4cc5-9c7d-434ea2781d95`, used the exact-digest mirror path in an
+unauthenticated Colab runtime. It recorded VGGT-Ω depth/confidence inference,
+valid sequence-level Sim(3) alignment with normalized RMS
+`0.06550437211564838`, exact labeled Pixal camera policy, no register-token
+injection, and GLB SHA-256
+`ac89840c533a22a4a1af0b27fca571540e45272bb124d5e37ac44a0a40ad00b0`.
+The downloaded artifact independently passed material, texture, UV, exact
+rank-3, surface-area, and noncollapse validation.
 
 `Conservative` is the new public 24-step 512 tier. `Fast` remains 512, while
 `Detailed` and `Ultra` preserve their existing 1024 semantics and remain
@@ -146,19 +185,18 @@ non-zero byte size, binary little-endian 3DGS property validation, Gaussian
 count, runtime, peak VRAM, and model revision. The gate remains pending until
 that evidence comes from an actual live G4 run.
 
-Pixal3D live GPU execution is not locally proven. Its isolated hidden worker,
-official pinned `TencentARC/Pixal3D` source, first-download/build behavior,
-cache-hit inference suppression, `keep_worker_loaded` reuse behavior,
-cancellation cleanup, 1024 output quality, 1536 experimental output quality,
-Preview3D compatibility, and SaveGLB compatibility are all pending live G4
-gates. Do not promote the Pixal3D worker cache or mark any Pixal3D gate passed
-from local workflow JSON or unit tests alone.
+Pixal3D's experimental four-view projection-fusion path now has one live G4
+proof from the FLUX.2 Klein 9B van set. Its separate cold/single-view,
+cache-hit, worker-reuse, cancellation, preview-reader, and 1536 gates remain
+pending, so the worker cache is not release-ready.
 
-The same evidence boundary applies to the new nodes. TRELLIS2MV needs genuine
-four- and six-view GLBs, Pixal3DMV needs quality and VRAM evidence from its
-experimental four-view projection fusion, SkinTokens needs a GLB with verified
-skins/joints, and CubePart needs a combined scene plus ordered per-part GLBs.
-Local protocol/schema tests do not satisfy those gates.
+TRELLIS2MV likewise has one genuine four-view textured GLB. Its six-view gate
+remains pending. Advanced Pixal3DMV now has a strict verified VGGT-Ω run through
+the exact-digest mirror retrieval path; future official-source runs must resolve
+to the same checkpoint digest. Schema loading or the explicit weighted
+Pixal3D fallback cannot pass that gate. SkinTokens still needs a GLB with
+verified skins/joints, and CubePart still needs a combined scene plus ordered
+per-part GLBs. Local protocol/schema tests do not satisfy those gates.
 
 The five-stage/dual-preview verifier is locally covered but has not yet been
 executed against a new Colab runtime. A future live run must capture its
@@ -206,7 +244,9 @@ provenance.
 - [ ] Pixal3D cache hit performs no worker inference
 - [ ] Pixal3D cancellation leaves no worker process, partial GLB, or retained allocation
 - [ ] Pixal3D 1536 experimental completes without silent downgrade
-- [ ] TRELLIS2MV four-view and six-view runs produce textured GLBs
-- [ ] Pixal3DMV four-view experimental run produces a textured GLB without a contact sheet
+- [x] TRELLIS2MV four-view FLUX.2 Klein 9B run produces a textured GLB
+- [x] Pixal3DMV four-view FLUX.2 Klein 9B run produces a textured GLB without a contact sheet
+- [ ] TRELLIS2MV six-view run produces a textured GLB
+- [x] Advanced Pixal3DMV strict VGGT-Ω run records alignment/depth guidance and produces a textured GLB
 - [ ] SkinTokens produces a rigged GLB with valid skin, joints, and skinned mesh nodes
 - [ ] CubePart produces a combined GLB, ordered per-part GLBs, and matching manifest

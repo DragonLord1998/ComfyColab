@@ -17,6 +17,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
             WORKFLOWS / "comfycolab_pixal3d_image_to_3d.json",
             WORKFLOWS / "comfycolab_trellis2mv_to_3d.json",
             WORKFLOWS / "comfycolab_pixal3dmv_to_3d.json",
+            WORKFLOWS / "comfycolab_pixal3dmv_advanced_to_3d.json",
             WORKFLOWS / "comfycolab_skintokens_auto_rig.json",
             WORKFLOWS / "comfycolab_cubepart_segment.json",
         ]
@@ -76,6 +77,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
         expected = {
             "comfycolab_trellis2mv_to_3d.json": "ComfyColabTrellis2MV",
             "comfycolab_pixal3dmv_to_3d.json": "ComfyColabPixal3DMV",
+            "comfycolab_pixal3dmv_advanced_to_3d.json": "ComfyColabPixal3DMVAdvanced",
             "comfycolab_skintokens_auto_rig.json": "ComfyColabSkinTokensAutoRig",
             "comfycolab_cubepart_segment.json": "ComfyColabCubePartSegment",
         }
@@ -91,6 +93,29 @@ class ThreeDWorkflowTests(unittest.TestCase):
         )
         node = next(item for item in cube["nodes"] if item["type"] == "ComfyColabCubePartSegment")
         self.assertFalse(node["widgets_values"][1], "example must not pre-accept research terms")
+
+        advanced = json.loads(
+            (WORKFLOWS / "comfycolab_pixal3dmv_advanced_to_3d.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        node = next(
+            item
+            for item in advanced["nodes"]
+            if item["type"] == "ComfyColabPixal3DMVAdvanced"
+        )
+        input_names = [item["name"] for item in node["inputs"]]
+        self.assertIn("geometry_fallback", input_names)
+        self.assertIn("geometry_strength", input_names)
+        self.assertIn("max_normalized_alignment_error", input_names)
+        widget_names = [
+            item["widget"]["name"] for item in node["inputs"] if "widget" in item
+        ]
+        widget_values = dict(zip(widget_names, node["widgets_values"]))
+        self.assertEqual(
+            widget_values["geometry_fallback"],
+            "Strict — require VGGT-Ω",
+        )
 
 
 if __name__ == "__main__":

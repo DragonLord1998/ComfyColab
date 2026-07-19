@@ -273,6 +273,7 @@ class ThreeDNodePackTests(unittest.TestCase):
                 "ComfyColabUltraShapeRefine",
                 "ComfyColabPixal3DImageTo3D",
                 "ComfyColabPixal3DMV",
+                "ComfyColabPixal3DMVAdvanced",
                 "ComfyColabSkinTokensAutoRig",
                 "ComfyColabCubePartSegment",
             ],
@@ -283,6 +284,7 @@ class ThreeDNodePackTests(unittest.TestCase):
         pixal = schemas_by_id["ComfyColabPixal3DImageTo3D"]
         trellis_mv = schemas_by_id["ComfyColabTrellis2MV"]
         pixal_mv = schemas_by_id["ComfyColabPixal3DMV"]
+        pixal_mv_advanced = schemas_by_id["ComfyColabPixal3DMVAdvanced"]
         skintokens = schemas_by_id["ComfyColabSkinTokensAutoRig"]
         cubepart = schemas_by_id["ComfyColabCubePartSegment"]
         self.assertEqual(trellis.display_name, "ComfyColab TRELLIS.2 — Image to 3D")
@@ -291,6 +293,9 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(pixal.display_name, "ComfyColab Pixal3D — Image to 3D")
         self.assertEqual(trellis_mv.display_name, "ComfyColab TRELLIS2MV — Multi-View to 3D")
         self.assertIn("not official Pixal3D multiview support", pixal_mv.description)
+        self.assertIn("vggt-ω guided", pixal_mv_advanced.display_name.lower())
+        self.assertIn("not official/native", pixal_mv_advanced.description.lower())
+        self.assertIn("noncommercial", pixal_mv_advanced.description.lower())
         self.assertEqual(skintokens.outputs[0]["name"], "rigged_model_3d")
         self.assertEqual(cubepart.outputs[0]["name"], "segmented_model_3d")
         self.assertIn("not unlabeled", cubepart.description)
@@ -324,6 +329,51 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(pixal_inputs["cache_mode"]["default"], "Use cache")
         self.assertNotIn("mode", pixal_inputs)
         self.assertNotIn("num_views", pixal_inputs)
+        pixal_mv_advanced_inputs = {item["name"]: item for item in pixal_mv_advanced.inputs}
+        self.assertEqual(
+            list(pixal_mv_advanced_inputs),
+            [
+                "front_image",
+                "back_image",
+                "left_image",
+                "right_image",
+                "top_image",
+                "bottom_image",
+                "quality",
+                "seed",
+                "front_quality",
+                "back_quality",
+                "left_quality",
+                "right_quality",
+                "top_quality",
+                "bottom_quality",
+                "fusion_strategy",
+                "fusion_temperature",
+                "geometry_fallback",
+                "geometry_strength",
+                "confidence_exponent",
+                "depth_tolerance",
+                "occlusion_margin",
+                "occlusion_tau",
+                "geometry_floor",
+                "max_normalized_alignment_error",
+                "remove_background",
+                "camera_fov_degrees",
+                "sampling_steps",
+                "target_face_count",
+                "texture_size",
+                "max_tokens",
+                "keep_worker_loaded",
+                "cache_mode",
+            ],
+        )
+        self.assertEqual(pixal_mv_advanced_inputs["front_quality"]["default"], 1.0)
+        self.assertEqual(
+            pixal_mv_advanced_inputs["geometry_fallback"]["default"],
+            "Strict — require VGGT-Ω",
+        )
+        self.assertTrue(pixal_mv_advanced_inputs["top_quality"]["optional"])
+        self.assertTrue(pixal_mv_advanced_inputs["bottom_quality"]["optional"])
         encoded_schema = next(schema for schema in schemas if schema.node_id == "ComfyColab3DEncodedMeshToTrimesh")
         self.assertEqual(encoded_schema.inputs[0]["io_type"], "TRELLIS2_SHAPE_LATENT")
 
@@ -426,6 +476,60 @@ class ThreeDNodePackTests(unittest.TestCase):
         self.assertEqual(
             [name for name in pixal_worker["inputs"] if name.endswith("_image")],
             ["front_image", "back_image", "left_image", "right_image"],
+        )
+        self.assertEqual(pixal_worker["inputs"]["front_quality"], 1.0)
+        self.assertNotIn("top_quality", pixal_worker["inputs"])
+        self.assertNotIn("geometry_guidance", pixal_worker["inputs"])
+
+        advanced_result = graph.build_pixal3d_multiview_graph(
+            "front",
+            presets.resolve_pixal3d_settings("1024 — Stable"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            top_image="top",
+            bottom_image="bottom",
+            view_quality={
+                "front": 1.5,
+                "back": 1.25,
+                "left": 0.75,
+                "right": 1.0,
+                "top": 0.5,
+                "bottom": 0.25,
+            },
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback="strict",
+            geometry_strength=0.8,
+            confidence_exponent=1.25,
+            depth_tolerance=0.09,
+            occlusion_margin=0.05,
+            occlusion_tau=0.02,
+            geometry_floor=0.04,
+            max_normalized_alignment_error=0.3,
+            seed=3,
+            remove_background="Off",
+            camera_fov_degrees=0.0,
+            fusion_strategy="average",
+            fusion_temperature=2.0,
+            keep_worker_loaded=True,
+            cache_mode="Disable cache",
+            cache_key="c" * 64,
+        )
+        advanced_worker = next(
+            item for item in advanced_result.expand
+            if item["class_type"] == "ComfyColab3DPixal3DMultiViewWorker"
+        )
+        self.assertEqual(advanced_worker["inputs"]["top_quality"], 0.5)
+        self.assertEqual(advanced_worker["inputs"]["bottom_quality"], 0.25)
+        self.assertEqual(
+            advanced_worker["inputs"]["geometry_guidance"],
+            "vggt_omega_depth_conf",
+        )
+        self.assertEqual(advanced_worker["inputs"]["geometry_fallback"], "strict")
+        self.assertEqual(advanced_worker["inputs"]["geometry_strength"], 0.8)
+        self.assertEqual(
+            advanced_worker["inputs"]["max_normalized_alignment_error"],
+            0.3,
         )
 
     def test_cubepart_public_node_blocks_before_provisioning_without_license_acceptance(self):
@@ -545,6 +649,264 @@ class ThreeDNodePackTests(unittest.TestCase):
 
         self.assertEqual(result.values[0][1], "glb")
         self.assertTrue(result.values[0][0].endswith(f"{current}.glb"))
+
+    def test_advanced_pixal3dmv_cache_key_captures_omega_and_geometry_controls(self):
+        load_package()
+        cache = importlib.import_module("comfycolab_3d_test.cache")
+        presets = importlib.import_module("comfycolab_3d_test.presets")
+        settings = presets.resolve_pixal3d_settings("1024 — Stable")
+        common = {
+            "views": {
+                "front": "front",
+                "back": "back",
+                "left": "left",
+                "right": "right",
+            },
+            "settings": settings,
+            "seed": 4,
+            "remove_background": "Auto",
+            "camera_fov_degrees": 0.0,
+            "fusion_strategy": "directional_softmax",
+            "fusion_temperature": 2.0,
+            "view_quality": {"front": 1.0, "back": 0.8},
+            "source_ref": "pixal-source",
+            "model_ref": "pixal-model",
+            "dinov3_ref": "dinov3",
+            "moge_ref": "moge",
+            "naf_ref": "naf",
+            "environment_ref": "env-v3",
+        }
+
+        base = cache.pixal3d_multiview_cache_key(**common)
+        advanced = cache.pixal3d_multiview_cache_key(
+            **common,
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback="strict",
+            vggt_omega_source_ref="omega-source-a",
+            vggt_omega_checkpoint_ref="omega-model-a",
+            geometry_strength=0.75,
+        )
+        changed_model = cache.pixal3d_multiview_cache_key(
+            **common,
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback="strict",
+            vggt_omega_source_ref="omega-source-a",
+            vggt_omega_checkpoint_ref="omega-model-b",
+            geometry_strength=0.75,
+        )
+        changed_strength = cache.pixal3d_multiview_cache_key(
+            **common,
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback="strict",
+            vggt_omega_source_ref="omega-source-a",
+            vggt_omega_checkpoint_ref="omega-model-a",
+            geometry_strength=0.5,
+        )
+
+        self.assertNotEqual(base, advanced)
+        self.assertNotEqual(advanced, changed_model)
+        self.assertNotEqual(advanced, changed_strength)
+
+    def test_advanced_pixal3dmv_source_provisioning_failure_uses_explicit_fallback(
+        self,
+    ):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        pixal_worker = importlib.import_module("comfycolab_3d_test.pixal3d_worker")
+        observed = {}
+
+        def fail_advanced(_root, *, progress):
+            del progress
+            raise RuntimeError(
+                "Unable to provision pinned source "
+                "https://github.com/facebookresearch/vggt-omega.git@omega-source"
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_directory = root / "output"
+            output_directory.mkdir()
+            base_artifacts = types.SimpleNamespace(
+                model_dir=root / "pixal3d",
+                dinov3_dir=root / "dinov3",
+                moge_dir=root / "moge",
+                naf_source_dir=root / "naf",
+                naf_checkpoint=root / "naf.pth",
+            )
+            artifact_module = types.SimpleNamespace(
+                PIXAL3D_SOURCE_REF="pixal-source",
+                PIXAL3D_MODEL_REF="pixal-model",
+                DINOV3_MODEL_REF="dinov3-model",
+                MOGE_MODEL_REF="moge-model",
+                NAF_SOURCE_REF="naf-source",
+                NAF_CHECKPOINT_SHA256="naf-checkpoint",
+                PIXAL3D_ENVIRONMENT_REF="pixal-environment",
+                VGGT_OMEGA_SOURCE_REF="omega-source",
+                VGGT_OMEGA_MODEL_REF="omega-model",
+                ensure_pixal3d_advanced_artifacts=fail_advanced,
+                ensure_pixal3d_artifacts=lambda _root, *, progress: base_artifacts,
+            )
+
+            class Pool:
+                def run(self, command, **_kwargs):
+                    observed["command"] = command
+                    return {"status": "ok"}
+
+            with mock.patch.object(
+                nodes,
+                "_load_pixal3d_artifact_provisioner",
+                return_value=artifact_module,
+            ), mock.patch.object(
+                nodes,
+                "_worker_callbacks",
+                return_value=(lambda _event: None, lambda: False),
+            ), mock.patch.object(
+                nodes,
+                "_save_reference_image",
+                side_effect=lambda _image, _mask, path: Path(path).write_bytes(b"png"),
+            ), mock.patch.object(
+                nodes,
+                "_make_temp_directory",
+                return_value=output_directory,
+            ), mock.patch.object(
+                nodes,
+                "global_pixal3d_worker_pool",
+                return_value=Pool(),
+            ):
+                nodes.ComfyColab3DPixal3DMultiViewWorker.execute(
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    "1024_cascade",
+                    3,
+                    12,
+                    200_000,
+                    2048,
+                    49_152,
+                    0.0,
+                    "directional_softmax",
+                    2.0,
+                    geometry_guidance="vggt_omega_depth_conf",
+                    geometry_fallback="weighted_mv",
+                )
+
+        command = observed["command"]
+        request = pixal_worker.build_pixal3d_request(command)
+        self.assertEqual(command.geometry_guidance, "none")
+        self.assertEqual(request["geometry_guidance"], "none")
+        self.assertEqual(request["geometry_requested"], "vggt_omega_depth_conf")
+        self.assertEqual(request["geometry_fallback"], "weighted_mv")
+        self.assertEqual(
+            request["geometry_fallback_stage"],
+            "artifact_provisioning",
+        )
+        self.assertIn("vggt-omega", request["geometry_fallback_reason"])
+        self.assertNotIn("vggt_omega_source", request["revisions"])
+        self.assertNotIn("--vggt-omega-source-dir", command.server_argv())
+
+    def test_advanced_pixal3dmv_uses_resolved_mirror_checkpoint_revision(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        pixal_worker = importlib.import_module("comfycolab_3d_test.pixal3d_worker")
+        observed = {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_directory = root / "output"
+            output_directory.mkdir()
+            advanced_artifacts = types.SimpleNamespace(
+                model_dir=root / "pixal3d",
+                dinov3_dir=root / "dinov3",
+                moge_dir=root / "moge",
+                naf_source_dir=root / "naf",
+                naf_checkpoint=root / "naf.pth",
+                vggt_omega_source_dir=root / "vggt-omega",
+                vggt_omega_checkpoint=root / "omega-mirror" / "vggt_omega_1b_512.pt",
+                vggt_omega_checkpoint_repo="mirror/omega",
+                vggt_omega_checkpoint_ref="omega-mirror-revision",
+                vggt_omega_checkpoint_fallback=True,
+            )
+            artifact_module = types.SimpleNamespace(
+                PIXAL3D_SOURCE_REF="pixal-source",
+                PIXAL3D_MODEL_REF="pixal-model",
+                DINOV3_MODEL_REF="dinov3-model",
+                MOGE_MODEL_REF="moge-model",
+                NAF_SOURCE_REF="naf-source",
+                NAF_CHECKPOINT_SHA256="naf-checkpoint",
+                PIXAL3D_ENVIRONMENT_REF="pixal-environment",
+                VGGT_OMEGA_SOURCE_REF="omega-source",
+                VGGT_OMEGA_MODEL_REF="omega-official-model",
+                ensure_pixal3d_advanced_artifacts=(
+                    lambda _root, *, progress: advanced_artifacts
+                ),
+            )
+
+            class Pool:
+                def run(self, command, **_kwargs):
+                    observed["command"] = command
+                    return {"status": "ok"}
+
+            with mock.patch.object(
+                nodes,
+                "_load_pixal3d_artifact_provisioner",
+                return_value=artifact_module,
+            ), mock.patch.object(
+                nodes,
+                "_worker_callbacks",
+                return_value=(lambda _event: None, lambda: False),
+            ), mock.patch.object(
+                nodes,
+                "_save_reference_image",
+                side_effect=lambda _image, _mask, path: Path(path).write_bytes(b"png"),
+            ), mock.patch.object(
+                nodes,
+                "_make_temp_directory",
+                return_value=output_directory,
+            ), mock.patch.object(
+                nodes,
+                "global_pixal3d_worker_pool",
+                return_value=Pool(),
+            ):
+                nodes.ComfyColab3DPixal3DMultiViewWorker.execute(
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    object(),
+                    object(),
+                    1.0,
+                    "1024_cascade",
+                    3,
+                    12,
+                    200_000,
+                    2048,
+                    49_152,
+                    0.0,
+                    "directional_softmax",
+                    2.0,
+                    geometry_guidance="vggt_omega_depth_conf",
+                    geometry_fallback="strict",
+                )
+
+        request = pixal_worker.build_pixal3d_request(observed["command"])
+        self.assertEqual(
+            request["revisions"]["vggt_omega_checkpoint"],
+            "omega-mirror-revision",
+        )
 
     def test_pixal3d_rejects_invalid_cached_glb_before_cache_hit(self):
         load_package()
@@ -1069,6 +1431,33 @@ class ThreeDNodePackTests(unittest.TestCase):
             write_glb(path, empty_primitives=True)
             with self.assertRaisesRegex(ValueError, "no primitives"):
                 file3d.validate_glb(path)
+
+    def test_glb_validation_accepts_extension_backed_texture_sources(self):
+        load_package()
+        file3d = importlib.import_module("comfycolab_3d_test.file3d")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.glb"
+            for extension in ("EXT_texture_webp", "KHR_texture_basisu"):
+                write_glb(path, textured=True)
+                rewrite_glb_document(
+                    path,
+                    lambda document, extension=extension: document["textures"][0].update(
+                        {"extensions": {extension: {"source": 0}}}
+                    ),
+                )
+                rewrite_glb_document(
+                    path,
+                    lambda document: document["textures"][0].pop("source"),
+                )
+                document = file3d.validate_glb(
+                    path,
+                    require_texture=True,
+                    require_uv=True,
+                )
+                self.assertEqual(
+                    document["textures"][0]["extensions"][extension]["source"],
+                    0,
+                )
 
     def test_glb_validation_enforces_triangle_accessor_semantics(self):
         load_package()

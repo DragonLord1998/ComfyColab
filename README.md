@@ -400,8 +400,9 @@ GPU/CPU memory. Turn it off for one-shot validation or after memory pressure.
 The result cache follows the normal 3D cache controls: `Use cache` reuses a
 validated GLB for the same image/settings/source revisions, `Refresh this node`
 recomputes and overwrites the Pixal3D result, and `Disable cache` avoids result
-cache reads and writes. Every Pixal3D live G4 gate is still pending; the local
-workflow and contract tests do not prove model execution or output quality.
+cache reads and writes. The four-view Pixal3DMV and strict Advanced VGGT-Ω
+paths now have live G4 proofs using FLUX.2 Klein 9B views; the remaining
+single-view, reuse, cancellation, and 1536 gates stay separate and pending.
 
 ### Pixal3DMV — Experimental Multi-View to 3D
 
@@ -416,8 +417,45 @@ batch of unrelated single-image runs is multiview inference.
 `Directional projection` uses spatial softmax weights so each 3D location
 favors the nearest labeled camera; `Average projection` is a diagnostic equal
 blend. Both modes average global image features and preserve the official
-single-view tensor contracts downstream. This zero-shot adapter has local
-contract tests only and remains pending a real G4 quality/VRAM validation.
+single-view tensor contracts downstream. A live G4 four-view FLUX.2 Klein 9B
+probe produced a validated textured 1024 GLB; six-view and broader quality
+coverage remain pending.
+
+### Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D
+
+The Advanced facade keeps the existing four required labeled views, optional
+top/bottom pair, and per-view quality controls, then adds a frozen
+VGGT-Ω-1B-512 geometry prepass. VGGT-Ω predicts depth, confidence, and cameras
+jointly. One sequence-level Sim(3) aligns its inferred camera/depth space to
+Pixal3D's canonical labeled cameras; the exact Pixal cameras remain
+authoritative. Aligned depth, confidence, and soft occlusion agreement weight
+only Pixal3D's projected DINO/VAE features. Global DINO tokens keep their
+existing quality-weighted path, and VGGT register tokens are diagnostic only.
+
+This is a truthful inference-time MVP of the attached depth-aware design, not a
+trained Pixal/VGGT residual adapter and not official/native Pixal3D multiview
+support. It does not claim the later training-data, robust semantic-outlier,
+coarse-part reinsertion, seam preservation, or register-token training stages.
+`Strict — require VGGT-Ω` is the default release-validation mode. The explicit
+`Weighted MV fallback` option records the failed stage and fallback status in
+result metadata instead of presenting a normal weighted run as Ω-guided.
+
+The official checkpoint is gated; its Hugging Face repository is labeled
+CC BY-NC 4.0, while the pinned source repository uses the FAIR Noncommercial
+Research License v1. ComfyColab tries the official model source first, then may
+retrieve the byte-identical checkpoint from the revision-pinned
+`1kaiser/vggt-omega-jax` mirror. Both paths must match the official
+4,576,706,117-byte file and SHA-256
+`c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934`.
+If the optional Hugging Face Xet client cannot obtain a public read token,
+ComfyColab retries that same immutable mirror revision through its direct
+`resolve` URL and applies the same byte-count and SHA-256 gate.
+The mirror has no independent license metadata: its availability is not a
+grant of rights or official access approval, and users remain responsible for
+the applicable upstream checkpoint terms and access conditions. The strict
+live G4 gate passed with run `g4-7aa0844849334f72`: the Ω adapter recorded
+valid Sim(3) alignment and produced a textured, rank-3, noncollapsed 1024 GLB.
+Local tests and a weighted Pixal3D fallback still cannot satisfy that gate.
 
 ### SkinTokens — Auto Rig 3D
 

@@ -1,6 +1,6 @@
 schema = 1
 name = "pixal3d-worker"
-profile = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v1"
+profile = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
 python = "3.12.13"
 platform = "linux-64"
 cuda = "12.8"
@@ -18,6 +18,14 @@ moge_model = "39c4d5e957afe587e04eec59dc2bcc3be5ecd968"
 moge_source = "07444410f1e33f402353b99d6ccd26bd31e469e8"
 naf = "37f2dfc180f2de53d98bd601109c0da0dd6b0f43"
 naf_checkpoint_sha256 = "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
+nvdiffrast = "253ac4fcea7de5f396371124af597e6cc957bfae"
+vggt_omega = "39a0cb8af88554f15ddcb5354cd52bde588fa014"
+vggt_omega_model_repo = "facebook/VGGT-Omega"
+vggt_omega_model = "05654241adc2f218dfb089c373a011f8a7040576"
+vggt_omega_fallback_model_repo = "1kaiser/vggt-omega-jax"
+vggt_omega_fallback_model = "a8c3a718e0cf78e9e4c6847229efea793d37f060"
+vggt_omega_fallback_checkpoint_url = "https://huggingface.co/1kaiser/vggt-omega-jax/resolve/a8c3a718e0cf78e9e4c6847229efea793d37f060/vggt_omega_1b_512.pt?download=true"
+vggt_omega_checkpoint_sha256 = "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"
 utils3d = "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl"
 natten = "natten==0.21.6+torch2110cu128"
 comfy_env = "0.3.89"
@@ -40,6 +48,8 @@ requirements = [
   "accelerate==1.13.0",
   "plyfile==1.1.3",
   "huggingface_hub>=0.36.0",
+  "einops==0.8.1",
+  "safetensors==0.7.0",
 ]
 extra_wheels = [
   "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
@@ -48,6 +58,7 @@ native_packages = [
   "flex_gemm_ap",
   "cumesh_vb",
   "o_voxel_vb_ap",
+  "git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae",
   "flash-attn",
   "drtk",
   "natten==0.21.6+torch2110cu128",
@@ -63,7 +74,10 @@ imports = [
   "cumesh",
   "flex_gemm",
   "drtk",
+  "nvdiffrast.torch",
   "trimesh",
+  "einops",
+  "safetensors",
   "pixal3d.pipelines.Pixal3DImageTo3DPipeline",
 ]
 requires_cuda = true

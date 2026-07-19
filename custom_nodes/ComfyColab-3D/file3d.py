@@ -21,6 +21,19 @@ _COMPONENT_FORMATS = {
 _TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
 
 
+def _texture_image_index(texture: dict[str, Any]) -> int | None:
+    """Resolve core or extension-backed glTF texture image sources."""
+
+    extensions = texture.get("extensions")
+    if isinstance(extensions, dict):
+        for name in ("EXT_texture_webp", "KHR_texture_basisu"):
+            extension = extensions.get(name)
+            if isinstance(extension, dict) and isinstance(extension.get("source"), int):
+                return int(extension["source"])
+    source = texture.get("source")
+    return int(source) if isinstance(source, int) else None
+
+
 def _iter_accessor(
     document: dict[str, Any], binary: bytes, index: int
 ) -> tuple[int, Iterator[tuple[Any, ...]]]:
@@ -191,7 +204,7 @@ def _validate_glb_impl(
             texture_index = materials[material_index]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
             if texture_index < 0 or texture_index >= len(textures):
                 raise ValueError("GLB material references an invalid texture")
-            image_index = textures[texture_index].get("source")
+            image_index = _texture_image_index(textures[texture_index])
             if not isinstance(image_index, int) or image_index < 0 or image_index >= len(images):
                 raise ValueError("GLB texture references an invalid image")
             image = images[image_index]

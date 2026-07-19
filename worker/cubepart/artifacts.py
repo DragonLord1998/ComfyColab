@@ -19,7 +19,13 @@ CUBEPART_MODEL_REPO = "Roblox/cubepart"
 CUBEPART_MODEL_REF = "28431d124e77040fcaf34c0a71623ff61d35a6c0"
 CUBEPART_CHECKPOINT = "multi_part_dit.safetensors"
 CUBEPART_VAE_CHECKPOINT = "vae.safetensors"
-CUBEPART_ENVIRONMENT_REF = "g4-linux64-py31213-cubepart-v1"
+CUBEPART_ENVIRONMENT_REF = "g4-linux64-py31213-cubepart-v2"
+CUBEPART_RUNTIME_REQUIREMENTS = (
+    "diffusers==0.37.1",
+    "transformers==4.57.3",
+    "accelerate==1.13.0",
+    "huggingface-hub>=0.36.0,<1.0",
+)
 CUBEPART_CODE_LICENSE = "Cube3D Research-Only RAIL-MS"
 CUBEPART_WEIGHTS_LICENSE = "OpenRAIL / Cube3D Research-Only RAIL-MS"
 ARTIFACT_SCHEMA = "comfycolab-cubepart-artifacts-v1"
@@ -85,6 +91,7 @@ def _ensure_environment(source: Path, environment: Path) -> Path:
     if (
         payload.get("environment_ref") == CUBEPART_ENVIRONMENT_REF
         and payload.get("source_ref") == CUBEPART_SOURCE_REF
+        and payload.get("runtime_requirements") == list(CUBEPART_RUNTIME_REQUIREMENTS)
         and python.is_file()
     ):
         return python
@@ -112,10 +119,14 @@ def _ensure_environment(source: Path, environment: Path) -> Path:
     subprocess.check_call(
         [str(python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]
     )
+    subprocess.check_call(
+        [str(python), "-m", "pip", "install", *CUBEPART_RUNTIME_REQUIREMENTS]
+    )
     subprocess.check_call([str(python), "-m", "pip", "install", "-e", str(source)])
     payload = {
         "schema": ARTIFACT_SCHEMA,
         "environment_ref": CUBEPART_ENVIRONMENT_REF,
+        "runtime_requirements": list(CUBEPART_RUNTIME_REQUIREMENTS),
         "source_dir": str(source),
         "source_ref": CUBEPART_SOURCE_REF,
         "license": cubepart_license_metadata(),
@@ -274,6 +285,7 @@ __all__ = [
     "CUBEPART_ENVIRONMENT_REF",
     "CUBEPART_MODEL_REF",
     "CUBEPART_MODEL_REPO",
+    "CUBEPART_RUNTIME_REQUIREMENTS",
     "CUBEPART_SOURCE_REF",
     "CUBEPART_VAE_CHECKPOINT",
     "CUBEPART_WEIGHTS_LICENSE",

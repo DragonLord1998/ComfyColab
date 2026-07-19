@@ -886,6 +886,259 @@ class ComfyColabPixal3DMV:
         )
 
 
+class ComfyColabPixal3DMVAdvanced:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id="ComfyColabPixal3DMVAdvanced",
+            display_name="ComfyColab Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D",
+            category="ComfyColab/3D",
+            description=(
+                "Experimental frozen VGGT-Ω depth/confidence guidance for the existing "
+                "Pixal3D labeled-view projection adapter. Exact Pixal cameras remain "
+                "authoritative; this is not official/native Pixal3D multiview support "
+                "and does not use a trained Pixal/VGGT feature adapter. The official "
+                "VGGT-Ω checkpoint is gated; an exact-digest pinned public mirror is "
+                "available as a retrieval fallback. The checkpoint remains "
+                "noncommercial-research licensed."
+            ),
+            enable_expand=True,
+            inputs=[
+                io.Image.Input("front_image", tooltip="Object viewed from the front."),
+                io.Image.Input("back_image", tooltip="Object viewed from directly behind."),
+                io.Image.Input("left_image", tooltip="Object viewed from its left side."),
+                io.Image.Input("right_image", tooltip="Object viewed from its right side."),
+                io.Image.Input("top_image", optional=True, tooltip="Optional top-down view; connect bottom_image too."),
+                io.Image.Input("bottom_image", optional=True, tooltip="Optional bottom-up view; connect top_image too."),
+                io.Combo.Input("quality", options=list(PIXAL3D_PRESETS), default="1024 — Stable"),
+                io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
+                io.Float.Input("front_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("back_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("left_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("right_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
+                io.Float.Input("top_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
+                io.Float.Input("bottom_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
+                io.Combo.Input(
+                    "fusion_strategy",
+                    options=["Directional projection", "Average projection"],
+                    default="Directional projection",
+                    advanced=True,
+                ),
+                io.Float.Input("fusion_temperature", default=2.0, min=0.1, max=10.0, step=0.1, advanced=True),
+                io.Combo.Input(
+                    "geometry_fallback",
+                    options=["Strict — require VGGT-Ω", "Weighted MV fallback"],
+                    default="Strict — require VGGT-Ω",
+                    tooltip=(
+                        "Strict fails unless the exact verified VGGT-Ω checkpoint runs. "
+                        "Fallback explicitly records that ordinary weighted MV was used."
+                    ),
+                ),
+                io.Float.Input("geometry_strength", default=0.75, min=0.0, max=1.0, step=0.05, advanced=True),
+                io.Float.Input("confidence_exponent", default=1.0, min=0.0, max=4.0, step=0.05, advanced=True),
+                io.Float.Input("depth_tolerance", default=0.12, min=0.0001, max=1.0, step=0.01, advanced=True),
+                io.Float.Input("occlusion_margin", default=0.04, min=0.0, max=0.5, step=0.01, advanced=True),
+                io.Float.Input("occlusion_tau", default=0.03, min=0.0001, max=0.5, step=0.01, advanced=True),
+                io.Float.Input("geometry_floor", default=0.05, min=0.0, max=1.0, step=0.01, advanced=True),
+                io.Float.Input(
+                    "max_normalized_alignment_error",
+                    default=0.35,
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    advanced=True,
+                ),
+                io.Combo.Input("remove_background", options=["Auto", "On", "Off"], default="Auto", advanced=True),
+                io.Float.Input("camera_fov_degrees", default=0.0, min=0.0, max=178.0, step=0.1, advanced=True),
+                io.Int.Input("sampling_steps", default=0, min=0, max=100, advanced=True),
+                io.Int.Input("target_face_count", default=0, min=0, max=2_000_000, advanced=True),
+                io.Int.Input("texture_size", default=0, min=0, max=8192, advanced=True),
+                io.Int.Input("max_tokens", default=49_152, min=16_384, max=262_144, advanced=True),
+                io.Boolean.Input("keep_worker_loaded", default=True, advanced=True),
+                io.Combo.Input("cache_mode", options=list(CACHE_MODES), default="Use cache", advanced=True),
+            ],
+            outputs=[io.File3DGLB.Output("model_3d")],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        front_image,
+        back_image,
+        left_image,
+        right_image,
+        top_image=None,
+        bottom_image=None,
+        quality="1024 — Stable",
+        seed=0,
+        front_quality=1.0,
+        back_quality=1.0,
+        left_quality=1.0,
+        right_quality=1.0,
+        top_quality=1.0,
+        bottom_quality=1.0,
+        fusion_strategy="Directional projection",
+        fusion_temperature=2.0,
+        geometry_fallback="Strict — require VGGT-Ω",
+        geometry_strength=0.75,
+        confidence_exponent=1.0,
+        depth_tolerance=0.12,
+        occlusion_margin=0.04,
+        occlusion_tau=0.03,
+        geometry_floor=0.05,
+        max_normalized_alignment_error=0.35,
+        remove_background="Auto",
+        camera_fov_degrees=0.0,
+        sampling_steps=0,
+        target_face_count=0,
+        texture_size=0,
+        max_tokens=49_152,
+        keep_worker_loaded=True,
+        cache_mode="Use cache",
+    ):
+        if (top_image is None) != (bottom_image is None):
+            raise ValueError("Pixal3DMV requires both top_image and bottom_image for six-view mode")
+        seed = int(seed)
+        fov = float(camera_fov_degrees)
+        if seed < 0 or seed > (2**31) - 1:
+            raise ValueError("Pixal3DMV seed must be between 0 and 2147483647")
+        if not 0.0 <= fov < 179.0:
+            raise ValueError("camera_fov_degrees must be 0 or between 0 and 179")
+        strategy_map = {
+            "Directional projection": "directional_softmax",
+            "Average projection": "average",
+        }
+        if fusion_strategy not in strategy_map:
+            raise ValueError(f"Unknown Pixal3DMV fusion strategy: {fusion_strategy}")
+        if not 0.1 <= float(fusion_temperature) <= 10.0:
+            raise ValueError("fusion_temperature must be between 0.1 and 10.0")
+        fallback_map = {
+            "Strict — require VGGT-Ω": "strict",
+            "Weighted MV fallback": "weighted_mv",
+        }
+        if geometry_fallback not in fallback_map:
+            raise ValueError(
+                f"Unknown Advanced Pixal3DMV geometry fallback: {geometry_fallback}"
+            )
+        geometry_controls = {
+            "geometry_strength": (float(geometry_strength), 0.0, 1.0),
+            "confidence_exponent": (float(confidence_exponent), 0.0, 4.0),
+            "depth_tolerance": (float(depth_tolerance), 0.0001, 1.0),
+            "occlusion_margin": (float(occlusion_margin), 0.0, 0.5),
+            "occlusion_tau": (float(occlusion_tau), 0.0001, 0.5),
+            "geometry_floor": (float(geometry_floor), 0.0, 1.0),
+            "max_normalized_alignment_error": (
+                float(max_normalized_alignment_error),
+                0.0,
+                1.0,
+            ),
+        }
+        for name, (value, minimum, maximum) in geometry_controls.items():
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        settings = resolve_pixal3d_settings(
+            quality,
+            sampling_steps=int(sampling_steps),
+            target_face_count=int(target_face_count),
+            texture_size=int(texture_size),
+            max_tokens=int(max_tokens),
+        )
+        repo_root = Path(__file__).resolve().parents[2]
+        artifacts = _load_pixal3d_artifact_provisioner(repo_root)
+        views = {
+            "front": front_image,
+            "back": back_image,
+            "left": left_image,
+            "right": right_image,
+        }
+        if top_image is not None:
+            views.update(top=top_image, bottom=bottom_image)
+        resolved_strategy = strategy_map[fusion_strategy]
+        quality_map = {
+            "front": float(front_quality),
+            "back": float(back_quality),
+            "left": float(left_quality),
+            "right": float(right_quality),
+        }
+        if top_image is not None:
+            quality_map.update(top=float(top_quality), bottom=float(bottom_quality))
+        resolved_fallback = fallback_map[geometry_fallback]
+        key = pixal3d_multiview_cache_key(
+            views,
+            settings=settings,
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            fusion_strategy=resolved_strategy,
+            fusion_temperature=float(fusion_temperature),
+            view_quality=quality_map,
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback=resolved_fallback,
+            vggt_omega_source_ref=artifacts.VGGT_OMEGA_SOURCE_REF,
+            vggt_omega_checkpoint_ref=artifacts.VGGT_OMEGA_MODEL_REF,
+            vggt_omega_image_resolution=512,
+            geometry_strength=geometry_controls["geometry_strength"][0],
+            confidence_exponent=geometry_controls["confidence_exponent"][0],
+            depth_tolerance=geometry_controls["depth_tolerance"][0],
+            occlusion_margin=geometry_controls["occlusion_margin"][0],
+            occlusion_tau=geometry_controls["occlusion_tau"][0],
+            geometry_floor=geometry_controls["geometry_floor"][0],
+            max_normalized_alignment_error=geometry_controls[
+                "max_normalized_alignment_error"
+            ][0],
+            source_ref=artifacts.PIXAL3D_SOURCE_REF,
+            model_ref=artifacts.PIXAL3D_MODEL_REF,
+            dinov3_ref=artifacts.DINOV3_MODEL_REF,
+            moge_ref=artifacts.MOGE_MODEL_REF,
+            naf_ref=artifacts.NAF_SOURCE_REF,
+            environment_ref=artifacts.PIXAL3D_ENVIRONMENT_REF,
+        )
+        destination = cache_path(_cache_root(), "pixal3d", key)
+        progress_node_id = _hidden_value(cls, "unique_id")
+        if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
+            _send_progress_text(progress_node_id, "Complete - Loaded cached advanced Pixal3DMV model")
+            return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
+        if remove_background != "Off":
+            _require_upstream_nodes({"Trellis2RemoveBackground"})
+        _send_progress_text(
+            progress_node_id,
+            f"Stage 1/3 - Preparing {len(views)} views for frozen VGGT-Ω geometry guidance...",
+        )
+        return build_pixal3d_multiview_graph(
+            front_image,
+            settings,
+            back_image=back_image,
+            left_image=left_image,
+            right_image=right_image,
+            top_image=top_image,
+            bottom_image=bottom_image,
+            view_quality=quality_map,
+            geometry_guidance="vggt_omega_depth_conf",
+            geometry_fallback=resolved_fallback,
+            vggt_omega_image_resolution=512,
+            geometry_strength=geometry_controls["geometry_strength"][0],
+            confidence_exponent=geometry_controls["confidence_exponent"][0],
+            depth_tolerance=geometry_controls["depth_tolerance"][0],
+            occlusion_margin=geometry_controls["occlusion_margin"][0],
+            occlusion_tau=geometry_controls["occlusion_tau"][0],
+            geometry_floor=geometry_controls["geometry_floor"][0],
+            max_normalized_alignment_error=geometry_controls[
+                "max_normalized_alignment_error"
+            ][0],
+            seed=seed,
+            remove_background=remove_background,
+            camera_fov_degrees=fov,
+            fusion_strategy=resolved_strategy,
+            fusion_temperature=float(fusion_temperature),
+            keep_worker_loaded=bool(keep_worker_loaded),
+            cache_mode=cache_mode,
+            cache_key=key,
+            progress_node_id=progress_node_id,
+        )
+
+
 class ComfyColabSkinTokensAutoRig:
     @classmethod
     def define_schema(cls):
@@ -1714,12 +1967,16 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
             [
                 io.Image.Input("front_image"),
                 io.Mask.Input("front_mask"),
+                io.Float.Input("front_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("back_image"),
                 io.Mask.Input("back_mask"),
+                io.Float.Input("back_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("left_image"),
                 io.Mask.Input("left_mask"),
+                io.Float.Input("left_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.Image.Input("right_image"),
                 io.Mask.Input("right_mask"),
+                io.Float.Input("right_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
                 io.String.Input("pipeline_type"),
                 io.Int.Input("seed"),
                 io.Int.Input("sampling_steps"),
@@ -1734,8 +1991,32 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 io.String.Input("cache_key"),
                 io.Image.Input("top_image", optional=True),
                 io.Mask.Input("top_mask", optional=True),
+                io.Float.Input("top_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
                 io.Image.Input("bottom_image", optional=True),
                 io.Mask.Input("bottom_mask", optional=True),
+                io.Float.Input("bottom_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
+                io.String.Input("geometry_guidance", default="none", optional=True),
+                io.String.Input("geometry_fallback", default="strict", optional=True),
+                io.Int.Input(
+                    "vggt_omega_image_resolution",
+                    default=512,
+                    min=512,
+                    max=512,
+                    optional=True,
+                ),
+                io.Float.Input("geometry_strength", default=0.75, min=0.0, max=1.0, optional=True),
+                io.Float.Input("confidence_exponent", default=1.0, min=0.0, max=4.0, optional=True),
+                io.Float.Input("depth_tolerance", default=0.12, min=0.0001, max=1.0, optional=True),
+                io.Float.Input("occlusion_margin", default=0.04, min=0.0, max=0.5, optional=True),
+                io.Float.Input("occlusion_tau", default=0.03, min=0.0001, max=0.5, optional=True),
+                io.Float.Input("geometry_floor", default=0.05, min=0.0, max=1.0, optional=True),
+                io.Float.Input(
+                    "max_normalized_alignment_error",
+                    default=0.35,
+                    min=0.0,
+                    max=1.0,
+                    optional=True,
+                ),
             ],
             [io.String.Output("glb_path")],
         )
@@ -1745,12 +2026,16 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         cls,
         front_image,
         front_mask,
+        front_quality,
         back_image,
         back_mask,
+        back_quality,
         left_image,
         left_mask,
+        left_quality,
         right_image,
         right_mask,
+        right_quality,
         pipeline_type,
         seed,
         sampling_steps,
@@ -1765,8 +2050,20 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         cache_key="",
         top_image=None,
         top_mask=None,
+        top_quality=1.0,
         bottom_image=None,
         bottom_mask=None,
+        bottom_quality=1.0,
+        geometry_guidance="none",
+        geometry_fallback="strict",
+        vggt_omega_image_resolution=512,
+        geometry_strength=0.75,
+        confidence_exponent=1.0,
+        depth_tolerance=0.12,
+        occlusion_margin=0.04,
+        occlusion_tau=0.03,
+        geometry_floor=0.05,
+        max_normalized_alignment_error=0.35,
     ):
         del cache_mode, cache_key
         if any(value is None for value in (top_image, top_mask, bottom_image, bottom_mask)) and any(
@@ -1775,39 +2072,76 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
             raise ValueError("Pixal3DMV worker requires complete top and bottom image/mask pairs")
         if fusion_strategy not in {"directional_softmax", "average"}:
             raise ValueError("Pixal3DMV fusion_strategy must be directional_softmax or average")
+        if geometry_guidance not in {"none", "vggt_omega_depth_conf"}:
+            raise ValueError(
+                "Pixal3DMV geometry_guidance must be none or vggt_omega_depth_conf"
+            )
+        if geometry_fallback not in {"strict", "weighted_mv"}:
+            raise ValueError(
+                "Pixal3DMV geometry_fallback must be strict or weighted_mv"
+            )
         repo_root = Path(__file__).resolve().parents[2]
         input_directory = Path(tempfile.mkdtemp(prefix="comfycolab-pixal3d-mv-input-"))
         output_directory = _make_temp_directory("comfycolab-pixal3d-")
         output = output_directory / "model.glb"
         metadata = output_directory / "model.json"
         view_values = [
-            ("front", front_image, front_mask),
-            ("back", back_image, back_mask),
-            ("left", left_image, left_mask),
-            ("right", right_image, right_mask),
+            ("front", front_image, front_mask, float(front_quality)),
+            ("back", back_image, back_mask, float(back_quality)),
+            ("left", left_image, left_mask, float(left_quality)),
+            ("right", right_image, right_mask, float(right_quality)),
         ]
         if top_image is not None:
             view_values.extend(
-                (("top", top_image, top_mask), ("bottom", bottom_image, bottom_mask))
+                (
+                    ("top", top_image, top_mask, float(top_quality)),
+                    ("bottom", bottom_image, bottom_mask, float(bottom_quality)),
+                )
             )
         try:
             serialized_views = []
-            for name, image, mask in view_values:
+            for name, image, mask, quality in view_values:
                 image_path = input_directory / f"{name}.png"
                 _save_reference_image(image, mask, image_path)
-                serialized_views.append({"name": name, "image_path": str(image_path)})
+                serialized_views.append(
+                    {"name": name, "image_path": str(image_path), "quality": quality}
+                )
 
             artifact_module = _load_pixal3d_artifact_provisioner(repo_root)
             progress, cancelled = _worker_callbacks()
-            artifacts = artifact_module.ensure_pixal3d_artifacts(
-                Path(
-                    os.environ.get(
-                        "COMFYCOLAB_PIXAL3D_MODEL_ROOT",
-                        "/content/.comfycolab/models/3d/pixal3d",
-                    )
-                ),
-                progress=progress,
+            model_root = Path(
+                os.environ.get(
+                    "COMFYCOLAB_PIXAL3D_MODEL_ROOT",
+                    "/content/.comfycolab/models/3d/pixal3d",
+                )
             )
+            effective_geometry_guidance = str(geometry_guidance)
+            provisioning_fallback_reason = ""
+            if geometry_guidance == "vggt_omega_depth_conf":
+                try:
+                    artifacts = artifact_module.ensure_pixal3d_advanced_artifacts(
+                        model_root,
+                        progress=progress,
+                    )
+                except RuntimeError as error:
+                    if geometry_fallback != "weighted_mv":
+                        raise
+                    provisioning_fallback_reason = str(error)
+                    effective_geometry_guidance = "none"
+                    artifacts = artifact_module.ensure_pixal3d_artifacts(
+                        model_root,
+                        progress=progress,
+                    )
+                    print(
+                        "[ComfyColab 3D] VGGT-Ω artifact provisioning failed; "
+                        "using the explicitly selected weighted-MV fallback.",
+                        flush=True,
+                    )
+            else:
+                artifacts = artifact_module.ensure_pixal3d_artifacts(
+                    model_root,
+                    progress=progress,
+                )
             command = Pixal3DWorkerCommand(
                 python=os.environ.get("COMFYCOLAB_PIXAL3D_PYTHON", DEFAULT_PIXAL3D_PYTHON),
                 worker_script=str(repo_root / "worker/pixal3d/worker_main.py"),
@@ -1839,6 +2173,49 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 views=tuple(serialized_views),
                 fusion_temperature=float(fusion_temperature),
                 fusion_strategy=str(fusion_strategy),
+                geometry_guidance=effective_geometry_guidance,
+                geometry_fallback=str(geometry_fallback),
+                geometry_requested=(
+                    "vggt_omega_depth_conf"
+                    if provisioning_fallback_reason
+                    else ""
+                ),
+                geometry_fallback_stage=(
+                    "artifact_provisioning"
+                    if provisioning_fallback_reason
+                    else ""
+                ),
+                geometry_fallback_reason=provisioning_fallback_reason,
+                vggt_omega_source_dir=str(
+                    getattr(artifacts, "vggt_omega_source_dir", "")
+                ),
+                vggt_omega_checkpoint=str(
+                    getattr(artifacts, "vggt_omega_checkpoint", "")
+                ),
+                vggt_omega_source_ref=(
+                    artifact_module.VGGT_OMEGA_SOURCE_REF
+                    if effective_geometry_guidance == "vggt_omega_depth_conf"
+                    else ""
+                ),
+                vggt_omega_checkpoint_ref=(
+                    getattr(
+                        artifacts,
+                        "vggt_omega_checkpoint_ref",
+                        artifact_module.VGGT_OMEGA_MODEL_REF,
+                    )
+                    if effective_geometry_guidance == "vggt_omega_depth_conf"
+                    else ""
+                ),
+                vggt_omega_image_resolution=int(vggt_omega_image_resolution),
+                geometry_strength=float(geometry_strength),
+                confidence_exponent=float(confidence_exponent),
+                depth_tolerance=float(depth_tolerance),
+                occlusion_margin=float(occlusion_margin),
+                occlusion_tau=float(occlusion_tau),
+                geometry_floor=float(geometry_floor),
+                max_normalized_alignment_error=float(
+                    max_normalized_alignment_error
+                ),
             )
             result = global_pixal3d_worker_pool().run(
                 command,
@@ -2058,6 +2435,7 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColabUltraShapeRefine": ComfyColabUltraShapeRefine,
     "ComfyColabPixal3DImageTo3D": ComfyColabPixal3DImageTo3D,
     "ComfyColabPixal3DMV": ComfyColabPixal3DMV,
+    "ComfyColabPixal3DMVAdvanced": ComfyColabPixal3DMVAdvanced,
     "ComfyColabSkinTokensAutoRig": ComfyColabSkinTokensAutoRig,
     "ComfyColabCubePartSegment": ComfyColabCubePartSegment,
     "ComfyColab3DProgressCheckpoint": ComfyColab3DProgressCheckpoint,
@@ -2082,6 +2460,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabUltraShapeRefine": "ComfyColab UltraShape — Refine Geometry",
     "ComfyColabPixal3DImageTo3D": "ComfyColab Pixal3D — Image to 3D",
     "ComfyColabPixal3DMV": "ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D",
+    "ComfyColabPixal3DMVAdvanced": "ComfyColab Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D",
     "ComfyColabSkinTokensAutoRig": "ComfyColab SkinTokens — Auto Rig 3D",
     "ComfyColabCubePartSegment": "ComfyColab CubePart — Segment 3D Parts",
 }
