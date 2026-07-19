@@ -140,6 +140,16 @@ CASES: dict[str, CaseSpec] = {
         actual_resolution=1536, quality="1536 — Maximum", texture_size=4096,
         require_textured=True,
     ),
+    "trellis_multiview_4view_flux2_klein_9b": CaseSpec(
+        "trellis_multiview_4view_flux2_klein_9b",
+        "trellis_multiview",
+        "trellis_multiview_4view_textured_glb",
+        "trellis_multiview_4view_textured_glb",
+        "1024", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+        image_count=4,
+        image_count_max=6,
+    ),
     "ultrashape_384": CaseSpec(
         "ultrashape_384", "ultrashape", "ultrashape_384_refinement",
         "ultrashape_384", actual_resolution=384, detail="Fast", octree_resolution=384,
@@ -205,6 +215,16 @@ CASES: dict[str, CaseSpec] = {
         "pixal3d_multiview_advanced",
         "pixal3d_multiview_advanced_vggt_omega_glb",
         "pixal3d_multiview_advanced_vggt_omega",
+        "1024", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+        image_count=4,
+        image_count_max=6,
+    ),
+    "pixal3d_multiview_4view_flux2_klein_9b": CaseSpec(
+        "pixal3d_multiview_4view_flux2_klein_9b",
+        "pixal3d_multiview",
+        "pixal3d_multiview_4view_flux2_klein_9b",
+        "pixal3d_multiview_4view_flux2_klein_9b",
         "1024", 1024, "1024 — Stable", 2048,
         require_textured=True,
         image_count=4,
@@ -652,6 +672,41 @@ def pixal3d_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace, ca
     }
 
 
+def trellis_multiview_inputs(
+    spec: CaseSpec,
+    image_nodes: list[str],
+    args: argparse.Namespace,
+    cache_mode: str,
+) -> dict[str, Any]:
+    if len(image_nodes) not in {4, 6}:
+        raise ValueError(
+            f"ComfyColabTrellis2MV requires 4 or 6 image nodes, got {len(image_nodes)}"
+        )
+    inputs: dict[str, Any] = {
+        "front_image": [image_nodes[0], 0],
+        "back_image": [image_nodes[1], 0],
+        "left_image": [image_nodes[2], 0],
+        "right_image": [image_nodes[3], 0],
+        "quality": spec.quality,
+        "seed": args.seed,
+        "exact_resolution": spec.resolution or "512",
+        "sampling_steps": args.sampling_steps,
+        "target_face_count": args.target_face_count,
+        "texture_size": args.texture_size or spec.texture_size,
+        "max_tokens": args.max_tokens,
+        "front_axis": getattr(args, "front_axis", "Z forward"),
+        "blend_temperature": 2.0,
+        "remove_background": args.remove_background,
+        "cache_mode": cache_mode,
+    }
+    if len(image_nodes) == 6:
+        inputs.update({
+            "top_image": [image_nodes[4], 0],
+            "bottom_image": [image_nodes[5], 0],
+        })
+    return inputs
+
+
 def pixal3d_multiview_advanced_inputs(
     spec: CaseSpec,
     image_nodes: list[str],
@@ -701,6 +756,42 @@ def pixal3d_multiview_advanced_inputs(
                 "bottom_quality": 1.0,
             }
         )
+    return inputs
+
+
+def pixal3d_multiview_inputs(
+    spec: CaseSpec,
+    image_nodes: list[str],
+    args: argparse.Namespace,
+    cache_mode: str,
+) -> dict[str, Any]:
+    if len(image_nodes) not in {4, 6}:
+        raise ValueError(
+            f"ComfyColabPixal3DMV requires 4 or 6 image nodes, got {len(image_nodes)}"
+        )
+    inputs: dict[str, Any] = {
+        "front_image": [image_nodes[0], 0],
+        "back_image": [image_nodes[1], 0],
+        "left_image": [image_nodes[2], 0],
+        "right_image": [image_nodes[3], 0],
+        "quality": spec.quality,
+        "seed": args.seed,
+        "fusion_strategy": "Directional projection",
+        "fusion_temperature": 2.0,
+        "remove_background": args.remove_background,
+        "sampling_steps": args.sampling_steps,
+        "target_face_count": args.target_face_count,
+        "texture_size": args.texture_size,
+        "max_tokens": args.max_tokens,
+        "keep_worker_loaded": getattr(args, "keep_worker_loaded", True),
+        "camera_fov_degrees": getattr(args, "camera_fov_degrees", 0.0),
+        "cache_mode": cache_mode,
+    }
+    if len(image_nodes) == 6:
+        inputs.update({
+            "top_image": [image_nodes[4], 0],
+            "bottom_image": [image_nodes[5], 0],
+        })
     return inputs
 
 
@@ -795,6 +886,18 @@ def build_prompt(
             "inputs": pixal3d_multiview_advanced_inputs(spec, list(prompt), args, cache_mode),
         }
         output_node = "10"
+    elif spec.kind == "trellis_multiview":
+        prompt["2"] = {
+            "class_type": "ComfyColabTrellis2MV",
+            "inputs": trellis_multiview_inputs(spec, list(prompt), args, cache_mode),
+        }
+        output_node = "2"
+    elif spec.kind == "pixal3d_multiview":
+        prompt["2"] = {
+            "class_type": "ComfyColabPixal3DMV",
+            "inputs": pixal3d_multiview_inputs(spec, list(prompt), args, cache_mode),
+        }
+        output_node = "2"
     else:
         raise ValueError(f"Case {spec.name} does not use a ComfyUI prompt")
     prefix = f"3d/validation/{run_id}-{spec.name}"
@@ -1631,7 +1734,11 @@ def pixal3d_worker_result_events(text: str) -> list[dict[str, Any]]:
 def source_node_for(spec: CaseSpec) -> str:
     if spec.kind in {"trellis", "cache", "strict1536"}:
         return "2"
+    if spec.kind == "trellis_multiview":
+        return "2"
     if spec.kind in {"triposplat", "pixal3d", "pixal3d_cache", "pixal3d_cancel", "pixal3d_reuse"}:
+        return "2"
+    if spec.kind == "pixal3d_multiview":
         return "2"
     if spec.kind == "pixal3d_multiview_advanced":
         return "10"
@@ -1715,7 +1822,7 @@ def benchmark_from(
             raise RuntimeError(
                 f"TRELLIS requested {spec.actual_resolution} but actually ran {actual_resolution}; silent downgrade rejected"
             )
-    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
+    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview", "pixal3d_multiview_advanced"}:
         if not isinstance(pixal3d_worker_result, dict):
             raise RuntimeError("Pixal3D completed without a machine-readable worker result")
         actual_resolution = int(pixal3d_worker_result.get("actual_resolution", 0))
@@ -1749,9 +1856,9 @@ def benchmark_from(
         "nonCollapsedGeometryValidated": geometry_validated,
         "geometryMetrics": geometry_metrics if geometry_validated else None,
     }
-    if spec.kind in {"trellis", "pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
+    if spec.kind in {"trellis", "pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview", "pixal3d_multiview_advanced"}:
         benchmark.update(tokens=tokens, textureSize=texture_size or spec.texture_size)
-    if spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
+    if spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview", "pixal3d_multiview_advanced"}:
         benchmark.update(
             workerPeakVramBytes=int(pixal3d_worker_result.get("peak_vram_bytes", 0)),
             pipelineLoadCount=int(pixal3d_worker_result.get("pipeline_load_count", 0)),
@@ -1828,7 +1935,14 @@ def run_prompt_once(
     )
     worker_pixal3d_result = worker_pixal3d_events[-1] if worker_pixal3d_events else None
     if (
-        spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}
+        spec.kind
+        in {
+            "pixal3d",
+            "pixal3d_cache",
+            "pixal3d_reuse",
+            "pixal3d_multiview",
+            "pixal3d_multiview_advanced",
+        }
         and effective_cache_mode != "Use cache"
         and not isinstance(worker_pixal3d_result, dict)
     ):
@@ -2331,6 +2445,8 @@ GEOMETRY_OUTPUT_KINDS = {
     "pixal3d",
     "pixal3d_cache",
     "pixal3d_reuse",
+    "trellis_multiview",
+    "pixal3d_multiview",
     "pixal3d_multiview_advanced",
 }
 

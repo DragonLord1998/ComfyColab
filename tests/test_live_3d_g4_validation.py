@@ -348,6 +348,23 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertIsNone(args.image)
         self.assertEqual(len(args.images), 4)
 
+    def test_cli_requires_multi_view_inputs_for_trellis_multiview_case(self) -> None:
+        args = self.module.parser().parse_args(
+            [
+                "run",
+                "--case",
+                "trellis_multiview_4view_flux2_klein_9b",
+                "--images",
+                "front.png",
+                "back.png",
+                "left.png",
+                "right.png",
+            ]
+        )
+        self.assertIsNone(args.image)
+        self.assertEqual(args.case, "trellis_multiview_4view_flux2_klein_9b")
+        self.assertEqual(len(args.images), 4)
+
     def test_ultrashape_prompt_uses_native_file3d_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "input.glb"
@@ -434,6 +451,33 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt_six["10"]["inputs"]["top_image"], ["5", 0])
         self.assertEqual(prompt_six["10"]["inputs"]["bottom_image"], ["6", 0])
         self.assertEqual(self.module.source_node_for(spec), "10")
+
+    def test_trellis_multiview_prompt_is_4view(self) -> None:
+        spec = self.module.CASES["trellis_multiview_4view_flux2_klein_9b"]
+        prompt = self.module.build_prompt(spec, options(), ["front.png", "back.png", "left.png", "right.png"], "multi-run")
+        self.assertEqual(prompt["2"]["class_type"], "ComfyColabTrellis2MV")
+        self.assertEqual(prompt["2"]["inputs"]["front_image"], ["1", 0])
+        self.assertEqual(prompt["2"]["inputs"]["back_image"], ["2", 0])
+        self.assertEqual(prompt["2"]["inputs"]["left_image"], ["3", 0])
+        self.assertEqual(prompt["2"]["inputs"]["right_image"], ["4", 0])
+        self.assertNotIn("top_image", prompt["2"]["inputs"])
+        self.assertNotIn("bottom_image", prompt["2"]["inputs"])
+        self.assertIn("exact_resolution", prompt["2"]["inputs"])
+        self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
+        self.assertEqual(self.module.source_node_for(spec), "2")
+
+    def test_pixal3d_multiview_prompt_is_4view(self) -> None:
+        spec = self.module.CASES["pixal3d_multiview_4view_flux2_klein_9b"]
+        prompt = self.module.build_prompt(spec, options(), ["f.png", "b.png", "l.png", "r.png"], "pixal-mv")
+        self.assertEqual(prompt["2"]["class_type"], "ComfyColabPixal3DMV")
+        self.assertEqual(prompt["2"]["inputs"]["front_image"], ["1", 0])
+        self.assertEqual(prompt["2"]["inputs"]["back_image"], ["2", 0])
+        self.assertEqual(prompt["2"]["inputs"]["left_image"], ["3", 0])
+        self.assertEqual(prompt["2"]["inputs"]["right_image"], ["4", 0])
+        self.assertNotIn("top_image", prompt["2"]["inputs"])
+        self.assertNotIn("bottom_image", prompt["2"]["inputs"])
+        self.assertEqual(prompt["90"]["inputs"]["model_file"], ["2", 0])
+        self.assertEqual(self.module.source_node_for(spec), "2")
 
     def test_pixal3d_benchmark_requires_machine_resolution_and_tokens(self) -> None:
         spec = self.module.CASES["pixal3d_cold_1024"]
