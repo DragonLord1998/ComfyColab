@@ -37,6 +37,50 @@ def load_multiview():
     return module
 
 
+def load_vggt_omega():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "worker/pixal3d/vggt_omega_adapter.py"
+    )
+    name = "comfycolab_pixal3d_vggt_omega_test"
+    sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_project_points(points, transform_matrix, _camera_angle_x, _resolution):
+    torch = importlib.import_module("torch")
+    batch = transform_matrix.shape[0]
+    if points.dim() == 2:
+        points = points.unsqueeze(0).expand(batch, -1, -1)
+    image_points = torch.full(
+        (batch, points.shape[1], 2),
+        1.5,
+        device=points.device,
+        dtype=points.dtype,
+    )
+    depth = points[..., 2] + 1.0
+    valid = torch.ones_like(depth, dtype=torch.bool)
+    return image_points, depth, valid
+
+
+project_points_to_image_batch = _fake_project_points
+
+
+class _FakeProjectionGrid:
+    image_resolution = 4
+
+    def __init__(self, grid_points):
+        self.grid_points = grid_points
+
+    def forward(self):
+        return _fake_project_points
+
+
 class Pixal3DWorkerProtocolTests(unittest.TestCase):
     def setUp(self) -> None:
         load_package()
@@ -162,6 +206,90 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "[0, 10]"):
             self.worker.build_pixal3d_request(invalid)
+
+    def test_advanced_multiview_request_serializes_pinned_omega_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root)
+            command = self.worker.Pixal3DWorkerCommand(
+                **{
+                    **command.__dict__,
+                    "views": tuple(
+                        {
+                            "name": name,
+                            "image_path": str(root / f"{name}.png"),
+                            "quality": 1.0,
+                        }
+                        for name in ("front", "back", "left", "right")
+                    ),
+                    "geometry_guidance": "vggt_omega_depth_conf",
+                    "geometry_fallback": "strict",
+                    "vggt_omega_source_dir": "/content/VGGT-Omega",
+                    "vggt_omega_checkpoint": "/models/vggt_omega_1b_512.pt",
+                    "vggt_omega_source_ref": "omega-source",
+                    "vggt_omega_checkpoint_ref": "omega-model",
+                    "geometry_strength": 0.8,
+                    "confidence_exponent": 1.25,
+                    "depth_tolerance": 0.09,
+                }
+            )
+
+        request = self.worker.build_pixal3d_request(command)
+
+        self.assertEqual(request["geometry_guidance"], "vggt_omega_depth_conf")
+        self.assertEqual(request["geometry_fallback"], "strict")
+        self.assertEqual(request["vggt_omega_image_resolution"], 512)
+        self.assertEqual(request["geometry_strength"], 0.8)
+        self.assertEqual(request["confidence_exponent"], 1.25)
+        self.assertEqual(request["depth_tolerance"], 0.09)
+        self.assertEqual(request["revisions"]["vggt_omega_source"], "omega-source")
+        self.assertEqual(
+            request["revisions"]["vggt_omega_checkpoint"],
+            "omega-model",
+        )
+        argv = command.server_argv()
+        self.assertEqual(
+            argv[argv.index("--vggt-omega-source-dir") + 1],
+            "/content/VGGT-Omega",
+        )
+        self.assertEqual(
+            argv[argv.index("--vggt-omega-checkpoint") + 1],
+            "/models/vggt_omega_1b_512.pt",
+        )
+
+    def test_advanced_artifact_fallback_is_explicit_and_disables_fake_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root)
+            command = self.worker.Pixal3DWorkerCommand(
+                **{
+                    **command.__dict__,
+                    "views": tuple(
+                        {
+                            "name": name,
+                            "image_path": str(root / f"{name}.png"),
+                        }
+                        for name in ("front", "back", "left")
+                    ),
+                    "geometry_guidance": "none",
+                    "geometry_requested": "vggt_omega_depth_conf",
+                    "geometry_fallback": "weighted_mv",
+                    "geometry_fallback_stage": "artifact_provisioning",
+                    "geometry_fallback_reason": "gated checkpoint unavailable",
+                }
+            )
+
+        request = self.worker.build_pixal3d_request(command)
+
+        self.assertNotIn("vggt_omega_source", request["revisions"])
+        self.assertEqual(request["geometry_guidance"], "none")
+        self.assertEqual(request["geometry_requested"], "vggt_omega_depth_conf")
+        self.assertEqual(request["geometry_fallback"], "weighted_mv")
+        self.assertEqual(
+            request["geometry_fallback_stage"],
+            "artifact_provisioning",
+        )
+        self.assertIn("gated checkpoint", request["geometry_fallback_reason"])
 
     @unittest.skipUnless(module_available("PIL"), "Pillow is not installed")
     def test_external_preprocess_crops_rgba_without_loading_rmbg(self) -> None:
@@ -445,6 +573,133 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
         self.assertGreater(front_back[0][0], front_back[0][1])
         self.assertGreater(front_back[1][1], front_back[1][0])
 
+    def test_vggt_omega_import_evicts_collisions_and_resolves_inside_pinned_source(
+        self,
+    ) -> None:
+        omega = load_vggt_omega()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "pinned"
+            package = source / "vggt_omega"
+            (package / "models").mkdir(parents=True)
+            (package / "utils").mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "models" / "__init__.py").write_text(
+                "class VGGTOmega:\n    origin = 'pinned'\n",
+                encoding="utf-8",
+            )
+            (package / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            (package / "utils" / "load_fn.py").write_text(
+                "def load_and_preprocess_images(paths, **kwargs):\n"
+                "    return paths, kwargs\n",
+                encoding="utf-8",
+            )
+            (package / "utils" / "pose_enc.py").write_text(
+                "def encoding_to_camera(value, shape):\n"
+                "    return value, shape\n",
+                encoding="utf-8",
+            )
+            previous_path = list(sys.path)
+            previous_modules = {
+                name: module
+                for name, module in sys.modules.items()
+                if name == "vggt_omega" or name.startswith("vggt_omega.")
+            }
+            collision = types.ModuleType("vggt_omega")
+            collision.__file__ = "/unverified/vggt_omega/__init__.py"
+            sys.modules["vggt_omega"] = collision
+            try:
+                model, load_images, encoding_to_camera = (
+                    omega._import_pinned_vggt_omega(source)
+                )
+                self.assertEqual(model.origin, "pinned")
+                for value in (model, load_images, encoding_to_camera):
+                    module = sys.modules[value.__module__]
+                    Path(module.__file__).resolve().relative_to(source.resolve())
+                self.assertIsNot(sys.modules["vggt_omega"], collision)
+            finally:
+                sys.path[:] = previous_path
+                for name in tuple(sys.modules):
+                    if name == "vggt_omega" or name.startswith("vggt_omega."):
+                        del sys.modules[name]
+                sys.modules.update(previous_modules)
+
+    def test_vggt_omega_sim3_recovers_known_transform_and_rejects_degenerate_centers(self) -> None:
+        omega = load_vggt_omega()
+        source = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        target = [
+            [3.0, -2.0, 0.5],
+            [3.0, 0.0, 0.5],
+            [1.0, -2.0, 0.5],
+            [3.0, -2.0, 2.5],
+        ]
+
+        alignment = omega.fit_sim3_alignment(
+            source,
+            target,
+            normalization_distance=2.0,
+        )
+        degenerate = omega.fit_sim3_alignment(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
+        )
+
+        self.assertTrue(alignment.valid)
+        self.assertAlmostEqual(alignment.scale, 2.0, places=6)
+        self.assertAlmostEqual(alignment.rms_error, 0.0, places=6)
+        self.assertEqual(
+            tuple(round(value, 6) for value in alignment.translation),
+            (3.0, -2.0, 0.5),
+        )
+        self.assertFalse(degenerate.valid)
+        self.assertIn("degenerate", degenerate.reason)
+
+    @unittest.skipUnless(module_available("torch"), "torch is not installed")
+    def test_vggt_omega_geometry_weights_are_query_shaped_and_depth_aware(self) -> None:
+        torch = importlib.import_module("torch")
+        omega = load_vggt_omega()
+        context = omega.GeometryFusionContext(
+            labels=("front", "back"),
+            z_buffers=torch.ones((2, 4, 4), dtype=torch.float32),
+            confidence_buffers=torch.ones((2, 4, 4), dtype=torch.float32),
+            alignment=omega.Sim3Alignment(
+                True,
+                1.0,
+                ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                (0.0, 0.0, 0.0),
+                0.0,
+                0.0,
+            ),
+            geometry_strength=1.0,
+            confidence_exponent=1.0,
+            depth_tolerance=0.1,
+            occlusion_margin=0.0,
+            occlusion_tau=0.01,
+            geometry_floor=0.05,
+            diagnostics={},
+        )
+        projection_grid = _FakeProjectionGrid(
+            torch.tensor(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
+                dtype=torch.float32,
+            )
+        )
+        camera = {
+            "mesh_scale": torch.ones(2),
+            "transform_matrix": torch.eye(4).repeat(2, 1, 1),
+            "camera_angle_x": torch.ones(2),
+        }
+
+        weights = context.weights_for_projection(projection_grid, camera)
+
+        self.assertEqual(tuple(weights.shape), (2, 2))
+        self.assertTrue(torch.isfinite(weights).all())
+        self.assertGreater(float(weights[0, 0]), float(weights[1, 0]))
+
     def test_reuses_running_worker_for_multiple_request_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -573,7 +828,8 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
                     self.stdout = stdio.StringIO(
                         'COMFYCOLAB_PIXAL3D_READY={"protocol":1}\n'
                         f'COMFYCOLAB_PIXAL3D_RESULT={{"request_id":"{command.request_id}",'
-                        '"status":"error","error_type":"RuntimeError","error":"boom"}\n'
+                        '"status":"error","error_type":"RuntimeError","error":"boom",'
+                        '"traceback":"root cause line"}\n'
                     )
 
                 def poll(self):
@@ -587,7 +843,10 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
                 poll_interval=0.001,
             )
             try:
-                with self.assertRaisesRegex(RuntimeError, "boom"):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "(?s)boom.*Worker traceback.*root cause line",
+                ):
                     pool.run(command)
             finally:
                 pool.close()

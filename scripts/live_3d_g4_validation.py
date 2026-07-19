@@ -115,6 +115,8 @@ class CaseSpec:
     octree_resolution: int = 0
     retexture: bool = False
     require_textured: bool = False
+    image_count: int = 1
+    image_count_max: int = 1
 
 
 CASES: dict[str, CaseSpec] = {
@@ -197,6 +199,16 @@ CASES: dict[str, CaseSpec] = {
         "pixal3d_1536_experimental", "pixal3d", "pixal3d_1536_experimental",
         "pixal3d_1536_experimental", "1536_cascade", 1536, "1536 — Experimental", 4096,
         require_textured=True,
+    ),
+    "pixal3d_multiview_advanced_vggt_omega": CaseSpec(
+        "pixal3d_multiview_advanced_vggt_omega",
+        "pixal3d_multiview_advanced",
+        "pixal3d_multiview_advanced_vggt_omega_glb",
+        "pixal3d_multiview_advanced_vggt_omega",
+        "1024", 1024, "1024 — Stable", 2048,
+        require_textured=True,
+        image_count=4,
+        image_count_max=6,
     ),
     "full_workflow_hard_surface": CaseSpec(
         "full_workflow_hard_surface", "full", "full_workflow_hard_surface",
@@ -574,6 +586,10 @@ def copy_input_image(source: Path, comfy_root: Path, case: str) -> str:
     return name
 
 
+def copy_input_images(sources: list[Path], comfy_root: Path, case: str) -> list[str]:
+    return [copy_input_image(source, comfy_root, case) for source in sources]
+
+
 def trellis_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace, cache_mode: str) -> dict[str, Any]:
     return {
         "image": [image_node, 0],
@@ -636,6 +652,58 @@ def pixal3d_inputs(spec: CaseSpec, image_node: str, args: argparse.Namespace, ca
     }
 
 
+def pixal3d_multiview_advanced_inputs(
+    spec: CaseSpec,
+    image_nodes: list[str],
+    args: argparse.Namespace,
+    cache_mode: str,
+) -> dict[str, Any]:
+    if len(image_nodes) not in {4, 6}:
+        raise ValueError(
+            f"ComfyColabPixal3DMVAdvanced requires 4 or 6 image nodes, got {len(image_nodes)}"
+        )
+    inputs: dict[str, Any] = {
+        "front_image": [image_nodes[0], 0],
+        "back_image": [image_nodes[1], 0],
+        "left_image": [image_nodes[2], 0],
+        "right_image": [image_nodes[3], 0],
+        "quality": spec.quality,
+        "seed": args.seed,
+        "front_quality": 1.0,
+        "back_quality": 1.0,
+        "left_quality": 1.0,
+        "right_quality": 1.0,
+        "fusion_strategy": "Directional projection",
+        "fusion_temperature": 2.0,
+        "geometry_fallback": "Strict — require VGGT-Ω",
+        "geometry_strength": 0.75,
+        "confidence_exponent": 1.0,
+        "depth_tolerance": 0.12,
+        "occlusion_margin": 0.04,
+        "occlusion_tau": 0.03,
+        "geometry_floor": 0.05,
+        "max_normalized_alignment_error": 0.35,
+        "sampling_steps": args.sampling_steps,
+        "target_face_count": args.target_face_count,
+        "texture_size": args.texture_size,
+        "max_tokens": args.max_tokens,
+        "keep_worker_loaded": getattr(args, "keep_worker_loaded", True),
+        "remove_background": args.remove_background,
+        "camera_fov_degrees": getattr(args, "camera_fov_degrees", 0.0),
+        "cache_mode": cache_mode,
+    }
+    if len(image_nodes) == 6:
+        inputs.update(
+            {
+                "top_image": [image_nodes[4], 0],
+                "bottom_image": [image_nodes[5], 0],
+                "top_quality": 1.0,
+                "bottom_quality": 1.0,
+            }
+        )
+    return inputs
+
+
 def add_preview_and_save(prompt: dict[str, Any], source: str, prefix: str) -> None:
     prompt["90"] = {"class_type": "Preview3D", "inputs": {"model_file": [source, 0]}}
     prompt["91"] = {
@@ -663,13 +731,17 @@ def add_preview_and_file3d_save(
 def build_prompt(
     spec: CaseSpec,
     args: argparse.Namespace,
-    image_name: str,
+    image_name: str | list[str],
     run_id: str,
     *,
     cache_mode: str | None = None,
 ) -> dict[str, Any]:
     cache_mode = cache_mode or args.cache_mode
-    prompt: dict[str, Any] = {"1": {"class_type": "LoadImage", "inputs": {"image": image_name}}}
+    image_names = [image_name] if isinstance(image_name, str) else image_name
+    prompt: dict[str, Any] = {
+        str(index + 1): {"class_type": "LoadImage", "inputs": {"image": name}}
+        for index, name in enumerate(image_names)
+    }
     output_node: str
     if spec.kind in {"trellis", "cache", "strict1536"}:
         prompt["2"] = {
@@ -717,6 +789,12 @@ def build_prompt(
     elif spec.kind == "advanced":
         prompt.update(build_advanced_nodes(args))
         output_node = "9"
+    elif spec.kind == "pixal3d_multiview_advanced":
+        prompt["10"] = {
+            "class_type": "ComfyColabPixal3DMVAdvanced",
+            "inputs": pixal3d_multiview_advanced_inputs(spec, list(prompt), args, cache_mode),
+        }
+        output_node = "10"
     else:
         raise ValueError(f"Case {spec.name} does not use a ComfyUI prompt")
     prefix = f"3d/validation/{run_id}-{spec.name}"
@@ -1555,6 +1633,8 @@ def source_node_for(spec: CaseSpec) -> str:
         return "2"
     if spec.kind in {"triposplat", "pixal3d", "pixal3d_cache", "pixal3d_cancel", "pixal3d_reuse"}:
         return "2"
+    if spec.kind == "pixal3d_multiview_advanced":
+        return "10"
     if spec.kind in {"ultrashape", "full", "cancel"}:
         return "3"
     if spec.kind == "advanced":
@@ -1635,7 +1715,7 @@ def benchmark_from(
             raise RuntimeError(
                 f"TRELLIS requested {spec.actual_resolution} but actually ran {actual_resolution}; silent downgrade rejected"
             )
-    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
+    elif spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
         if not isinstance(pixal3d_worker_result, dict):
             raise RuntimeError("Pixal3D completed without a machine-readable worker result")
         actual_resolution = int(pixal3d_worker_result.get("actual_resolution", 0))
@@ -1669,9 +1749,9 @@ def benchmark_from(
         "nonCollapsedGeometryValidated": geometry_validated,
         "geometryMetrics": geometry_metrics if geometry_validated else None,
     }
-    if spec.kind in {"trellis", "pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
+    if spec.kind in {"trellis", "pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
         benchmark.update(tokens=tokens, textureSize=texture_size or spec.texture_size)
-    if spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}:
+    if spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}:
         benchmark.update(
             workerPeakVramBytes=int(pixal3d_worker_result.get("peak_vram_bytes", 0)),
             pipelineLoadCount=int(pixal3d_worker_result.get("pipeline_load_count", 0)),
@@ -1684,7 +1764,7 @@ def run_prompt_once(
     spec: CaseSpec,
     args: argparse.Namespace,
     run_id: str,
-    image_name: str,
+    image_names: str | list[str],
     recorder: Recorder,
     *,
     cache_mode: str | None = None,
@@ -1699,7 +1779,7 @@ def run_prompt_once(
     prompt = build_prompt(
         spec,
         args,
-        image_name,
+        image_names,
         run_id,
         cache_mode=effective_cache_mode,
     )
@@ -1748,7 +1828,7 @@ def run_prompt_once(
     )
     worker_pixal3d_result = worker_pixal3d_events[-1] if worker_pixal3d_events else None
     if (
-        spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse"}
+        spec.kind in {"pixal3d", "pixal3d_cache", "pixal3d_reuse", "pixal3d_multiview_advanced"}
         and effective_cache_mode != "Use cache"
         and not isinstance(worker_pixal3d_result, dict)
     ):
@@ -2251,6 +2331,7 @@ GEOMETRY_OUTPUT_KINDS = {
     "pixal3d",
     "pixal3d_cache",
     "pixal3d_reuse",
+    "pixal3d_multiview_advanced",
 }
 
 
@@ -2291,25 +2372,48 @@ def execute_case(args: argparse.Namespace) -> int:
     started = time.monotonic()
     try:
         if required_image(spec):
-            if not args.image:
-                raise ValueError(f"Case {spec.name} requires --image PATH")
-            image_name = copy_input_image(Path(args.image).resolve(), Path(args.comfy_root), spec.name)
+            image_names: str | list[str]
+            if spec.image_count == 1:
+                if not args.image:
+                    raise ValueError(f"Case {spec.name} requires --image PATH")
+                image_names = copy_input_image(
+                    Path(args.image).resolve(),
+                    Path(args.comfy_root),
+                    spec.name,
+                )
+            else:
+                if not args.images:
+                    raise ValueError(
+                        f"Case {spec.name} requires --images with at least {spec.image_count} images"
+                    )
+                provided = [Path(item).resolve() for item in args.images]
+                if len(provided) < spec.image_count or len(provided) > spec.image_count_max:
+                    raise ValueError(
+                        f"Case {spec.name} expects {spec.image_count} to {spec.image_count_max} images, got {len(provided)}"
+                    )
+                if len(provided) not in {4, 6}:
+                    raise ValueError(f"Case {spec.name} supports only 4 or 6 views")
+                image_names = copy_input_images(provided, Path(args.comfy_root), spec.name)
         else:
-            image_name = ""
+            image_names = ""
         if spec.kind == "probe":
             result = run_probe_case(args)
         elif spec.kind in {"cache", "pixal3d_cache"}:
-            result = run_cache_case(spec, args, run["runId"], image_name, recorder)
+            result = run_cache_case(spec, args, run["runId"], image_names, recorder)
         elif spec.kind == "pixal3d_reuse":
             result = run_pixal3d_reuse_case(
-                spec, args, run["runId"], image_name, recorder
+                spec, args, run["runId"], image_names, recorder
             )
         elif spec.kind == "strict1536":
-            result = run_strict_1536_default_case(spec, args, run["runId"], image_name, recorder)
+            result = run_strict_1536_default_case(
+                spec, args, run["runId"], image_names, recorder
+            )
         elif spec.kind in {"cancel", "pixal3d_cancel"}:
-            result = run_cancellation_case(spec, args, run["runId"], image_name, recorder)
+            result = run_cancellation_case(
+                spec, args, run["runId"], image_names, recorder
+            )
         else:
-            result = run_prompt_once(spec, args, run["runId"], image_name, recorder)
+            result = run_prompt_once(spec, args, run["runId"], image_names, recorder)
         candidate_record = {"kind": spec.kind, **result}
         require_geometry_evidence = bool(
             getattr(args, "require_geometry_evidence", False)
@@ -2397,6 +2501,9 @@ def launch_case(args: argparse.Namespace) -> int:
         option = "--" + name.replace("_", "-")
         if value is True:
             argv.append(option)
+        elif isinstance(value, (list, tuple)):
+            argv.append(option)
+            argv.extend(str(item) for item in value)
         else:
             argv.extend([option, str(value)])
     log_path = recorder.case_dir / "runner.log"
@@ -2537,6 +2644,7 @@ def add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--comfy-root", type=Path, default=DEFAULT_COMFY_ROOT)
     parser.add_argument("--comfy-log", type=Path, default=DEFAULT_LOG)
     parser.add_argument("--image", type=Path)
+    parser.add_argument("--images", nargs="+", type=Path)
     parser.add_argument("--model", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sampling-steps", type=int, default=0)

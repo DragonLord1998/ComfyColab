@@ -102,6 +102,34 @@ ReconViaGen:
 ReconViaGen's public implementation targets its own VGGT/TRELLIS pipeline; this
 notice does not imply compatibility, endorsement, or official Pixal3D support.
 
+The separate Advanced Pixal3DMV adapter optionally uses VGGT-Ω:
+
+- Official source: <https://github.com/facebookresearch/vggt-omega>
+- Pinned source revision: `39a0cb8af88554f15ddcb5354cd52bde588fa014`
+- Official model: <https://huggingface.co/facebook/VGGT-Omega>
+- Pinned model revision: `05654241adc2f218dfb089c373a011f8a7040576`
+- Public fallback mirror: <https://huggingface.co/1kaiser/vggt-omega-jax>
+- Pinned fallback revision: `a8c3a718e0cf78e9e4c6847229efea793d37f060`
+- Required checkpoint SHA-256: `c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934`
+- Source-repository license: FAIR Noncommercial Research License v1
+- Official model-repository license label: CC BY-NC 4.0; gated access
+  conditions also apply
+
+ComfyColab does not redistribute VGGT-Ω source or weights. It first attempts the
+official access-gated repository and then may use the pinned community mirror
+as a retrieval fallback. The mirrored `vggt_omega_1b_512.pt` must match the
+official file's exact byte size and SHA-256 before use. The mirror is not an
+official Meta distribution and does not provide independent license metadata;
+its availability is not a grant of rights or official checkpoint-access
+approval. Users remain responsible for confirming authorization and complying
+with all applicable upstream checkpoint terms, including the official model
+repository's CC BY-NC 4.0 label and access conditions. When the optional
+Hugging Face Xet client rejects public-token acquisition, ComfyColab may
+download the same pinned mirror file through its immutable `resolve` URL; the
+exact byte-size and SHA-256 checks remain mandatory. The Advanced node is a
+ComfyColab inference-time adapter, not an official Meta or TencentARC
+integration or endorsement.
+
 ## SkinTokens / TokenRig
 
 - Official source: <https://github.com/VAST-AI-Research/SkinTokens>

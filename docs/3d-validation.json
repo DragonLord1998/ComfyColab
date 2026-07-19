@@ -20,7 +20,11 @@
     "pixal3dUtils3d": "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
     "pixal3dNatten": "natten==0.21.6+torch2110cu128",
     "pixal3dNvdiffrast": "NVlabs/nvdiffrast@253ac4fcea7de5f396371124af597e6cc957bfae",
-    "pixal3dEnvironment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v2",
+    "pixal3dVggtOmega": "facebookresearch/vggt-omega@39a0cb8af88554f15ddcb5354cd52bde588fa014",
+    "pixal3dVggtOmegaModel": "facebook/VGGT-Omega@05654241adc2f218dfb089c373a011f8a7040576",
+    "pixal3dVggtOmegaFallbackModel": "1kaiser/vggt-omega-jax@a8c3a718e0cf78e9e4c6847229efea793d37f060",
+    "pixal3dVggtOmegaCheckpointSha256": "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934",
+    "pixal3dEnvironment": "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3",
     "skinTokens": "273b691d35989d71cd17ff2895fdc735097b92d1",
     "skinTokensModel": "VAST-AI/SkinTokens@79736cad0fd84de384d5eede659b4ebd24effe33",
     "skinTokensQwen": "Qwen/Qwen3-0.6B@c1899de289a04d12100db370d81485cdf75e47ca",
@@ -43,7 +47,7 @@
     "trellis_1024_cascade_textured_glb": {"status": "pending", "evidence": null},
     "trellis_1536_cascade_genuine": {"status": "pending", "evidence": null},
     "trellis_1536_default_cap_no_downgrade": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:trellis_1536_default_cap:601933964f35a3da555e538ff56cb3e1d2d882b47546e3418eba3e1c48ad4a2d"},
-    "trellis_multiview_4view_textured_glb": {"status": "pending", "evidence": null},
+    "trellis_multiview_4view_textured_glb": {"status": "passed", "evidence": "live-colab-cli:comfycolab-node-validation:8035c2d3-3978-4d5d-8ca6-29af1069cdce:d7face8d0a9c4c6975c7d091a6f252717598eab51297a582d43f34cbe0fd03c4"},
     "trellis_multiview_6view_textured_glb": {"status": "pending", "evidence": null},
     "combined_environment_cuda_probes": {"status": "passed", "evidence": "live-g4:g4-19446f1f7eac49e2:combined_environment_cuda_probes:375c31677dc651781e9ff01b5c7d1b4181e395869055f15be74b1a77c542d28d"},
     "ultrashape_384_refinement": {"status": "pending", "evidence": null},
@@ -59,7 +63,8 @@
     "pixal3d_cancellation_cleanup": {"status": "pending", "evidence": null},
     "pixal3d_preview_save_glb_reader": {"status": "pending", "evidence": null},
     "pixal3d_1536_experimental": {"status": "pending", "evidence": null},
-    "pixal3d_multiview_4view_experimental_glb": {"status": "pending", "evidence": null},
+    "pixal3d_multiview_4view_experimental_glb": {"status": "passed", "evidence": "live-colab-cli:comfycolab-node-validation:7d5bd370-331c-4581-a586-c0c5d97c8fe5:1941019ca59d07a9936ab5a73a90f3e1c041aa93f365c647180bed70214aa951"},
+    "pixal3d_multiview_advanced_vggt_omega_glb": {"status": "passed", "evidence": "live-g4:g4-7aa0844849334f72:pixal3d_multiview_advanced_vggt_omega:1f47488dc71b27e6be5655e7c8a029a0cb0c586714d79b9082b344caa63487d6"},
     "skintokens_auto_rig_glb": {"status": "pending", "evidence": null},
     "cubepart_schema_decomposition_glb": {"status": "pending", "evidence": null},
     "full_workflow_hard_surface": {"status": "pending", "evidence": null},
@@ -86,6 +91,9 @@
     "pixal3d_transparent_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
     "pixal3d_worker_reuse_1024": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
     "pixal3d_preview_save_glb_reader": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
-    "pixal3d_1536_experimental": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false}
+    "pixal3d_1536_experimental": {"status": "pending", "actualResolution": null, "runtimeSeconds": null, "peakVramBytes": null, "glbBytes": null, "faces": null, "textureSize": null, "glbValidated": false},
+    "trellis_multiview_4view_flux2_klein_9b": {"status": "passed", "actualResolution": 512, "runtimeSeconds": 182.76, "peakVramBytes": null, "glbBytes": 9023296, "faces": 149099, "textureSize": 1024, "glbValidated": true, "nonCollapsedGeometryValidated": true, "glbSha256": "d7face8d0a9c4c6975c7d091a6f252717598eab51297a582d43f34cbe0fd03c4"},
+    "pixal3d_multiview_4view_flux2_klein_9b": {"status": "passed", "actualResolution": 1024, "tokens": 15808, "runtimeSeconds": 128.8767951640002, "workflowRuntimeSeconds": 232.58, "peakVramBytes": 57337375616, "glbBytes": 6295492, "faces": 149162, "textureSize": 1024, "glbValidated": true, "nonCollapsedGeometryValidated": true, "glbSha256": "1941019ca59d07a9936ab5a73a90f3e1c041aa93f365c647180bed70214aa951"},
+    "pixal3d_multiview_advanced_vggt_omega": {"status": "passed", "actualResolution": 1024, "tokens": 15416, "runtimeSeconds": 74.861459062, "workflowRuntimeSeconds": 101.248, "peakVramBytes": 57337113280, "workflowPeakVramBytes": 63888687104, "glbBytes": 6062468, "faces": 143940, "textureSize": 1024, "glbValidated": true, "nonCollapsedGeometryValidated": true, "glbSha256": "ac89840c533a22a4a1af0b27fca571540e45272bb124d5e37ac44a0a40ad00b0", "alignmentNormalizedRmsError": 0.06550437211564838, "checkpointRepo": "1kaiser/vggt-omega-jax", "checkpointRevision": "a8c3a718e0cf78e9e4c6847229efea793d37f060", "checkpointSha256": "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"}
   }
 }

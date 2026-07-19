@@ -619,6 +619,16 @@ def build_pixal3d_multiview_graph(
     top_image: Any = None,
     bottom_image: Any = None,
     view_quality: dict[str, float] | None = None,
+    geometry_guidance: str = "none",
+    geometry_fallback: str = "strict",
+    vggt_omega_image_resolution: int = 512,
+    geometry_strength: float = 0.75,
+    confidence_exponent: float = 1.0,
+    depth_tolerance: float = 0.12,
+    occlusion_margin: float = 0.04,
+    occlusion_tau: float = 0.03,
+    geometry_floor: float = 0.05,
+    max_normalized_alignment_error: float = 0.35,
     seed: int,
     remove_background: str,
     camera_fov_degrees: float,
@@ -666,6 +676,21 @@ def build_pixal3d_multiview_graph(
         worker_inputs[f"{name}_image"] = image
         worker_inputs[f"{name}_mask"] = mask
         worker_inputs[f"{name}_quality"] = float((view_quality or {}).get(name, 1.0))
+    if geometry_guidance != "none":
+        worker_inputs.update(
+            geometry_guidance=geometry_guidance,
+            geometry_fallback=geometry_fallback,
+            vggt_omega_image_resolution=int(vggt_omega_image_resolution),
+            geometry_strength=float(geometry_strength),
+            confidence_exponent=float(confidence_exponent),
+            depth_tolerance=float(depth_tolerance),
+            occlusion_margin=float(occlusion_margin),
+            occlusion_tau=float(occlusion_tau),
+            geometry_floor=float(geometry_floor),
+            max_normalized_alignment_error=float(
+                max_normalized_alignment_error
+            ),
+        )
     worker = graph.node("ComfyColab3DPixal3DMultiViewWorker", **worker_inputs)
     glb_path = _progress_checkpoint(
         graph,

@@ -31,8 +31,14 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from multiview import (  # noqa: E402
     ADAPTER_NAME,
+    camera_transform_for_view,
     run_multiview_projection_fusion,
     validate_multiview_request,
+)
+from vggt_omega_adapter import (  # noqa: E402
+    VGGT_OMEGA_ADAPTER_NAME,
+    build_geometry_fusion_context,
+    run_vggt_omega_depth_prepass,
 )
 
 
@@ -229,7 +235,50 @@ def _validate_request(request: dict[str, Any]) -> None:
     fov = request.get("camera_fov_radians")
     if fov is not None and (not math.isfinite(float(fov)) or not 0.0 < float(fov) < math.pi):
         raise ValueError("Manual Pixal3D FOV must be between 0 and pi radians")
-    validate_multiview_request(request)
+    views = validate_multiview_request(request)
+    guidance = str(request.get("geometry_guidance", "none"))
+    if guidance not in {"none", "vggt_omega_depth_conf"}:
+        raise ValueError("geometry_guidance must be none or vggt_omega_depth_conf")
+    if guidance == "none":
+        requested = str(request.get("geometry_requested", ""))
+        if not requested:
+            return
+        if requested != "vggt_omega_depth_conf":
+            raise ValueError(
+                "geometry_requested must identify vggt_omega_depth_conf"
+            )
+        if not views:
+            raise ValueError("A VGGT-Omega fallback requires multiview inputs")
+        if str(request.get("geometry_fallback", "")) != "weighted_mv":
+            raise ValueError(
+                "A recorded VGGT-Omega fallback requires weighted_mv policy"
+            )
+        if not str(request.get("geometry_fallback_stage", "")):
+            raise ValueError("A recorded VGGT-Omega fallback omitted its stage")
+        if not str(request.get("geometry_fallback_reason", "")):
+            raise ValueError("A recorded VGGT-Omega fallback omitted its reason")
+        return
+    if not views:
+        raise ValueError("VGGT-Omega geometry guidance requires Pixal3D multiview inputs")
+    if len(views) < 3:
+        raise ValueError("VGGT-Omega geometry guidance requires at least three views")
+    fallback = str(request.get("geometry_fallback", "strict"))
+    if fallback not in {"strict", "weighted_mv"}:
+        raise ValueError("geometry_fallback must be strict or weighted_mv")
+    if int(request.get("vggt_omega_image_resolution", 512)) != 512:
+        raise ValueError("The pinned VGGT-Omega checkpoint requires image resolution 512")
+    for name, minimum, maximum in (
+        ("geometry_strength", 0.0, 1.0),
+        ("confidence_exponent", 0.0, 4.0),
+        ("depth_tolerance", 1e-4, 1.0),
+        ("occlusion_margin", 0.0, 0.5),
+        ("occlusion_tau", 1e-4, 0.5),
+        ("geometry_floor", 0.0, 1.0),
+        ("max_normalized_alignment_error", 0.0, 1.0),
+    ):
+        value = float(request.get(name, minimum))
+        if not math.isfinite(value) or value < minimum or value > maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
 
 
 def _sha256(path: Path) -> str:
@@ -263,6 +312,58 @@ def _snapshot_revision(path: Path) -> str:
     if not revision:
         raise RuntimeError(f"Pinned model snapshot marker omitted its revision: {path}")
     return revision
+
+
+def _geometry_guidance_enabled(request: dict[str, Any]) -> bool:
+    return str(request.get("geometry_guidance", "none")) == "vggt_omega_depth_conf"
+
+
+def _geometry_fallback_metadata(
+    request: dict[str, Any],
+    error: BaseException,
+    stage: str,
+) -> dict[str, Any]:
+    return {
+        "adapter": VGGT_OMEGA_ADAPTER_NAME,
+        "frozen": True,
+        "official_pixal3d_support": False,
+        "canonical_camera_policy": "exact_labeled_pixal_cameras",
+        "predicted_camera_policy": "not_used_fallback",
+        "register_injection": False,
+        "status": "fallback_weighted_mv",
+        "fallback": str(request.get("geometry_fallback", "strict")),
+        "failed_stage": stage,
+        "warning": (
+            "VGGT-Omega geometry guidance failed; generated with weighted "
+            "Pixal3D projection fusion only."
+        ),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+
+
+def _recorded_geometry_fallback_metadata(
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    if str(request.get("geometry_requested", "")) != "vggt_omega_depth_conf":
+        return None
+    return {
+        "adapter": VGGT_OMEGA_ADAPTER_NAME,
+        "frozen": True,
+        "official_pixal3d_support": False,
+        "canonical_camera_policy": "exact_labeled_pixal_cameras",
+        "predicted_camera_policy": "not_used_fallback",
+        "register_injection": False,
+        "status": "fallback_weighted_mv",
+        "fallback": "weighted_mv",
+        "failed_stage": str(request["geometry_fallback_stage"]),
+        "warning": (
+            "VGGT-Omega geometry guidance was requested but its artifacts were "
+            "unavailable; generated with weighted Pixal3D projection fusion only."
+        ),
+        "error_type": "ArtifactProvisioningError",
+        "error": str(request["geometry_fallback_reason"]),
+    }
 
 
 class Pixal3DRuntime:
@@ -349,10 +450,23 @@ class Pixal3DRuntime:
             "environment": os.environ.get("COMFYCOLAB_PIXAL3D_ENVIRONMENT_REF", ""),
             "naf_checkpoint": _sha256(self.args.naf_checkpoint),
         }
+        if _geometry_guidance_enabled(request):
+            source_dir = self.args.vggt_omega_source_dir
+            checkpoint = self.args.vggt_omega_checkpoint
+            if source_dir is None or not Path(source_dir).is_dir():
+                raise RuntimeError("VGGT-Omega source checkout is required for geometry guidance")
+            if checkpoint is None or not Path(checkpoint).is_file():
+                raise RuntimeError("VGGT-Omega checkpoint is required for geometry guidance")
+            actual.update(
+                {
+                    "vggt_omega_source": _git_revision(Path(source_dir)),
+                    "vggt_omega_checkpoint": _snapshot_revision(Path(checkpoint).parent),
+                }
+            )
         requested = request.get("revisions")
         if not isinstance(requested, dict):
             raise RuntimeError("Pixal3D request omitted pinned revision claims")
-        for name in (
+        required = [
             "source",
             "model",
             "dinov3",
@@ -360,7 +474,10 @@ class Pixal3DRuntime:
             "naf",
             "naf_checkpoint",
             "environment",
-        ):
+        ]
+        if _geometry_guidance_enabled(request):
+            required.extend(("vggt_omega_source", "vggt_omega_checkpoint"))
+        for name in required:
             if not actual[name] or actual[name] != str(requested.get(name, "")):
                 raise RuntimeError(
                     f"Pixal3D {name} revision mismatch: requested "
@@ -426,6 +543,7 @@ class Pixal3DRuntime:
             f".{metadata_output.stem}.{request_id}.partial.json"
         )
         prepared_camera_image = output.with_name(f".{output.stem}.{request_id}.camera.png")
+        prepared_view_paths: list[Path] = []
         for path in (
             output,
             metadata_output,
@@ -436,12 +554,54 @@ class Pixal3DRuntime:
             path.unlink(missing_ok=True)
         try:
             resolved_revisions = self.resolved_revisions(request)
+            views = validate_multiview_request(request)
+            labels = [str(view["name"]) for view in views]
+            image = _prepare_image_without_rmbg(Path(str(request["image_path"])))
+            image.save(prepared_camera_image)
+            view_images = []
+            for view in views:
+                label = str(view["name"])
+                prepared_path = output.with_name(
+                    f".{output.stem}.{request_id}.{label}.png"
+                )
+                prepared_path.unlink(missing_ok=True)
+                prepared_image = _prepare_image_without_rmbg(
+                    Path(str(view["image_path"]))
+                )
+                prepared_image.save(prepared_path)
+                prepared_view_paths.append(prepared_path)
+                view_images.append(prepared_image)
+
+            omega_predictions = None
+            advanced_geometry = _recorded_geometry_fallback_metadata(request)
+            geometry_context = None
+            if _geometry_guidance_enabled(request):
+                try:
+                    emit_progress(request_id, "vggt_omega", 0, 2, stage_detail="depth_prepass")
+                    omega_predictions = run_vggt_omega_depth_prepass(
+                        prepared_view_paths,
+                        labels,
+                        source_dir=self.args.vggt_omega_source_dir,
+                        checkpoint_path=self.args.vggt_omega_checkpoint,
+                        image_resolution=int(request.get("vggt_omega_image_resolution", 512)),
+                        device="cuda",
+                    )
+                    emit_progress(request_id, "vggt_omega", 1, 2, stage_detail="depth_prepass")
+                except BaseException as error:
+                    if str(request.get("geometry_fallback", "strict")) != "weighted_mv":
+                        raise RuntimeError(
+                            "VGGT-Omega geometry guidance failed in strict mode: "
+                            f"{type(error).__name__}: {error}"
+                        ) from error
+                    advanced_geometry = _geometry_fallback_metadata(
+                        request,
+                        error,
+                        "depth_prepass",
+                    )
             pipeline = self.ensure_pipeline(request_id)
             assert self.official is not None and self.torch is not None
             self.torch.cuda.reset_peak_memory_stats()
             emit_progress(request_id, "camera", 0, 1)
-            image = _prepare_image_without_rmbg(Path(str(request["image_path"])))
-            image.save(prepared_camera_image)
             camera_params = self._camera_params(request, prepared_camera_image)
             emit_progress(
                 request_id,
@@ -471,19 +631,63 @@ class Pixal3DRuntime:
                 "guidance_rescale": 0.0,
                 "rescale_t": 3.0,
             }
+            if omega_predictions is not None:
+                try:
+                    canonical_transforms = self.torch.stack(
+                        [
+                            camera_transform_for_view(
+                                label,
+                                float(camera_params["distance"]),
+                            )
+                            for label in labels
+                        ]
+                    ).to(pipeline.device)
+                    geometry_context = build_geometry_fusion_context(
+                        omega_predictions,
+                        canonical_transforms=canonical_transforms,
+                        camera_angle_x=float(camera_params["camera_angle_x"]),
+                        camera_distance=float(camera_params["distance"]),
+                        projection_grid=pipeline.image_cond_model_ss.proj_grid,
+                        geometry_strength=float(request.get("geometry_strength", 0.75)),
+                        confidence_exponent=float(
+                            request.get("confidence_exponent", 1.0)
+                        ),
+                        depth_tolerance=float(request.get("depth_tolerance", 0.12)),
+                        occlusion_margin=float(request.get("occlusion_margin", 0.04)),
+                        occlusion_tau=float(request.get("occlusion_tau", 0.03)),
+                        geometry_floor=float(request.get("geometry_floor", 0.05)),
+                        max_normalized_alignment_error=float(
+                            request.get("max_normalized_alignment_error", 0.35)
+                        ),
+                    )
+                    advanced_geometry = geometry_context.metadata()
+                    emit_progress(
+                        request_id,
+                        "vggt_omega",
+                        2,
+                        2,
+                        stage_detail="geometry_context",
+                    )
+                except BaseException as error:
+                    if str(request.get("geometry_fallback", "strict")) != "weighted_mv":
+                        raise RuntimeError(
+                            "VGGT-Omega geometry context failed in strict mode: "
+                            f"{type(error).__name__}: {error}"
+                        ) from error
+                    geometry_context = None
+                    advanced_geometry = _geometry_fallback_metadata(
+                        request,
+                        error,
+                        "geometry_context",
+                    )
             emit_progress(request_id, "generate", 0, 5)
-            views = validate_multiview_request(request)
             if views:
-                view_images = [
-                    _prepare_image_without_rmbg(Path(str(view["image_path"])))
-                    for view in views
-                ]
                 mesh_list, (shape_slat, _tex_slat, actual_resolution) = (
                     run_multiview_projection_fusion(
                         pipeline,
                         view_images,
                         camera_params,
-                        labels=[str(view["name"]) for view in views],
+                        labels=labels,
                         view_qualities={
                             str(view["name"]): float(view.get("quality", 1.0))
                             for view in views
@@ -500,6 +704,7 @@ class Pixal3DRuntime:
                         fusion_temperature=float(
                             request.get("fusion_temperature", 2.0)
                         ),
+                        geometry_context=geometry_context,
                         return_latent=True,
                     )
                 )
@@ -610,6 +815,10 @@ class Pixal3DRuntime:
                         request.get("fusion_temperature", 2.0)
                     ),
                 }
+                if advanced_geometry is not None:
+                    metadata["experimental_multiview"][
+                        "advanced_geometry"
+                    ] = advanced_geometry
             partial_metadata.write_text(
                 json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
@@ -624,11 +833,14 @@ class Pixal3DRuntime:
                 partial_output,
                 partial_metadata,
                 prepared_camera_image,
+                *prepared_view_paths,
             ):
                 path.unlink(missing_ok=True)
             raise
         finally:
             prepared_camera_image.unlink(missing_ok=True)
+            for path in prepared_view_paths:
+                path.unlink(missing_ok=True)
 
 
 def _request_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -661,6 +873,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--moge-dir", type=Path, required=True)
     parser.add_argument("--naf-source-dir", type=Path, required=True)
     parser.add_argument("--naf-checkpoint", type=Path, required=True)
+    parser.add_argument("--vggt-omega-source-dir", type=Path)
+    parser.add_argument("--vggt-omega-checkpoint", type=Path)
     parser.add_argument("--request-id", default="")
     parser.add_argument("--image-path", type=Path)
     parser.add_argument("--output-mesh", type=Path)

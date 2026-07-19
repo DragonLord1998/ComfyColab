@@ -24,7 +24,23 @@ NAF_SOURCE_REPO = "https://github.com/valeoai/NAF.git"
 NAF_SOURCE_REF = "37f2dfc180f2de53d98bd601109c0da0dd6b0f43"
 NAF_CHECKPOINT_URL = "https://github.com/valeoai/NAF/releases/download/model/naf_release.pth"
 NAF_CHECKPOINT_SHA256 = "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
-PIXAL3D_ENVIRONMENT_REF = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v2"
+VGGT_OMEGA_SOURCE_REPO = "https://github.com/facebookresearch/vggt-omega.git"
+VGGT_OMEGA_SOURCE_REF = "39a0cb8af88554f15ddcb5354cd52bde588fa014"
+VGGT_OMEGA_MODEL_REPO = "facebook/VGGT-Omega"
+VGGT_OMEGA_MODEL_REF = "05654241adc2f218dfb089c373a011f8a7040576"
+VGGT_OMEGA_FALLBACK_MODEL_REPO = "1kaiser/vggt-omega-jax"
+VGGT_OMEGA_FALLBACK_MODEL_REF = "a8c3a718e0cf78e9e4c6847229efea793d37f060"
+VGGT_OMEGA_CHECKPOINT = "vggt_omega_1b_512.pt"
+VGGT_OMEGA_FALLBACK_CHECKPOINT_URL = (
+    "https://huggingface.co/1kaiser/vggt-omega-jax/resolve/"
+    "a8c3a718e0cf78e9e4c6847229efea793d37f060/"
+    "vggt_omega_1b_512.pt?download=true"
+)
+VGGT_OMEGA_CHECKPOINT_BYTES = 4_576_706_117
+VGGT_OMEGA_CHECKPOINT_SHA256 = (
+    "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"
+)
+PIXAL3D_ENVIRONMENT_REF = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
 ARTIFACT_SCHEMA = "comfycolab-pixal3d-artifacts-v1"
 MIN_FREE_BYTES = 35 * 1024**3
 _VALIDATED_SNAPSHOT_STATS: dict[tuple[str, str, str], tuple[tuple[str, int, int], ...]] = {}
@@ -37,6 +53,15 @@ class Pixal3DArtifacts:
     moge_dir: Path
     naf_source_dir: Path
     naf_checkpoint: Path
+
+
+@dataclass(frozen=True)
+class Pixal3DAdvancedArtifacts(Pixal3DArtifacts):
+    vggt_omega_source_dir: Path
+    vggt_omega_checkpoint: Path
+    vggt_omega_checkpoint_repo: str
+    vggt_omega_checkpoint_ref: str
+    vggt_omega_checkpoint_fallback: bool
 
 
 def _sha256(path: Path) -> str:
@@ -169,6 +194,7 @@ def _ensure_snapshot(
     destination: Path,
     sentinel: str,
     progress: Callable[[dict], None],
+    allow_patterns: list[str] | None = None,
 ) -> Path:
     marker = destination / ".comfycolab-artifact.json"
     try:
@@ -180,6 +206,7 @@ def _ensure_snapshot(
         payload.get("schema") == ARTIFACT_SCHEMA
         and payload.get("repo") == repo_id
         and payload.get("revision") == revision
+        and payload.get("allow_patterns") == (allow_patterns or None)
         and (destination / sentinel).is_file()
         and inventory_valid
     ):
@@ -201,6 +228,7 @@ def _ensure_snapshot(
             revision=revision,
             local_dir=str(destination),
             resume_download=True,
+            allow_patterns=allow_patterns,
         )
     except BaseException as error:
         raise RuntimeError(
@@ -216,6 +244,7 @@ def _ensure_snapshot(
         "schema": ARTIFACT_SCHEMA,
         "repo": repo_id,
         "revision": revision,
+        "allow_patterns": allow_patterns or None,
         "files": inventory,
     }
     partial_marker = marker.with_name(f".{marker.name}.{os.getpid()}.partial")
@@ -260,6 +289,304 @@ def _ensure_naf_source(destination: Path) -> Path:
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return destination
+
+
+def _ensure_git_source(
+    *,
+    repository: str,
+    revision: str,
+    destination: Path,
+    sentinel: str,
+) -> Path:
+    try:
+        current = _git("rev-parse", "HEAD", cwd=destination)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        current = ""
+    if current == revision and (destination / sentinel).is_file():
+        return destination
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".source-", dir=destination.parent))
+    try:
+        try:
+            _git("clone", "--filter=blob:none", "--no-checkout", repository, str(staging))
+            _git("fetch", "--depth", "1", "origin", revision, cwd=staging)
+            _git("checkout", "--detach", revision, cwd=staging)
+            resolved_revision = _git("rev-parse", "HEAD", cwd=staging)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(
+                f"Unable to provision pinned source {repository}@{revision}"
+            ) from error
+        if resolved_revision != revision:
+            raise RuntimeError(f"Source checkout did not resolve to {revision}")
+        if not (staging / sentinel).is_file():
+            raise RuntimeError(
+                f"Pinned source checkout is incomplete: missing {sentinel}"
+            )
+        os.replace(staging, destination)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return destination
+
+
+def _validate_vggt_omega_checkpoint(checkpoint: Path) -> None:
+    try:
+        size = checkpoint.stat().st_size
+    except OSError as error:
+        raise RuntimeError(
+            f"Pinned VGGT-Omega checkpoint is unavailable: {checkpoint}"
+        ) from error
+    if size != VGGT_OMEGA_CHECKPOINT_BYTES:
+        raise RuntimeError(
+            "Pinned VGGT-Omega checkpoint size mismatch: "
+            f"expected {VGGT_OMEGA_CHECKPOINT_BYTES}, got {size}"
+        )
+    digest = _sha256(checkpoint)
+    if digest != VGGT_OMEGA_CHECKPOINT_SHA256:
+        raise RuntimeError(
+            "Pinned VGGT-Omega checkpoint SHA-256 mismatch: "
+            f"expected {VGGT_OMEGA_CHECKPOINT_SHA256}, got {digest}"
+        )
+
+
+def _ensure_direct_hf_snapshot(
+    *,
+    url: str,
+    repo_id: str,
+    revision: str,
+    destination: Path,
+    filename: str,
+    expected_bytes: int,
+    expected_sha256: str,
+    progress: Callable[[dict], None],
+) -> Path:
+    """Download one immutable Hub file without the optional Xet client."""
+
+    marker = destination / ".comfycolab-artifact.json"
+    checkpoint = destination / filename
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        payload = {}
+    inventory_valid, invalid_files = _snapshot_inventory_valid(destination, payload)
+    if (
+        payload.get("schema") == ARTIFACT_SCHEMA
+        and payload.get("repo") == repo_id
+        and payload.get("revision") == revision
+        and payload.get("allow_patterns") == [filename]
+        and checkpoint.is_file()
+        and inventory_valid
+    ):
+        return destination
+    for invalid in invalid_files:
+        if invalid.is_file() and destination in invalid.parents:
+            invalid.unlink(missing_ok=True)
+
+    destination.mkdir(parents=True, exist_ok=True)
+    if checkpoint.is_file():
+        try:
+            checkpoint_valid = (
+                checkpoint.stat().st_size == expected_bytes
+                and _sha256(checkpoint) == expected_sha256
+            )
+        except OSError:
+            checkpoint_valid = False
+        if not checkpoint_valid:
+            checkpoint.unlink(missing_ok=True)
+
+    if not checkpoint.is_file():
+        partial = checkpoint.with_name(f".{checkpoint.name}.download.partial")
+        try:
+            resume_from = partial.stat().st_size
+        except OSError:
+            resume_from = 0
+        if resume_from < 0 or resume_from > expected_bytes:
+            partial.unlink(missing_ok=True)
+            resume_from = 0
+        headers = {"User-Agent": "ComfyColab/1.0"}
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+        _emit(
+            progress,
+            "snapshot_direct",
+            repo=repo_id,
+            revision=revision,
+            url=url,
+            resume_from_bytes=resume_from,
+        )
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            response = urllib.request.urlopen(request, timeout=120)
+        except BaseException as error:
+            raise RuntimeError(
+                f"Unable to download pinned artifact {repo_id}@{revision} "
+                "through its immutable direct URL."
+            ) from error
+        with response:
+            content_range = response.headers.get("Content-Range", "")
+            append = bool(
+                resume_from
+                and int(getattr(response, "status", 0)) == 206
+                and content_range.startswith(f"bytes {resume_from}-")
+            )
+            if not append:
+                resume_from = 0
+            downloaded = resume_from
+            with partial.open("ab" if append else "wb") as output:
+                while True:
+                    chunk = response.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    _emit(
+                        progress,
+                        "download",
+                        artifact="VGGT-Omega-1B-512",
+                        downloaded_bytes=downloaded,
+                        total_bytes=expected_bytes,
+                    )
+                output.flush()
+                os.fsync(output.fileno())
+        try:
+            actual_bytes = partial.stat().st_size
+        except OSError as error:
+            raise RuntimeError(
+                f"Direct download for {repo_id}@{revision} produced no file."
+            ) from error
+        if actual_bytes != expected_bytes:
+            raise RuntimeError(
+                f"Direct download for {repo_id}@{revision} is incomplete: "
+                f"expected {expected_bytes} bytes, got {actual_bytes}."
+            )
+        digest = _sha256(partial)
+        if digest != expected_sha256:
+            partial.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Direct download for {repo_id}@{revision} failed SHA-256 "
+                f"validation: expected {expected_sha256}, got {digest}."
+            )
+        os.replace(partial, checkpoint)
+
+    inventory = {
+        filename: {
+            "bytes": expected_bytes,
+            "sha256": expected_sha256,
+        }
+    }
+    marker_payload = {
+        "schema": ARTIFACT_SCHEMA,
+        "repo": repo_id,
+        "revision": revision,
+        "allow_patterns": [filename],
+        "files": inventory,
+        "transport": "immutable-direct-resolve",
+    }
+    partial_marker = marker.with_name(f".{marker.name}.{os.getpid()}.partial")
+    try:
+        partial_marker.write_text(
+            json.dumps(marker_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(partial_marker, marker)
+    finally:
+        partial_marker.unlink(missing_ok=True)
+    fingerprint = _snapshot_stat_fingerprint(destination, inventory)
+    if fingerprint is not None:
+        _VALIDATED_SNAPSHOT_STATS[(str(destination.resolve()), repo_id, revision)] = (
+            fingerprint
+        )
+    return destination
+
+
+def _ensure_vggt_omega_checkpoint(
+    root: Path,
+    *,
+    progress: Callable[[dict], None],
+) -> tuple[Path, str, str, bool]:
+    attempts = (
+        (
+            VGGT_OMEGA_MODEL_REPO,
+            VGGT_OMEGA_MODEL_REF,
+            "vggt-omega",
+            False,
+        ),
+        (
+            VGGT_OMEGA_FALLBACK_MODEL_REPO,
+            VGGT_OMEGA_FALLBACK_MODEL_REF,
+            "vggt-omega-fallback",
+            True,
+        ),
+    )
+    failures: list[str] = []
+    for repo_id, revision, label, is_fallback in attempts:
+        destination = _snapshot_dir(root, label, revision)
+        try:
+            try:
+                destination = _ensure_snapshot(
+                    repo_id=repo_id,
+                    revision=revision,
+                    destination=destination,
+                    sentinel=VGGT_OMEGA_CHECKPOINT,
+                    progress=progress,
+                    allow_patterns=[VGGT_OMEGA_CHECKPOINT],
+                )
+            except RuntimeError as snapshot_error:
+                if not is_fallback:
+                    raise
+                _emit(
+                    progress,
+                    "snapshot_transport_fallback",
+                    artifact="VGGT-Omega-1B-512",
+                    repo=repo_id,
+                    revision=revision,
+                    failed_transport="huggingface_hub",
+                    fallback_transport="immutable_direct_resolve",
+                    reason=str(snapshot_error),
+                )
+                destination = _ensure_direct_hf_snapshot(
+                    url=VGGT_OMEGA_FALLBACK_CHECKPOINT_URL,
+                    repo_id=repo_id,
+                    revision=revision,
+                    destination=destination,
+                    filename=VGGT_OMEGA_CHECKPOINT,
+                    expected_bytes=VGGT_OMEGA_CHECKPOINT_BYTES,
+                    expected_sha256=VGGT_OMEGA_CHECKPOINT_SHA256,
+                    progress=progress,
+                )
+            checkpoint = destination / VGGT_OMEGA_CHECKPOINT
+            _validate_vggt_omega_checkpoint(checkpoint)
+        except RuntimeError as error:
+            failures.append(f"{repo_id}@{revision}: {error}")
+            if not is_fallback:
+                _emit(
+                    progress,
+                    "snapshot_fallback",
+                    artifact="VGGT-Omega-1B-512",
+                    failed_repo=repo_id,
+                    failed_revision=revision,
+                    fallback_repo=VGGT_OMEGA_FALLBACK_MODEL_REPO,
+                    fallback_revision=VGGT_OMEGA_FALLBACK_MODEL_REF,
+                    checkpoint_sha256=VGGT_OMEGA_CHECKPOINT_SHA256,
+                )
+                continue
+            raise RuntimeError(
+                "Unable to provision the pinned VGGT-Omega-1B-512 checkpoint "
+                "from either the official gated repository or the configured "
+                "public mirror. " + " | ".join(failures)
+            ) from error
+        _emit(
+            progress,
+            "snapshot_ready",
+            artifact="VGGT-Omega-1B-512",
+            repo=repo_id,
+            revision=revision,
+            checkpoint_sha256=VGGT_OMEGA_CHECKPOINT_SHA256,
+            fallback=is_fallback,
+        )
+        return checkpoint, repo_id, revision, is_fallback
+    raise AssertionError("VGGT-Omega provisioning exhausted no attempts")
 
 
 def ensure_pixal3d_artifacts(
@@ -314,6 +641,56 @@ def ensure_pixal3d_artifacts(
     )
 
 
+def ensure_pixal3d_advanced_artifacts(
+    root: str | Path,
+    *,
+    progress: Callable[[dict], None] = lambda _event: None,
+) -> Pixal3DAdvancedArtifacts:
+    root = Path(root)
+    base = ensure_pixal3d_artifacts(root, progress=progress)
+    source_dir = _ensure_git_source(
+        repository=VGGT_OMEGA_SOURCE_REPO,
+        revision=VGGT_OMEGA_SOURCE_REF,
+        destination=root / f"vggt-omega-{VGGT_OMEGA_SOURCE_REF[:12]}",
+        sentinel="vggt_omega/models/vggt_omega.py",
+    )
+    official_checkpoint = (
+        _snapshot_dir(root, "vggt-omega", VGGT_OMEGA_MODEL_REF)
+        / VGGT_OMEGA_CHECKPOINT
+    )
+    fallback_checkpoint = (
+        _snapshot_dir(
+            root,
+            "vggt-omega-fallback",
+            VGGT_OMEGA_FALLBACK_MODEL_REF,
+        )
+        / VGGT_OMEGA_CHECKPOINT
+    )
+    if not official_checkpoint.is_file() and not fallback_checkpoint.is_file():
+        free_bytes = shutil.disk_usage(root).free
+        minimum = VGGT_OMEGA_CHECKPOINT_BYTES + 2 * 1024**3
+        if free_bytes < minimum:
+            raise RuntimeError(
+                "Advanced Pixal3DMV needs about 4.6 GB for the VGGT-Omega "
+                f"checkpoint; only {free_bytes / 1024**3:.1f} GiB is available."
+            )
+    checkpoint, checkpoint_repo, checkpoint_ref, used_fallback = (
+        _ensure_vggt_omega_checkpoint(root, progress=progress)
+    )
+    return Pixal3DAdvancedArtifacts(
+        model_dir=base.model_dir,
+        dinov3_dir=base.dinov3_dir,
+        moge_dir=base.moge_dir,
+        naf_source_dir=base.naf_source_dir,
+        naf_checkpoint=base.naf_checkpoint,
+        vggt_omega_source_dir=source_dir,
+        vggt_omega_checkpoint=checkpoint,
+        vggt_omega_checkpoint_repo=checkpoint_repo,
+        vggt_omega_checkpoint_ref=checkpoint_ref,
+        vggt_omega_checkpoint_fallback=used_fallback,
+    )
+
+
 __all__ = [
     "ARTIFACT_SCHEMA",
     "DINOV3_MODEL_REF",
@@ -323,6 +700,18 @@ __all__ = [
     "PIXAL3D_ENVIRONMENT_REF",
     "PIXAL3D_MODEL_REF",
     "PIXAL3D_SOURCE_REF",
+    "VGGT_OMEGA_CHECKPOINT",
+    "VGGT_OMEGA_CHECKPOINT_BYTES",
+    "VGGT_OMEGA_CHECKPOINT_SHA256",
+    "VGGT_OMEGA_FALLBACK_CHECKPOINT_URL",
+    "VGGT_OMEGA_FALLBACK_MODEL_REF",
+    "VGGT_OMEGA_FALLBACK_MODEL_REPO",
+    "VGGT_OMEGA_MODEL_REF",
+    "VGGT_OMEGA_MODEL_REPO",
+    "VGGT_OMEGA_SOURCE_REF",
+    "VGGT_OMEGA_SOURCE_REPO",
+    "Pixal3DAdvancedArtifacts",
     "Pixal3DArtifacts",
+    "ensure_pixal3d_advanced_artifacts",
     "ensure_pixal3d_artifacts",
 ]

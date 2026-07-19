@@ -99,12 +99,23 @@ PIXAL3D_NAF_CHECKPOINT_SHA256 = (
     "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
 )
 PIXAL3D_NVDIFFRAST_REF = "253ac4fcea7de5f396371124af597e6cc957bfae"
+PIXAL3D_VGGT_OMEGA_SOURCE_REF = "39a0cb8af88554f15ddcb5354cd52bde588fa014"
+PIXAL3D_VGGT_OMEGA_MODEL_REF = "05654241adc2f218dfb089c373a011f8a7040576"
+PIXAL3D_VGGT_OMEGA_FALLBACK_MODEL_REF = "a8c3a718e0cf78e9e4c6847229efea793d37f060"
+PIXAL3D_VGGT_OMEGA_FALLBACK_CHECKPOINT_URL = (
+    "https://huggingface.co/1kaiser/vggt-omega-jax/resolve/"
+    "a8c3a718e0cf78e9e4c6847229efea793d37f060/"
+    "vggt_omega_1b_512.pt?download=true"
+)
+PIXAL3D_VGGT_OMEGA_CHECKPOINT_SHA256 = (
+    "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"
+)
 PIXAL3D_UTILS3D_WHEEL = (
     "https://github.com/LDYang694/Storages/releases/download/"
     "20260430/utils3d-0.0.2-py3-none-any.whl"
 )
 PIXAL3D_WORKER_ENVIRONMENT = "pixal3d-worker"
-PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v2"
+PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
 PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
 PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
 PIXAL3D_NVDIFFRAST_PACKAGE = (
@@ -130,6 +141,8 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
     "accelerate==1.13.0",
     "plyfile==1.1.3",
     "huggingface_hub>=0.36.0",
+    "einops==0.8.1",
+    "safetensors==0.7.0",
 )
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
@@ -926,6 +939,11 @@ def expected_pixal3d_sources() -> dict[str, str]:
         "utils3d": PIXAL3D_UTILS3D_WHEEL,
         "natten": PIXAL3D_NATTEN_PACKAGE,
         "nvdiffrast": PIXAL3D_NVDIFFRAST_REF,
+        "vggtOmega": PIXAL3D_VGGT_OMEGA_SOURCE_REF,
+        "vggtOmegaModel": PIXAL3D_VGGT_OMEGA_MODEL_REF,
+        "vggtOmegaFallbackModel": PIXAL3D_VGGT_OMEGA_FALLBACK_MODEL_REF,
+        "vggtOmegaFallbackCheckpointUrl": PIXAL3D_VGGT_OMEGA_FALLBACK_CHECKPOINT_URL,
+        "vggtOmegaCheckpointSha256": PIXAL3D_VGGT_OMEGA_CHECKPOINT_SHA256,
         "environment": PIXAL3D_ENVIRONMENT_REF,
         "comfyEnv": COMFY_ENV_VERSION,
     }

@@ -233,6 +233,18 @@ def pixal3d_multiview_cache_key(
     fusion_strategy: str,
     fusion_temperature: float,
     view_quality: dict[str, float] | None = None,
+    geometry_guidance: str = "none",
+    geometry_fallback: str = "strict",
+    vggt_omega_source_ref: str = "",
+    vggt_omega_checkpoint_ref: str = "",
+    vggt_omega_image_resolution: int = 512,
+    geometry_strength: float = 0.75,
+    confidence_exponent: float = 1.0,
+    depth_tolerance: float = 0.12,
+    occlusion_margin: float = 0.04,
+    occlusion_tau: float = 0.03,
+    geometry_floor: float = 0.05,
+    max_normalized_alignment_error: float = 0.35,
     source_ref: str,
     model_ref: str,
     dinov3_ref: str,
@@ -245,29 +257,51 @@ def pixal3d_multiview_cache_key(
         "moge-auto-per-view" if float(camera_fov_degrees) <= 0.0
         else {"manual_fov_radians": math.radians(float(camera_fov_degrees))}
     )
-    return deterministic_cache_key(
-        "pixal3d-multiview",
-        views=views,
-        view_quality={name: float(view_quality.get(name, 1.0)) for name in sorted(view_quality)} if view_quality else {},
-        background_policy=remove_background,
-        camera_policy=camera_policy,
-        fusion_strategy=fusion_strategy,
-        fusion_temperature=float(fusion_temperature),
-        seed=seed,
-        pipeline_type=settings.pipeline_type,
-        low_vram=settings.low_vram,
-        sampling_steps=settings.sampling_steps,
-        target_face_count=settings.target_face_count,
-        texture_size=settings.texture_size,
-        max_tokens=settings.max_tokens,
-        source_ref=source_ref,
-        model_ref=model_ref,
-        dinov3_ref=dinov3_ref,
-        moge_ref=moge_ref,
-        naf_ref=naf_ref,
-        environment_ref=environment_ref,
-        result_schema=result_schema,
-    )
+    inputs = {
+        "views": views,
+        "view_quality": {
+            name: float(view_quality.get(name, 1.0))
+            for name in sorted(view_quality)
+        }
+        if view_quality
+        else {},
+        "background_policy": remove_background,
+        "camera_policy": camera_policy,
+        "fusion_strategy": fusion_strategy,
+        "fusion_temperature": float(fusion_temperature),
+        "seed": seed,
+        "pipeline_type": settings.pipeline_type,
+        "low_vram": settings.low_vram,
+        "sampling_steps": settings.sampling_steps,
+        "target_face_count": settings.target_face_count,
+        "texture_size": settings.texture_size,
+        "max_tokens": settings.max_tokens,
+        "source_ref": source_ref,
+        "model_ref": model_ref,
+        "dinov3_ref": dinov3_ref,
+        "moge_ref": moge_ref,
+        "naf_ref": naf_ref,
+        "environment_ref": environment_ref,
+        "result_schema": result_schema,
+    }
+    if geometry_guidance != "none":
+        inputs["advanced_geometry"] = {
+            "guidance": geometry_guidance,
+            "fallback": geometry_fallback,
+            "vggt_omega_source_ref": vggt_omega_source_ref,
+            "vggt_omega_checkpoint_ref": vggt_omega_checkpoint_ref,
+            "image_resolution": int(vggt_omega_image_resolution),
+            "geometry_strength": float(geometry_strength),
+            "confidence_exponent": float(confidence_exponent),
+            "depth_tolerance": float(depth_tolerance),
+            "occlusion_margin": float(occlusion_margin),
+            "occlusion_tau": float(occlusion_tau),
+            "geometry_floor": float(geometry_floor),
+            "max_normalized_alignment_error": float(
+                max_normalized_alignment_error
+            ),
+        }
+    return deterministic_cache_key("pixal3d-multiview", **inputs)
 
 
 def skintokens_cache_key(

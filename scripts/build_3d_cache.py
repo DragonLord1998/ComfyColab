@@ -47,6 +47,7 @@ REQUIRED_LIVE_GATES = (
     "pixal3d_preview_save_glb_reader",
     "pixal3d_1536_experimental",
     "pixal3d_multiview_4view_experimental_glb",
+    "pixal3d_multiview_advanced_vggt_omega_glb",
     "skintokens_auto_rig_glb",
     "cubepart_schema_decomposition_glb",
     "full_workflow_hard_surface",

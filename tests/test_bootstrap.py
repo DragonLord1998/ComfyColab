@@ -265,7 +265,42 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_REF, environment)
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE, environment)
         self.assertIn('"nvdiffrast.torch"', environment)
-        self.assertTrue(remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-v2"))
+        self.assertTrue(remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-v3"))
+        self.assertIn(
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_SOURCE_REF,
+            environment,
+        )
+        self.assertIn(
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_MODEL_REF,
+            environment,
+        )
+        self.assertIn(
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_FALLBACK_MODEL_REF,
+            environment,
+        )
+        self.assertIn(
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_FALLBACK_CHECKPOINT_URL,
+            environment,
+        )
+        self.assertIn(
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_CHECKPOINT_SHA256,
+            environment,
+        )
+        expected_sources = remote_bootstrap.expected_pixal3d_sources()
+        self.assertEqual(
+            expected_sources["vggtOmegaFallbackModel"],
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_FALLBACK_MODEL_REF,
+        )
+        self.assertEqual(
+            expected_sources["vggtOmegaFallbackCheckpointUrl"],
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_FALLBACK_CHECKPOINT_URL,
+        )
+        self.assertEqual(
+            expected_sources["vggtOmegaCheckpointSha256"],
+            remote_bootstrap.PIXAL3D_VGGT_OMEGA_CHECKPOINT_SHA256,
+        )
+        self.assertIn('"einops"', environment)
+        self.assertIn('"safetensors"', environment)
 
     def test_trellis_category_patch_changes_categories_only(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -504,6 +539,63 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(remote_bootstrap.install_pixal3d(), "source-install")
         restore.assert_called_once_with()
         source_install.assert_called_once_with()
+
+    def test_pixal3d_source_install_builds_pinned_nvdiffrast(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            home = root / "home"
+            environment = repo / "worker" / "pixal3d" / "environment.toml"
+            environment.parent.mkdir(parents=True)
+            environment.write_text("schema = 1\n", encoding="utf-8")
+            native_python = (
+                home
+                / ".ce"
+                / ".pixi"
+                / "envs"
+                / "trellis2-nodes"
+                / "bin"
+                / "python"
+            )
+            native_python.parent.mkdir(parents=True)
+            native_python.write_text("", encoding="utf-8")
+
+            with mock.patch.object(remote_bootstrap, "REPO_DIR", repo), mock.patch.object(
+                remote_bootstrap, "STATE_DIR", state
+            ), mock.patch.object(
+                remote_bootstrap.Path, "home", return_value=home
+            ), mock.patch.object(
+                remote_bootstrap, "pixal3d_workspace_metadata_valid", return_value=False
+            ), mock.patch.object(
+                remote_bootstrap, "validate_pixal3d_runtime"
+            ), mock.patch.object(
+                remote_bootstrap, "run"
+            ) as run:
+                self.assertEqual(remote_bootstrap.install_pixal3d_source(), "source-install")
+
+        commands = [call.args[0] for call in run.call_args_list]
+        nvdiffrast_command = [
+            str(state / remote_bootstrap.PIXAL3D_WORKER_ENVIRONMENT / "venv" / "bin" / "python"),
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE,
+        ]
+        self.assertIn(nvdiffrast_command, commands)
+        self.assertLess(
+            commands.index(nvdiffrast_command),
+            commands.index(
+                [
+                    nvdiffrast_command[0],
+                    "-m",
+                    "pip",
+                    "install",
+                    remote_bootstrap.PIXAL3D_UTILS3D_WHEEL,
+                ]
+            ),
+        )
 
     def test_content_addressed_patch_is_strict_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

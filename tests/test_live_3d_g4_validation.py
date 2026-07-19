@@ -44,6 +44,7 @@ def options(**overrides):
         "model": None,
         "camera_fov_degrees": 0.0,
         "keep_worker_loaded": True,
+        "images": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -331,6 +332,22 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["2"]["inputs"]["exact_resolution"], "1536_cascade")
         self.assertEqual(prompt["2"]["inputs"]["max_tokens"], 49152)
 
+    def test_cli_requires_multi_view_inputs_for_advanced_pixal3d_multiview_case(self) -> None:
+        args = self.module.parser().parse_args(
+            [
+                "run",
+                "--case",
+                "pixal3d_multiview_advanced_vggt_omega",
+                "--images",
+                "front.png",
+                "back.png",
+                "left.png",
+                "right.png",
+            ]
+        )
+        self.assertIsNone(args.image)
+        self.assertEqual(len(args.images), 4)
+
     def test_ultrashape_prompt_uses_native_file3d_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "input.glb"
@@ -381,6 +398,43 @@ class Live3DG4ValidationTests(unittest.TestCase):
         self.assertEqual(prompt["91"]["inputs"]["mesh"], ["2", 0])
         self.assertIn("pixal-run-pixal3d_cold_1024", prompt["91"]["inputs"]["filename_prefix"])
 
+    def test_pixal3d_multiview_advanced_prompt_is_4view_or_6view(self) -> None:
+        spec = self.module.CASES["pixal3d_multiview_advanced_vggt_omega"]
+        prompt = self.module.build_prompt(
+            spec,
+            options(),
+            ["front.png", "back.png", "left.png", "right.png"],
+            "pixal-adv",
+        )
+        self.assertEqual(prompt["1"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["2"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["3"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["4"]["class_type"], "LoadImage")
+        self.assertEqual(prompt["10"]["class_type"], "ComfyColabPixal3DMVAdvanced")
+        self.assertEqual(prompt["10"]["inputs"]["front_image"], ["1", 0])
+        self.assertEqual(prompt["10"]["inputs"]["back_image"], ["2", 0])
+        self.assertEqual(prompt["10"]["inputs"]["left_image"], ["3", 0])
+        self.assertEqual(prompt["10"]["inputs"]["right_image"], ["4", 0])
+        self.assertEqual(
+            prompt["10"]["inputs"]["fusion_strategy"],
+            "Directional projection",
+        )
+        self.assertEqual(prompt["10"]["inputs"]["fusion_temperature"], 2.0)
+        self.assertEqual(prompt["10"]["inputs"]["geometry_fallback"], "Strict — require VGGT-Ω")
+        self.assertNotIn("top_image", prompt["10"]["inputs"])
+        self.assertNotIn("bottom_image", prompt["10"]["inputs"])
+        self.assertEqual(prompt["90"]["inputs"], {"model_file": ["10", 0]})
+
+        prompt_six = self.module.build_prompt(
+            spec,
+            options(),
+            ["f.png", "b.png", "l.png", "r.png", "t.png", "d.png"],
+            "pixal-adv-6",
+        )
+        self.assertEqual(prompt_six["10"]["inputs"]["top_image"], ["5", 0])
+        self.assertEqual(prompt_six["10"]["inputs"]["bottom_image"], ["6", 0])
+        self.assertEqual(self.module.source_node_for(spec), "10")
+
     def test_pixal3d_benchmark_requires_machine_resolution_and_tokens(self) -> None:
         spec = self.module.CASES["pixal3d_cold_1024"]
         glb = {"bytes": 123, "faces": 45}
@@ -411,6 +465,29 @@ class Live3DG4ValidationTests(unittest.TestCase):
                 "",
                 pixal3d_worker_result={**worker, "actual_resolution": 896},
             )
+
+    def test_pixal3d_multiview_advanced_benchmark_reuses_worker_metrics(self) -> None:
+        spec = self.module.CASES["pixal3d_multiview_advanced_vggt_omega"]
+        glb = {"bytes": 123, "faces": 45}
+        worker = {
+            "actual_resolution": 1024,
+            "token_count": 42000,
+            "peak_vram_bytes": 2048,
+            "pipeline_load_count": 1,
+            "worker_pid": 1234,
+        }
+        benchmark = self.module.benchmark_from(
+            spec,
+            2.0,
+            4096,
+            glb,
+            "",
+            pixal3d_worker_result=worker,
+        )
+        self.assertEqual(benchmark["actualResolution"], 1024)
+        self.assertEqual(benchmark["tokens"], 42000)
+        self.assertEqual(benchmark["workerPid"], 1234)
+        self.assertEqual(benchmark["pipelineLoadCount"], 1)
 
     def test_pixal3d_reuse_case_requires_same_worker_and_single_pipeline_load(self) -> None:
         spec = self.module.CASES["pixal3d_worker_reuse_1024"]

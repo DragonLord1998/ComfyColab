@@ -279,6 +279,7 @@ def _fuse_dense_projection(
     temperature: float,
     *,
     qualities: list[float] | None = None,
+    geometry_weights=None,
 ):
     import torch
 
@@ -289,17 +290,31 @@ def _fuse_dense_projection(
     quality_weights = torch.tensor(qualities, device=values.device, dtype=values.dtype)
     if float(quality_weights.sum()) <= 0.0:
         quality_weights = torch.ones_like(quality_weights)
-    quality_weights = quality_weights / quality_weights.sum()
+    query_count = values.shape[1]
     if strategy == "average":
-        return (values * quality_weights[:, None, None, None]).sum(dim=0, keepdim=True)
-    weights = directional_softmax_weights(
-        labels,
-        temperature=temperature,
-        grid_resolution=round(values.shape[1] ** (1.0 / 3.0)),
-    ).to(device=values.device, dtype=values.dtype)
-    weighted = weights * quality_weights[None, :]
-    weighted = weighted / weighted.sum(dim=1, keepdim=True).clamp(min=1e-8)
-    return (values * weighted.T[:, :, None]).sum(dim=0, keepdim=True)
+        weights = torch.ones(
+            (query_count, len(labels)),
+            device=values.device,
+            dtype=values.dtype,
+        )
+    else:
+        weights = directional_softmax_weights(
+            labels,
+            temperature=temperature,
+            grid_resolution=round(query_count ** (1.0 / 3.0)),
+        ).to(device=values.device, dtype=values.dtype)
+    weights = weights * quality_weights[None, :]
+    if geometry_weights is not None:
+        if geometry_weights.shape != weights.shape:
+            raise ValueError(
+                "Dense VGGT-Omega geometry weights must match [queries, views]"
+            )
+        weights = weights * geometry_weights.to(
+            device=values.device,
+            dtype=values.dtype,
+        )
+    weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
+    return (values * weights.T[:, :, None]).sum(dim=0, keepdim=True)
 
 
 def _fuse_sparse_projection(
@@ -311,6 +326,7 @@ def _fuse_sparse_projection(
     resolution: int,
     *,
     qualities: list[float] | None = None,
+    geometry_weights=None,
 ):
     import torch
 
@@ -320,15 +336,31 @@ def _fuse_sparse_projection(
     quality_weights = torch.tensor(qualities, device=values.device, dtype=values.dtype)
     if float(quality_weights.sum()) <= 0.0:
         quality_weights = torch.ones_like(quality_weights)
-    quality_weights = quality_weights / quality_weights.sum()
     if strategy == "average":
-        return (per_view * quality_weights[:, None, None]).sum(dim=0)
-    weights = directional_softmax_weights(
-        labels, temperature=temperature, coords=coords, resolution=resolution
-    ).to(device=values.device, dtype=values.dtype)
-    weighted = weights * quality_weights[None, :]
-    weighted = weighted / weighted.sum(dim=1, keepdim=True).clamp(min=1e-8)
-    return (per_view * weighted.T[:, :, None]).sum(dim=0)
+        weights = torch.ones(
+            (coords.shape[0], len(labels)),
+            device=values.device,
+            dtype=values.dtype,
+        )
+    else:
+        weights = directional_softmax_weights(
+            labels,
+            temperature=temperature,
+            coords=coords,
+            resolution=resolution,
+        ).to(device=values.device, dtype=values.dtype)
+    weights = weights * quality_weights[None, :]
+    if geometry_weights is not None:
+        if geometry_weights.shape != weights.shape:
+            raise ValueError(
+                "Sparse VGGT-Omega geometry weights must match [queries, views]"
+            )
+        weights = weights * geometry_weights.to(
+            device=values.device,
+            dtype=values.dtype,
+        )
+    weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
+    return (per_view * weights.T[:, :, None]).sum(dim=0)
 
 
 def _fuse_cond(
@@ -338,6 +370,7 @@ def _fuse_cond(
     temperature: float,
     *,
     qualities: list[float] | None = None,
+    geometry_weights=None,
     coords=None,
     resolution: int | None = None,
 ):
@@ -362,6 +395,7 @@ def _fuse_cond(
                     strategy,
                     temperature,
                     qualities=qualities,
+                    geometry_weights=geometry_weights,
                 )
             else:
                 if resolution is None:
@@ -374,6 +408,7 @@ def _fuse_cond(
                     coords,
                     resolution,
                     qualities=qualities,
+                    geometry_weights=geometry_weights,
                 )
         else:
             fused[key] = value
@@ -402,6 +437,7 @@ def _encode_fused_cond(
     temperature: float,
     *,
     qualities: list[float] | None = None,
+    geometry_context=None,
     coords=None,
     grid_resolution_override: int | None = None,
     sparse_resolution: int | None = None,
@@ -432,6 +468,14 @@ def _encode_fused_cond(
             }
         else:
             cond = {"global": outputs[0], "proj": outputs[1]}
+        geometry_weights = None
+        if geometry_context is not None:
+            geometry_weights = geometry_context.weights_for_projection(
+                image_cond_model.proj_grid,
+                camera,
+                coords=coords,
+                resolution=sparse_resolution,
+            )
         if coords is not None:
             grid_res = image_cond_model.grid_resolution
             x_coords = coords[:, 1].long()
@@ -452,6 +496,7 @@ def _encode_fused_cond(
             strategy,
             temperature,
             qualities=qualities,
+            geometry_weights=geometry_weights,
             coords=coords,
             resolution=sparse_resolution,
         )
@@ -487,6 +532,7 @@ def run_multiview_projection_fusion(
     fusion_strategy: str = "directional_softmax",
     fusion_temperature: float = 2.0,
     view_qualities: dict[str, float] | None = None,
+    geometry_context=None,
     return_latent: bool = False,
 ):
     import torch
@@ -522,6 +568,7 @@ def run_multiview_projection_fusion(
         fusion_strategy,
         fusion_temperature,
         qualities=qualities,
+        geometry_context=geometry_context,
     )
     ss_res = 32
     coords = pipeline.sample_sparse_structure(
@@ -539,6 +586,7 @@ def run_multiview_projection_fusion(
         fusion_strategy,
         fusion_temperature,
         qualities=qualities,
+        geometry_context=geometry_context,
         coords=coords,
         sparse_resolution=32,
     )
@@ -588,6 +636,7 @@ def run_multiview_projection_fusion(
         fusion_strategy,
         fusion_temperature,
         qualities=qualities,
+        geometry_context=geometry_context,
         coords=hr_coords_unique,
         grid_resolution_override=actual_grid_res,
         sparse_resolution=actual_grid_res,
@@ -629,6 +678,7 @@ def run_multiview_projection_fusion(
         fusion_strategy,
         fusion_temperature,
         qualities=qualities,
+        geometry_context=geometry_context,
         coords=shape_slat.coords,
         grid_resolution_override=tex_grid_res,
         sparse_resolution=tex_grid_res,

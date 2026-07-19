@@ -22,6 +22,8 @@ RESULT_PREFIX = "COMFYCOLAB_PIXAL3D_RESULT="
 PROTOCOL_VERSION = 1
 PIXAL3D_VIEW_ORDER = ("front", "back", "left", "right", "top", "bottom")
 PIXAL3D_FUSION_STRATEGIES = ("directional_softmax", "average")
+PIXAL3D_GEOMETRY_GUIDANCE = ("none", "vggt_omega_depth_conf")
+PIXAL3D_GEOMETRY_FALLBACKS = ("strict", "weighted_mv")
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,23 @@ class Pixal3DWorkerCommand:
     views: tuple[dict[str, str | float], ...] | None = None
     fusion_temperature: float = 2.0
     fusion_strategy: str = "directional_softmax"
+    geometry_guidance: str = "none"
+    geometry_fallback: str = "strict"
+    geometry_requested: str = ""
+    geometry_fallback_stage: str = ""
+    geometry_fallback_reason: str = ""
+    vggt_omega_source_dir: str = ""
+    vggt_omega_checkpoint: str = ""
+    vggt_omega_source_ref: str = ""
+    vggt_omega_checkpoint_ref: str = ""
+    vggt_omega_image_resolution: int = 512
+    geometry_strength: float = 0.75
+    confidence_exponent: float = 1.0
+    depth_tolerance: float = 0.12
+    occlusion_margin: float = 0.04
+    occlusion_tau: float = 0.03
+    geometry_floor: float = 0.05
+    max_normalized_alignment_error: float = 0.35
 
     def argv(self) -> list[str]:
         """Return a complete one-request invocation for diagnostics and tests."""
@@ -94,6 +113,8 @@ class Pixal3DWorkerCommand:
             ("--moge-dir", self.moge_dir),
             ("--naf-source-dir", self.naf_source_dir),
             ("--naf-checkpoint", self.naf_checkpoint),
+            ("--vggt-omega-source-dir", self.vggt_omega_source_dir),
+            ("--vggt-omega-checkpoint", self.vggt_omega_checkpoint),
         ):
             if value:
                 values.extend((name, value))
@@ -141,6 +162,108 @@ def build_pixal3d_request(command: Pixal3DWorkerCommand) -> dict:
                 "fusion_strategy must be directional_softmax or average"
             )
         request["fusion_strategy"] = command.fusion_strategy
+        if command.geometry_guidance not in PIXAL3D_GEOMETRY_GUIDANCE:
+            raise ValueError(
+                f"geometry_guidance must be one of {PIXAL3D_GEOMETRY_GUIDANCE}"
+            )
+        request["geometry_guidance"] = command.geometry_guidance
+        if command.geometry_guidance != "none":
+            if command.geometry_fallback not in PIXAL3D_GEOMETRY_FALLBACKS:
+                raise ValueError(
+                    f"geometry_fallback must be one of {PIXAL3D_GEOMETRY_FALLBACKS}"
+                )
+            for name, value in (
+                ("vggt_omega_source_dir", command.vggt_omega_source_dir),
+                ("vggt_omega_checkpoint", command.vggt_omega_checkpoint),
+                ("vggt_omega_source_ref", command.vggt_omega_source_ref),
+                ("vggt_omega_checkpoint_ref", command.vggt_omega_checkpoint_ref),
+            ):
+                if not value:
+                    raise ValueError(
+                        f"{name} is required for VGGT-Omega geometry guidance"
+                    )
+            controls = {
+                "geometry_strength": _bounded_float(
+                    command.geometry_strength, "geometry_strength", 0.0, 1.0
+                ),
+                "confidence_exponent": _bounded_float(
+                    command.confidence_exponent,
+                    "confidence_exponent",
+                    0.0,
+                    4.0,
+                ),
+                "depth_tolerance": _bounded_float(
+                    command.depth_tolerance,
+                    "depth_tolerance",
+                    1e-4,
+                    1.0,
+                ),
+                "occlusion_margin": _bounded_float(
+                    command.occlusion_margin,
+                    "occlusion_margin",
+                    0.0,
+                    0.5,
+                ),
+                "occlusion_tau": _bounded_float(
+                    command.occlusion_tau,
+                    "occlusion_tau",
+                    1e-4,
+                    0.5,
+                ),
+                "geometry_floor": _bounded_float(
+                    command.geometry_floor,
+                    "geometry_floor",
+                    0.0,
+                    1.0,
+                ),
+                "max_normalized_alignment_error": _bounded_float(
+                    command.max_normalized_alignment_error,
+                    "max_normalized_alignment_error",
+                    0.0,
+                    1.0,
+                ),
+            }
+            if int(command.vggt_omega_image_resolution) != 512:
+                raise ValueError(
+                    "The pinned VGGT-Omega checkpoint requires image resolution 512"
+                )
+            request.update(
+                {
+                    "geometry_guidance": command.geometry_guidance,
+                    "geometry_fallback": command.geometry_fallback,
+                    "vggt_omega_image_resolution": 512,
+                    **controls,
+                }
+            )
+            request["revisions"].update(
+                {
+                    "vggt_omega_source": command.vggt_omega_source_ref,
+                    "vggt_omega_checkpoint": command.vggt_omega_checkpoint_ref,
+                }
+            )
+        if command.geometry_fallback_reason:
+            if command.geometry_guidance != "none":
+                raise ValueError(
+                    "A provisioning fallback cannot also enable geometry guidance"
+                )
+            if command.geometry_requested != "vggt_omega_depth_conf":
+                raise ValueError(
+                    "geometry_requested must identify vggt_omega_depth_conf"
+                )
+            if command.geometry_fallback != "weighted_mv":
+                raise ValueError(
+                    "A provisioning fallback requires geometry_fallback=weighted_mv"
+                )
+            if not command.geometry_fallback_stage:
+                raise ValueError("A provisioning fallback requires its failed stage")
+            request.update(
+                {
+                    "geometry_requested": command.geometry_requested,
+                    "geometry_fallback": command.geometry_fallback,
+                    "geometry_fallback_stage": command.geometry_fallback_stage,
+                    "geometry_fallback_reason": command.geometry_fallback_reason,
+                }
+            )
     return request
 
 
@@ -149,6 +272,18 @@ def _validate_fusion_temperature(value: float) -> float:
     if not math.isfinite(temperature) or temperature <= 0.0 or temperature > 20.0:
         raise ValueError("fusion_temperature must be in (0, 20]")
     return temperature
+
+
+def _bounded_float(
+    value: float,
+    name: str,
+    minimum: float,
+    maximum: float,
+) -> float:
+    result = float(value)
+    if not math.isfinite(result) or result < minimum or result > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return result
 
 
 def _validate_pixal3d_views(
@@ -376,7 +511,15 @@ class Pixal3DWorkerPool:
                     if result.get("status") != "ok":
                         error_type = str(result.get("error_type") or "RuntimeError")
                         message = str(result.get("error") or "unknown worker failure")
-                        raise RuntimeError(f"Pixal3D worker failed: {error_type}: {message}")
+                        worker_traceback = str(result.get("traceback") or "").strip()
+                        detail = (
+                            f"\nWorker traceback:\n{worker_traceback}"
+                            if worker_traceback
+                            else ""
+                        )
+                        raise RuntimeError(
+                            f"Pixal3D worker failed: {error_type}: {message}{detail}"
+                        )
                     output = Path(str(result.get("output_mesh", "")))
                     metadata = Path(str(result.get("metadata_output", "")))
                     if output.resolve() != Path(command.output_mesh).resolve():
