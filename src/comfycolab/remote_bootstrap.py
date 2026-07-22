@@ -62,6 +62,7 @@ NODE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-ZImage"
 NODE_3D_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-3D"
 NODE_TRIPOSPLAT_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-Triposplat"
 NODE_LTX_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-LTXVideo"
+NODE_MAGE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-MageFlow"
 READY_PREFIX = "COMFYCOLAB_READY="
 COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
@@ -1785,6 +1786,10 @@ def install_node_pack(
             (
                 REPO_DIR / "custom_nodes" / "ComfyColab-LTXVideo",
                 NODE_LTX_TARGET,
+            ),
+            (
+                REPO_DIR / "custom_nodes" / "ComfyColab-MageFlow",
+                NODE_MAGE_TARGET,
             ),
         ]
     for source, target in node_packs:

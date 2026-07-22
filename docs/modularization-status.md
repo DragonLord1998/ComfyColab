@@ -32,7 +32,7 @@
 The local filesystem split is complete. Each sibling is an independent, clean
 Git repository whose local `main` matches its public remote:
 
-- `../ComfyColab-Image` -> `f78780a48cc286eee240e0a5b5852b7ac5c5cdfb`
+- `../ComfyColab-Image` -> `929040f97a53785706fa6372546efe23034babee`
 - `../ComfyColab-Video` -> `828d5f6543472901f797e028f7cd20750f472e38`
 - `../ComfyColab-3D` -> `92a7a2b4b48f3ab144e122b262a406f1ce8c4aba`
 - `../ComfyColab-3DGS` -> `788e1fd5b27af5007f6fe3263bed8dcc57a967d0`
