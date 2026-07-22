@@ -222,6 +222,28 @@ This is the largest bundle. BFL recommends guidance 4 and 50 steps; 28 steps is
 a practical speed/quality compromise. FLUX.2 Dev uses the BFL FLUX
 Non-Commercial License.
 
+## Mage-Flow image generation and editing
+
+The Image pack exposes exactly four Mage-Flow nodes under
+`ComfyColab / Image`:
+
+- `ComfyColab MageFlow — Text to Image`
+- `ComfyColab MageFlow Turbo — Text to Image`
+- `ComfyColab MageFlow Edit — Image Edit`
+- `ComfyColab MageFlow Edit Turbo — Image Edit`
+
+The standard nodes default to the upstream quality-oriented schedules; Turbo
+uses the upstream low-step schedule. The first run downloads the selected,
+revision-pinned Microsoft model into the persistent ComfyColab cache and starts
+an isolated worker so Mage's dependencies do not alter ComfyUI's environment.
+
+This personal-project integration does not expose or run Microsoft's prompt or
+image screening. It also removes Gaussian-Shading watermark generation and uses
+ordinary deterministic Gaussian noise controlled only by the node's `seed`.
+There are no screening or watermark toggles, and no Base Mage-Flow nodes are
+registered. Example graphs are in
+[`docs/mageflow.md`](docs/mageflow.md).
+
 ## LTX-2.3 video
 
 After updating an existing runtime, run:

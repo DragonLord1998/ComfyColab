@@ -16,6 +16,33 @@ from unittest import mock
 from comfycolab.bootstrap import CONFIG_MARKER, render_bootstrap
 from comfycolab import remote_bootstrap
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class CompatibilityBaselineTests(unittest.TestCase):
+    def test_mageflow_baseline_exposes_only_requested_startup_nodes(self) -> None:
+        baseline = json.loads(
+            (ROOT / "compatibility" / "baseline-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        mage = baseline["packs"]["mage"]
+        expected_node_ids = [
+            "ComfyColabMageFlow",
+            "ComfyColabMageFlowTurbo",
+            "ComfyColabMageFlowEdit",
+            "ComfyColabMageFlowEditTurbo",
+        ]
+        self.assertEqual(mage["legacy_node_root"], "ComfyColab-MageFlow")
+        self.assertEqual(
+            [node["id"] for node in mage["public_nodes"]],
+            expected_node_ids,
+        )
+        self.assertEqual(mage["health_checks"]["node_ids"], expected_node_ids)
+        self.assertEqual(len(mage["health_checks"]["node_ids"]), 4)
+        self.assertNotIn("screen", json.dumps(mage).lower())
+        self.assertNotIn("watermark", json.dumps(mage).lower())
+
 
 class BootstrapRenderingTests(unittest.TestCase):
     def test_patch_target_checkout_resets_tracked_and_untracked_state(self) -> None:
@@ -655,18 +682,22 @@ class BootstrapRenderingTests(unittest.TestCase):
             three_d_source = repository / "custom_nodes" / "ComfyColab-3D"
             triposplat_source = repository / "custom_nodes" / "ComfyColab-Triposplat"
             ltx_source = repository / "custom_nodes" / "ComfyColab-LTXVideo"
+            mage_source = repository / "custom_nodes" / "ComfyColab-MageFlow"
             image_source.mkdir(parents=True)
             three_d_source.mkdir(parents=True)
             triposplat_source.mkdir(parents=True)
             ltx_source.mkdir(parents=True)
+            mage_source.mkdir(parents=True)
             image_target = root / "custom_nodes" / "ComfyColab-ZImage"
             three_d_target = root / "custom_nodes" / "ComfyColab-3D"
             triposplat_target = root / "custom_nodes" / "ComfyColab-Triposplat"
             ltx_target = root / "custom_nodes" / "ComfyColab-LTXVideo"
+            mage_target = root / "custom_nodes" / "ComfyColab-MageFlow"
             image_target.mkdir(parents=True)
             three_d_target.mkdir(parents=True)
             triposplat_target.mkdir(parents=True)
             ltx_target.mkdir(parents=True)
+            mage_target.mkdir(parents=True)
             with mock.patch.multiple(
                 remote_bootstrap,
                 REPO_DIR=repository,
@@ -674,12 +705,14 @@ class BootstrapRenderingTests(unittest.TestCase):
                 NODE_3D_TARGET=three_d_target,
                 NODE_TRIPOSPLAT_TARGET=triposplat_target,
                 NODE_LTX_TARGET=ltx_target,
+                NODE_MAGE_TARGET=mage_target,
             ):
                 remote_bootstrap.install_node_pack()
             self.assertEqual(image_target.resolve(), image_source.resolve())
             self.assertEqual(three_d_target.resolve(), three_d_source.resolve())
             self.assertEqual(triposplat_target.resolve(), triposplat_source.resolve())
             self.assertEqual(ltx_target.resolve(), ltx_source.resolve())
+            self.assertEqual(mage_target.resolve(), mage_source.resolve())
 
     def test_install_node_pack_links_configured_daughter_facades(self) -> None:
         targets = {

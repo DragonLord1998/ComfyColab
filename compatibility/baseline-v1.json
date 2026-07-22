@@ -44,6 +44,45 @@
       ],
       "workflows": []
     },
+    "mage": {
+      "legacy_node_root": "ComfyColab-MageFlow",
+      "public_nodes": [
+        {
+          "id": "ComfyColabMageFlow",
+          "display_name": "ComfyColab MageFlow — Text to Image",
+          "category": "ComfyColab/Image"
+        },
+        {
+          "id": "ComfyColabMageFlowTurbo",
+          "display_name": "ComfyColab MageFlow Turbo — Text to Image",
+          "category": "ComfyColab/Image"
+        },
+        {
+          "id": "ComfyColabMageFlowEdit",
+          "display_name": "ComfyColab MageFlow Edit — Image Edit",
+          "category": "ComfyColab/Image"
+        },
+        {
+          "id": "ComfyColabMageFlowEditTurbo",
+          "display_name": "ComfyColab MageFlow Edit Turbo — Image Edit",
+          "category": "ComfyColab/Image"
+        }
+      ],
+      "health_checks": {
+        "node_ids": [
+          "ComfyColabMageFlow",
+          "ComfyColabMageFlowTurbo",
+          "ComfyColabMageFlowEdit",
+          "ComfyColabMageFlowEditTurbo"
+        ]
+      },
+      "workflows": [
+        "workflows/comfycolab_mageflow.json",
+        "workflows/comfycolab_mageflow_turbo.json",
+        "workflows/comfycolab_mageflow_edit.json",
+        "workflows/comfycolab_mageflow_edit_turbo.json"
+      ]
+    },
     "video": {
       "legacy_node_root": "ComfyColab-LTXVideo",
       "schema_source_sha256": "62fccb362dd294b10f67887be0d1e40b97dbf41a0c8473ec24b8d27dd58349ca",
