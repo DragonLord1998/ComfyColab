@@ -374,7 +374,7 @@ class MageFlowComponents:
         height = max(16, ((height + 15) // 16) * 16)
         key = _request_key(
             "native_vae_encode",
-            variant=self.variant,
+            model_variant=self.variant,
             image=pixels,
             width=width,
             height=height,
@@ -422,7 +422,7 @@ class MageFlowComponents:
         height = int(samples.shape[-2]) * 16
         key = _request_key(
             "native_vae_decode",
-            variant=self.variant,
+            model_variant=self.variant,
             latent=samples,
             width=width,
             height=height,

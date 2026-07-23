@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import contextlib
 import inspect
 import importlib
@@ -395,6 +396,24 @@ class MageFlowNodePackTests(unittest.TestCase):
             native.build_components.call_args.kwargs["reference_image"],
             "reference",
         )
+
+    def test_native_cache_keys_do_not_repeat_the_variant_argument(self):
+        tree = ast.parse(
+            (PACKAGE_DIR / "native.py").read_text(encoding="utf-8")
+        )
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_request_key"
+        ]
+        self.assertGreaterEqual(len(calls), 2)
+        for call in calls:
+            self.assertNotIn(
+                "variant",
+                {keyword.arg for keyword in call.keywords},
+            )
 
     def test_empty_latent_uses_mage_128_channel_16x_contract(self):
         _, nodes = self._modules()
