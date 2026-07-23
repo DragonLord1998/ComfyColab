@@ -32,7 +32,7 @@
 The local filesystem split is complete. Each sibling is an independent, clean
 Git repository whose local `main` matches its public remote:
 
-- `../ComfyColab-Image` -> `929040f97a53785706fa6372546efe23034babee`
+- `../ComfyColab-Image` -> `57b83081ef565d1ada62c8cfe4d5a5252c960cfc`
 - `../ComfyColab-Video` -> `828d5f6543472901f797e028f7cd20750f472e38`
 - `../ComfyColab-3D` -> `92a7a2b4b48f3ab144e122b262a406f1ce8c4aba`
 - `../ComfyColab-3DGS` -> `788e1fd5b27af5007f6fe3263bed8dcc57a967d0`
@@ -61,7 +61,7 @@ deleted.
 
 | Repository | Local contract status | Live/release status |
 | --- | --- | --- |
-| ComfyColab-Image | 18 tests pass; pinned upstream requirements are declared | Exact-lock Colab install, startup, node discovery, inference, and rollback remain |
+| ComfyColab-Image | 39 tests pass; Mage-Flow and PiD facades are declared | Exact-lock PiD inference and rollback remain |
 | ComfyColab-Video | 15 tests pass; pinned upstream requirements are declared | Exact-lock Colab install, startup, node discovery, inference, and rollback remain |
 | ComfyColab-3D | 140 tests pass | Generic environment-TOML installation, cache restore, and live G4 gates remain |
 | ComfyColab-3DGS | 27 tests pass | Resolved model-path ownership and live splat generation remain |

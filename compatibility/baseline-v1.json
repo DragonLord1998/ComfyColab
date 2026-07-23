@@ -83,6 +83,24 @@
         "workflows/comfycolab_mageflow_edit_turbo.json"
       ]
     },
+    "pid": {
+      "legacy_node_root": "ComfyColab-PiD",
+      "public_nodes": [
+        {
+          "id": "ComfyColabPiDUpscale",
+          "display_name": "ComfyColab PiD — Image Upscaler",
+          "category": "ComfyColab/Image"
+        }
+      ],
+      "health_checks": {
+        "node_ids": [
+          "ComfyColabPiDUpscale"
+        ]
+      },
+      "workflows": [
+        "workflows/comfycolab_pid_upscale.json"
+      ]
+    },
     "video": {
       "legacy_node_root": "ComfyColab-LTXVideo",
       "schema_source_sha256": "62fccb362dd294b10f67887be0d1e40b97dbf41a0c8473ec24b8d27dd58349ca",

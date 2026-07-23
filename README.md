@@ -175,6 +175,20 @@ partial file is kept and resumed; if a stale Colab `HF_TOKEN` causes `401` or
 `403`, the public bundle is retried anonymously. `force_redownload` is the only
 option that deliberately discards resumable partial data.
 
+### NVIDIA PiD image upscaler
+
+`ComfyColab PiD — Image Upscaler` performs a native 4x pixel-diffusion decode
+from any input image. Choose the matching VAE family inside the node:
+`FLUX.1`, `FLUX.2`, or `Qwen Image`. The node downloads the matched
+VAE, PiD v1.5 decoder, and PixelDiT text encoder on first use.
+
+`Experimental 16x (tiled)` cascades two native 4x passes. The second pass uses
+overlapped ComfyUI context-window sampling and tiled VAE encoding to reduce peak
+VRAM. It is intentionally marked experimental because very large outputs may
+show seams or invented detail. PiD weights are noncommercially licensed and the
+node requires explicit license acceptance before download or inference. See
+[the PiD upscaler guide](docs/pid-upscaler.md).
+
 | Loader node | Default/typical bundle | Approximate download | Notes |
 | --- | --- | ---: | --- |
 | Z-Image Turbo | Q4 | 7.8 GB | Fast image generation |

@@ -19,8 +19,8 @@
       "schema": 1,
       "id": "image",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Image.git",
-      "ref": "929040f97a53785706fa6372546efe23034babee",
-      "manifest_sha256": "ff167a06a4171bb23134ab88debf2a67469d7795219f8d0bed58528bf1cf6ade"
+      "ref": "57b83081ef565d1ada62c8cfe4d5a5252c960cfc",
+      "manifest_sha256": "4b03f7951e96479b612982ac25f78079682f91d451c631235cc52ff0d0630427"
     },
     "video": {
       "schema": 1,

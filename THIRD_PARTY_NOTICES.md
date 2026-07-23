@@ -69,6 +69,20 @@ of UltraShape training and unused mesh-postprocessing modules and threads a
 seeded generator through surface sampling. It does not alter the model
 architecture or weights.
 
+## NVIDIA PiD
+
+- Upstream code: <https://github.com/nv-tlabs/PiD>
+- Upstream model weights: <https://huggingface.co/nvidia/PiD>
+- ComfyUI-repackaged model weights: <https://huggingface.co/Comfy-Org/PixelDiT>
+- Code license: Apache-2.0
+- Model license label: NVIDIA Source Code License / `NSCLv1`
+
+ComfyColab uses ComfyUI's native PiD implementation and downloads only the
+selected matched PiD decoder, PixelDiT text encoder, and VAE. The node blocks
+before model download until `accept_nvidia_noncommercial_license` is enabled.
+Review the upstream license before accepting it. ComfyColab does not grant
+commercial rights or alter restrictions that apply to the weights or outputs.
+
 ## TripoSplat
 
 - Official source: <https://github.com/VAST-AI-Research/TripoSplat>
