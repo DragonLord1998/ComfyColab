@@ -228,6 +228,31 @@ def _png_to_image_tensor(path: Path):
     return torch.from_numpy(array)[None,]
 
 
+def _image_dimensions(image: Any) -> tuple[int, int]:
+    shape = getattr(image, "shape", None)
+    if shape is None or len(shape) < 3:
+        raise ValueError("Mage-VAE encode requires an IMAGE tensor with shape [B, H, W, C].")
+    return int(shape[2]), int(shape[1])
+
+
+def _aligned(value: int) -> int:
+    return max(16, ((int(value) + 15) // 16) * 16)
+
+
+def _load_latent(path: Path):
+    import torch
+
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    samples = payload.get("samples") if isinstance(payload, dict) else None
+    if not isinstance(samples, torch.Tensor) or samples.ndim != 4:
+        raise RuntimeError("Mage-VAE worker returned an invalid latent artifact")
+    if samples.shape[1] != 128:
+        raise RuntimeError(
+            f"Mage-VAE worker returned {samples.shape[1]} channels; expected 128"
+        )
+    return {"samples": samples}
+
+
 def _send_progress_text(node_id: Any, text: str) -> None:
     if not node_id:
         return
@@ -245,8 +270,8 @@ def _builder():
     return importlib.import_module("comfy_execution.graph_utils").GraphBuilder()
 
 
-def _finish(graph, image):
-    return _io().NodeOutput(image, expand=graph.finalize())
+def _finish(graph, *outputs):
+    return _io().NodeOutput(*outputs, expand=graph.finalize())
 
 
 @dataclass(frozen=True)
@@ -428,7 +453,19 @@ def build_mage_flow_graph(
         keep_worker_loaded=bool(keep_worker_loaded),
         cache_mode=cache_mode,
     )
-    return _finish(graph, worker.out(0))
+    components = graph.node(
+        "ComfyColabMageFlowComponents",
+        image=image,
+        variant=variant,
+        keep_worker_loaded=bool(keep_worker_loaded),
+    )
+    return _finish(
+        graph,
+        worker.out(0),
+        components.out(0),
+        components.out(1),
+        components.out(2),
+    )
 
 
 class _DevNode:
@@ -499,6 +536,167 @@ class ComfyColabMageFlowWorker(_DevNode):
         )
 
 
+class ComfyColabMageVAEEncode(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.Image.Input("image"),
+                io.String.Input("vae_name", default="mage-vae.safetensors"),
+                io.Int.Input("tile_size", default=1536, min=512, max=4096, step=16),
+                io.Int.Input("tile_overlap", default=384, min=64, max=1024, step=16),
+                io.Boolean.Input("keep_worker_loaded", default=True),
+            ],
+            [io.Latent.Output("latent")],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        image,
+        vae_name="mage-vae.safetensors",
+        tile_size=1536,
+        tile_overlap=384,
+        keep_worker_loaded=True,
+    ):
+        width, height = _image_dimensions(image)
+        width, height = _aligned(width), _aligned(height)
+        tile_size = int(tile_size)
+        tile_overlap = int(tile_overlap)
+        if tile_overlap >= tile_size:
+            raise ValueError("Mage-VAE tile_overlap must be smaller than tile_size")
+        folder_paths = importlib.import_module("folder_paths")
+        resolved = folder_paths.get_full_path("vae", str(vae_name))
+        if not resolved or not Path(resolved).is_file():
+            raise FileNotFoundError(f"Mage-VAE checkpoint is missing: {vae_name}")
+        vae_path = Path(resolved)
+        key = _request_key(
+            "mage_vae_encode",
+            image=image,
+            width=width,
+            height=height,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            vae_name=vae_path.name,
+            vae_path=str(vae_path.resolve()),
+            vae_size=vae_path.stat().st_size,
+            vae_mtime_ns=vae_path.stat().st_mtime_ns,
+            source_ref=MAGE_FLOW_SOURCE_REF,
+            model_ref=MAGE_FLOW_MODELS["flow"]["revision"],
+            posterior="mean",
+        )
+        case_dir = _runtime_root() / key
+        input_image = case_dir / "input.png"
+        output_latent = case_dir / "latent.pt"
+        metadata_output = case_dir / "metadata.json"
+        if output_latent.is_file() and metadata_output.is_file():
+            return _io().NodeOutput(_load_latent(output_latent))
+        case_dir.mkdir(parents=True, exist_ok=True)
+        _image_tensor_to_png(image, input_image)
+        command = MageFlowWorkerCommand(
+            python=_python(),
+            worker_script=str(_worker_script()),
+            source_dir=str(_source_dir()),
+            model_id=str(vae_path),
+            model_revision=str(MAGE_FLOW_MODELS["flow"]["revision"]),
+            mode="vae_encode",
+            prompt="",
+            negative_prompt="",
+            output_image="",
+            output_latent=str(output_latent),
+            metadata_output=str(metadata_output),
+            request_id=uuid.uuid4().hex,
+            seed=0,
+            width=width,
+            height=height,
+            steps=1,
+            guidance_scale=0.0,
+            input_image=str(input_image),
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            source_ref=MAGE_FLOW_SOURCE_REF,
+            keep_worker_loaded=bool(keep_worker_loaded),
+            site_packages=_worker_site_packages(),
+        )
+        global_mage_flow_worker_pool().run(command)
+        return _io().NodeOutput(_load_latent(output_latent))
+
+
+class ComfyColabMageFlowComponents(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.Image.Input("image", optional=True),
+                io.Combo.Input("variant", options=list(MAGE_FLOW_MODELS)),
+                io.Boolean.Input("keep_worker_loaded", default=True),
+            ],
+            [
+                io.Model.Output("model"),
+                io.Clip.Output("text_encoder"),
+                io.Vae.Output("vae"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image=None, variant="flow", keep_worker_loaded=True):
+        if variant not in MAGE_FLOW_MODELS:
+            raise ValueError(f"Unknown Mage-Flow variant: {variant}")
+        from .native import build_components
+
+        settings = MAGE_FLOW_MODELS[variant]
+        model, text_encoder, vae = build_components(
+            variant=variant,
+            model_id=str(settings["model_id"]),
+            model_revision=str(settings["revision"]),
+            source_ref=MAGE_FLOW_SOURCE_REF,
+            source_dir=_source_dir(),
+            worker_script=_worker_script(),
+            python=_python(),
+            site_packages=_worker_site_packages(),
+            runtime_root=_runtime_root(),
+            keep_worker_loaded=bool(keep_worker_loaded),
+            reference_image=image,
+        )
+        return _io().NodeOutput(model, text_encoder, vae)
+
+
+class ComfyColabMageFlowEmptyLatent:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id=cls.__name__,
+            display_name="ComfyColab Mage-Flow — Empty Latent",
+            category="ComfyColab/Image",
+            description=(
+                "Creates a native 128-channel, 16x-downsampled Mage-VAE latent "
+                "for use with any compatible ComfyUI sampler."
+            ),
+            inputs=[
+                io.Int.Input("width", default=1024, min=256, max=2048, step=16),
+                io.Int.Input("height", default=1024, min=256, max=2048, step=16),
+                io.Int.Input("batch_size", default=1, min=1, max=16),
+            ],
+            outputs=[io.Latent.Output("latent")],
+        )
+
+    @classmethod
+    def execute(cls, width=1024, height=1024, batch_size=1):
+        import torch
+
+        width, height, batch_size = int(width), int(height), int(batch_size)
+        if width % 16 or height % 16:
+            raise ValueError("Mage-Flow latent width and height must be multiples of 16")
+        samples = torch.zeros(
+            (batch_size, 128, height // 16, width // 16),
+            dtype=torch.float32,
+        )
+        return _io().NodeOutput({"samples": samples})
+
+
 class _MageFlowTextBase:
     VARIANT = "flow"
 
@@ -544,7 +742,12 @@ class _MageFlowTextBase:
                     advanced=True,
                 ),
             ],
-            outputs=[io.Image.Output("image")],
+            outputs=[
+                io.Image.Output("image"),
+                io.Model.Output("model"),
+                io.Clip.Output("text_encoder"),
+                io.Vae.Output("vae"),
+            ],
             hidden=[io.Hidden.unique_id],
         )
 
@@ -622,7 +825,12 @@ class _MageFlowEditBase:
                     advanced=True,
                 ),
             ],
-            outputs=[io.Image.Output("image")],
+            outputs=[
+                io.Image.Output("image"),
+                io.Model.Output("model"),
+                io.Clip.Output("text_encoder"),
+                io.Vae.Output("vae"),
+            ],
             hidden=[io.Hidden.unique_id],
         )
 
@@ -678,6 +886,9 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColabMageFlowEdit": ComfyColabMageFlowEdit,
     "ComfyColabMageFlowEditTurbo": ComfyColabMageFlowEditTurbo,
     "ComfyColabMageFlowWorker": ComfyColabMageFlowWorker,
+    "ComfyColabMageVAEEncode": ComfyColabMageVAEEncode,
+    "ComfyColabMageFlowComponents": ComfyColabMageFlowComponents,
+    "ComfyColabMageFlowEmptyLatent": ComfyColabMageFlowEmptyLatent,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -685,6 +896,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabMageFlowTurbo": "ComfyColab Mage-Flow Turbo",
     "ComfyColabMageFlowEdit": "ComfyColab Mage-Flow Edit",
     "ComfyColabMageFlowEditTurbo": "ComfyColab Mage-Flow Edit Turbo",
+    "ComfyColabMageFlowEmptyLatent": "ComfyColab Mage-Flow — Empty Latent",
 }
 
 

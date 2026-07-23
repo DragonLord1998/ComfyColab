@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from .catalog import backbone_names
-from .graph import REQUIRED_NODES, build_pid_graph
+from .catalog import MAGE_VAE_EXPERIMENTAL, backbone_names
+from .graph import MAGE_REQUIRED_NODES, REQUIRED_NODES, build_pid_graph
 from .models import ensure_pid_assets
 
 
@@ -18,12 +18,15 @@ def _io():
     return importlib.import_module("comfy_api.latest").io
 
 
-def _require_upstream_nodes() -> None:
+def _require_upstream_nodes(vae_family: str) -> None:
     try:
         registry = importlib.import_module("nodes").NODE_CLASS_MAPPINGS
     except (ModuleNotFoundError, AttributeError):
         return
-    missing = sorted(REQUIRED_NODES - set(registry))
+    required = REQUIRED_NODES
+    if vae_family == MAGE_VAE_EXPERIMENTAL:
+        required = required | MAGE_REQUIRED_NODES
+    missing = sorted(required - set(registry))
     if missing:
         raise RuntimeError(
             "ComfyColab PiD requires a pinned ComfyUI build with PixelDiT/PiD "
@@ -61,8 +64,9 @@ class ComfyColabPiDUpscale:
             display_name="ComfyColab PiD — Image Upscaler",
             category="ComfyColab/Image",
             description=(
-                "4x image upscale through NVIDIA PiD / PixelDiT with a matching "
-                "VAE. Experimental 16x runs two 4x passes and tiles the second pass."
+                "4x image upscale through NVIDIA PiD / PixelDiT with a selected "
+                "VAE. Experimental Mage-VAE bridges into FLUX.2 PiD; experimental "
+                "16x runs two 4x passes and tiles the second pass."
             ),
             enable_expand=True,
             inputs=[
@@ -71,7 +75,10 @@ class ComfyColabPiDUpscale:
                     "vae_family",
                     options=backbone_names(),
                     default="FLUX.1",
-                    tooltip="Selects the PiD checkpoint and matching VAE family.",
+                    tooltip=(
+                        "Selects the PiD checkpoint and VAE family. Mage-VAE is an "
+                        "experimental bridge through the FLUX.2 PiD checkpoint."
+                    ),
                 ),
                 io.String.Input(
                     "prompt",
@@ -158,7 +165,7 @@ class ComfyColabPiDUpscale:
             raise ValueError("tile_overlap must be smaller than tile_size.")
         width, height = _image_dimensions(image)
         _validate_dimensions(width, height, scale)
-        _require_upstream_nodes()
+        _require_upstream_nodes(vae_family)
         model_names = ensure_pid_assets(
             vae_family,
             force_redownload=bool(force_redownload),

@@ -132,6 +132,26 @@ class BootstrapRenderingTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        comfy_pid = json.loads(
+            (root / "patches" / "comfyui-pid15-compat.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(comfy_pid["patch_id"], remote_bootstrap.COMFY_PID_PATCH_ID)
+        self.assertEqual(comfy_pid["revision"], remote_bootstrap.COMFY_REF)
+        self.assertEqual(
+            comfy_pid["upstream_commit"],
+            "917faef771a2fd2f14f44af94f17da3d0b2803a3",
+        )
+        comfy_pid_patch = "\n".join(
+            line
+            for file_spec in comfy_pid["files"]
+            for replacement in file_spec["replacements"]
+            for line in replacement["after_lines"]
+        )
+        self.assertIn("pit_lq_inject", comfy_pid_patch)
+        self.assertIn("lq_latent_unpatchify_factor", comfy_pid_patch)
+        self.assertIn("Unsupported PiD v1.5 latent projection", comfy_pid_patch)
         self.assertEqual(trellis["patch_id"], remote_bootstrap.TRELLIS_PATCH_ID)
         self.assertEqual(trellis["revision"], remote_bootstrap.TRELLIS_REF)
         birefnet = next(
@@ -249,6 +269,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "apply_pinned_patch",
                 side_effect=[
+                    remote_bootstrap.COMFY_PID_PATCH_ID,
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
                     remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
@@ -1045,6 +1066,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "apply_pinned_patch",
                 side_effect=[
+                    remote_bootstrap.COMFY_PID_PATCH_ID,
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
                     remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
@@ -1087,6 +1109,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(payload["cubePartModelRef"], remote_bootstrap.CUBEPART_MODEL_REF)
             self.assertEqual(payload["triposplatCoreRef"], remote_bootstrap.COMFY_REF)
             self.assertTrue(payload["triposplatCoreReady"])
+            self.assertEqual(payload["comfyPidPatch"], remote_bootstrap.COMFY_PID_PATCH_ID)
             self.assertEqual(payload["trellisPatch"], remote_bootstrap.TRELLIS_PATCH_ID)
             self.assertEqual(
                 payload["trellisCategoryPatch"],
@@ -1154,6 +1177,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap,
                 "apply_pinned_patch",
                 side_effect=[
+                    remote_bootstrap.COMFY_PID_PATCH_ID,
                     remote_bootstrap.TRELLIS_PATCH_ID,
                     remote_bootstrap.TRELLIS_CATEGORY_PATCH_ID,
                     remote_bootstrap.TRELLIS_MULTIVIEW_PATCH_ID,
@@ -1844,6 +1868,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             "corsOrigin": "https://proxy.prod.colab.dev",
             "runtimeMode": "legacy-full",
             "acceptedLicenses": [],
+            "comfyPidPatch": remote_bootstrap.COMFY_PID_PATCH_ID,
             "comfyUrl": "https://proxy.prod.colab.dev/",
             "comfyPid": 42,
         }
@@ -1879,6 +1904,19 @@ class BootstrapRenderingTests(unittest.TestCase):
                 self.assertFalse(
                     remote_bootstrap.running_comfy_matches(state, **arguments)
                 )
+            patched_state = dict(state)
+            patched_state["comfyPidPatch"] = "old"
+            self.assertFalse(
+                remote_bootstrap.running_comfy_matches(
+                    patched_state,
+                    lock_sha256="a" * 64,
+                    cors_origin="https://proxy.prod.colab.dev",
+                    runtime_mode="legacy-full",
+                    accepted_licenses=[],
+                    port=8188,
+                    refresh=False,
+                )
+            )
             self.assertFalse(
                 remote_bootstrap.running_comfy_matches(
                     state,

@@ -1,0 +1,412 @@
+{
+  "schema": 1,
+  "patch_id": "comfyui-pid15-compat-917faef-v1",
+  "revision": "8b099de36acd81acd1afa3b5442951dc847e0a52",
+  "upstream_commit": "917faef771a2fd2f14f44af94f17da3d0b2803a3",
+  "files": [
+    {
+      "path": "comfy/ldm/pixeldit/model.py",
+      "before_sha256": "fff32b630e0eeb437c9defd68122513566070bd90d6225e062922accf6ed28bb",
+      "after_sha256": "7b2288e87e3d8c75b5dd6a0ec8a82fecd64bb6693ef4d81c36cc44916cfae449",
+      "replacements": [
+        {
+          "before_lines": [
+            "    def _pre_patch_block(self, s, i, **kwargs):",
+            "        \"\"\"Hook for subclasses to inject per-block state into the patch stream (e.g. PiD's LQ gate).\"\"\"",
+            "        return s",
+            "",
+            "    def _forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, **kwargs):"
+          ],
+          "after_lines": [
+            "    def _pre_patch_block(self, s, i, **kwargs):",
+            "        \"\"\"Hook for subclasses to inject per-block state into the patch stream (e.g. PiD's LQ gate).\"\"\"",
+            "        return s",
+            "",
+            "    def _pre_pixel_blocks(self, s, **kwargs):",
+            "        return s",
+            "",
+            "    def _forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, **kwargs):"
+          ]
+        },
+        {
+          "before_lines": [
+            "        s = F.silu(t_emb + s)",
+            "",
+            "        s_cond = s.view(B * L, self.hidden_size)"
+          ],
+          "after_lines": [
+            "        s = F.silu(t_emb + s)",
+            "",
+            "        s = self._pre_pixel_blocks(s, **kwargs)",
+            "        s_cond = s.view(B * L, self.hidden_size)"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "comfy/ldm/pixeldit/pid.py",
+      "before_sha256": "e85c99e74d566b3850d0208f6078d8fbc36e389e1308a9fe417c60223c5a2a04",
+      "after_sha256": "23f3f118bd8a72dafc917a0bde4ef556c3c0051300fb8dbf3a53bb5af5cd1544",
+      "replacements": [
+        {
+          "before_lines": [
+            "class SigmaAwareGatePerTokenPerDim(nn.Module):"
+          ],
+          "after_lines": [
+            "class SigmaAwareGate(nn.Module):"
+          ]
+        },
+        {
+          "before_lines": [
+            "    def __init__(self, dim: int, dtype=None, device=None, operations=None):",
+            "        super().__init__()",
+            "        self.content_proj = operations.Linear(dim * 2, dim, dtype=dtype, device=device)"
+          ],
+          "after_lines": [
+            "    def __init__(self, dim: int, per_token: bool = False, dtype=None, device=None, operations=None):",
+            "        super().__init__()",
+            "        self.content_proj = operations.Linear(dim * 2, 1 if per_token else dim, dtype=dtype, device=device)"
+          ]
+        },
+        {
+          "before_lines": [
+            "    def __init__(self, channels: int, num_groups: int = 4, dtype=None, device=None, operations=None):",
+            "        super().__init__()",
+            "        self.block = nn.Sequential(",
+            "            operations.GroupNorm(num_groups, channels, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(channels, channels, kernel_size=3, padding=1, dtype=dtype, device=device),",
+            "            operations.GroupNorm(num_groups, channels, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(channels, channels, kernel_size=3, padding=1, dtype=dtype, device=device),",
+            "        )"
+          ],
+          "after_lines": [
+            "    def __init__(self, channels: int, num_groups: int = 4, conv_padding_mode: str = \"zeros\", dtype=None, device=None, operations=None):",
+            "        super().__init__()",
+            "        self.block = nn.Sequential(",
+            "            operations.GroupNorm(num_groups, channels, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(channels, channels, kernel_size=3, padding=1, padding_mode=conv_padding_mode, dtype=dtype, device=device),",
+            "            operations.GroupNorm(num_groups, channels, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(channels, channels, kernel_size=3, padding=1, padding_mode=conv_padding_mode, dtype=dtype, device=device),",
+            "        )"
+          ]
+        },
+        {
+          "before_lines": [
+            "        sr_scale: int = 4,",
+            "        latent_spatial_down_factor: int = 8,",
+            "        num_res_blocks: int = 4,",
+            "        num_outputs: int = 7,",
+            "        interval: int = 2,",
+            "        dtype=None, device=None, operations=None,"
+          ],
+          "after_lines": [
+            "        sr_scale: int = 4,",
+            "        latent_spatial_down_factor: int = 8,",
+            "        latent_unpatchify_factor: int = 1,",
+            "        num_res_blocks: int = 4,",
+            "        num_outputs: int = 7,",
+            "        interval: int = 2,",
+            "        conv_padding_mode: str = \"zeros\",",
+            "        gate_per_token: bool = False,",
+            "        pit_output: bool = False,",
+            "        dtype=None, device=None, operations=None,"
+          ]
+        },
+        {
+          "before_lines": [
+            "        self.sr_scale = sr_scale",
+            "        self.latent_spatial_down_factor = latent_spatial_down_factor",
+            "        self.num_outputs = num_outputs",
+            "        self.interval = interval",
+            "",
+            "        z_to_patch_ratio = (sr_scale * latent_spatial_down_factor) / patch_size",
+            "        self.z_to_patch_ratio = z_to_patch_ratio",
+            "        if z_to_patch_ratio >= 1:",
+            "            self.latent_fold_factor = 0",
+            "            latent_proj_in_ch = latent_channels",
+            "        else:",
+            "            fold_factor = int(1 / z_to_patch_ratio)",
+            "            assert fold_factor * z_to_patch_ratio == 1.0",
+            "            self.latent_fold_factor = fold_factor",
+            "            latent_proj_in_ch = latent_channels * fold_factor * fold_factor"
+          ],
+          "after_lines": [
+            "        self.sr_scale = sr_scale",
+            "        self.latent_spatial_down_factor = latent_spatial_down_factor",
+            "        self.latent_unpatchify_factor = latent_unpatchify_factor",
+            "        self.num_outputs = num_outputs",
+            "        self.interval = interval",
+            "",
+            "        effective_latent_channels = latent_channels // (latent_unpatchify_factor * latent_unpatchify_factor)",
+            "        effective_spatial_down_factor = latent_spatial_down_factor // latent_unpatchify_factor",
+            "        z_to_patch_ratio = (sr_scale * effective_spatial_down_factor) / patch_size",
+            "        self.z_to_patch_ratio = z_to_patch_ratio",
+            "        if z_to_patch_ratio >= 1:",
+            "            self.latent_fold_factor = 0",
+            "            latent_proj_in_ch = effective_latent_channels",
+            "        else:",
+            "            fold_factor = int(1 / z_to_patch_ratio)",
+            "            assert fold_factor * z_to_patch_ratio == 1.0",
+            "            self.latent_fold_factor = fold_factor",
+            "            latent_proj_in_ch = effective_latent_channels * fold_factor * fold_factor"
+          ]
+        },
+        {
+          "before_lines": [
+            "        layers = [",
+            "            operations.Conv2d(latent_proj_in_ch, hidden_dim, kernel_size=3, padding=1, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, dtype=dtype, device=device),",
+            "        ]",
+            "        for _ in range(num_res_blocks):",
+            "            layers.append(ResBlock(hidden_dim, dtype=dtype, device=device, operations=operations))"
+          ],
+          "after_lines": [
+            "        layers = [",
+            "            operations.Conv2d(latent_proj_in_ch, hidden_dim, kernel_size=3, padding=1, padding_mode=conv_padding_mode, dtype=dtype, device=device),",
+            "            nn.SiLU(),",
+            "            operations.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, padding_mode=conv_padding_mode, dtype=dtype, device=device),",
+            "        ]",
+            "        for _ in range(num_res_blocks):",
+            "            layers.append(ResBlock(hidden_dim, conv_padding_mode=conv_padding_mode, dtype=dtype, device=device, operations=operations))"
+          ]
+        },
+        {
+          "before_lines": [
+            "        self.output_heads = nn.ModuleList(",
+            "            [operations.Linear(hidden_dim, out_dim, dtype=dtype, device=device) for _ in range(num_outputs)]",
+            "        )",
+            "        self.gate_modules = nn.ModuleList(",
+            "            [SigmaAwareGatePerTokenPerDim(out_dim, dtype=dtype, device=device, operations=operations)",
+            "             for _ in range(num_outputs)]",
+            "        )"
+          ],
+          "after_lines": [
+            "        self.output_heads = nn.ModuleList(",
+            "            [operations.Linear(hidden_dim, out_dim, dtype=dtype, device=device) for _ in range(num_outputs)]",
+            "        )",
+            "        self.pit_head = operations.Linear(hidden_dim, out_dim, dtype=dtype, device=device) if pit_output else None",
+            "        self.gate_modules = nn.ModuleList(",
+            "            [SigmaAwareGate(out_dim, per_token=gate_per_token, dtype=dtype, device=device, operations=operations)",
+            "             for _ in range(num_outputs)]",
+            "        )"
+          ]
+        },
+        {
+          "before_lines": [
+            "    def _align_latent_to_patch_grid(self, lq_latent: torch.Tensor, pH: int, pW: int) -> torch.Tensor:",
+            "        B, z_dim = lq_latent.shape[:2]"
+          ],
+          "after_lines": [
+            "    def _align_latent_to_patch_grid(self, lq_latent: torch.Tensor, pH: int, pW: int) -> torch.Tensor:",
+            "        f = self.latent_unpatchify_factor",
+            "        if f > 1:",
+            "            B, C, H, W = lq_latent.shape",
+            "            lq_latent = lq_latent.reshape(B, C // (f * f), f, f, H, W)",
+            "            lq_latent = lq_latent.permute(0, 1, 4, 2, 5, 3).reshape(B, C // (f * f), H * f, W * f)",
+            "        B, z_dim = lq_latent.shape[:2]"
+          ]
+        },
+        {
+          "before_lines": [
+            "        tokens = feat.permute(0, 2, 3, 1).contiguous().view(B, H * W, C)",
+            "        return [head(tokens) for head in self.output_heads]"
+          ],
+          "after_lines": [
+            "        tokens = feat.permute(0, 2, 3, 1).contiguous().view(B, H * W, C)",
+            "        outputs = [head(tokens) for head in self.output_heads]",
+            "        if self.pit_head is not None:",
+            "            outputs.append(self.pit_head(tokens))",
+            "        return outputs"
+          ]
+        },
+        {
+          "before_lines": [
+            "        sr_scale: int = 4,",
+            "        latent_spatial_down_factor: int = 8,",
+            "        rope_ref_h: int = 1024, # NTK ref resolution in PIXEL units: 1024px / patch=16 -> grid_ref=64."
+          ],
+          "after_lines": [
+            "        sr_scale: int = 4,",
+            "        latent_spatial_down_factor: int = 8,",
+            "        lq_latent_unpatchify_factor: int = 1,",
+            "        lq_conv_padding_mode: str = \"zeros\",",
+            "        lq_gate_per_token: bool = False,",
+            "        pit_lq_inject: bool = False,",
+            "        rope_ref_h: int = 1024, # NTK ref resolution in PIXEL units: 1024px / patch=16 -> grid_ref=64."
+          ]
+        },
+        {
+          "before_lines": [
+            "        for blk in self.pixel_blocks:",
+            "            blk._rope_fn = _pit_rope_fn",
+            "",
+            "        num_lq_outputs = (self.patch_depth + lq_interval - 1) // lq_interval"
+          ],
+          "after_lines": [
+            "        for blk in self.pixel_blocks:",
+            "            blk._rope_fn = _pit_rope_fn",
+            "",
+            "        self.pit_lq_inject = pit_lq_inject",
+            "",
+            "        num_lq_outputs = (self.patch_depth + lq_interval - 1) // lq_interval"
+          ]
+        },
+        {
+          "before_lines": [
+            "            patch_size=self.patch_size,",
+            "            sr_scale=sr_scale,",
+            "            latent_spatial_down_factor=latent_spatial_down_factor,",
+            "            num_res_blocks=lq_num_res_blocks,",
+            "            num_outputs=num_lq_outputs,",
+            "            interval=lq_interval,",
+            "            dtype=dtype,"
+          ],
+          "after_lines": [
+            "            patch_size=self.patch_size,",
+            "            sr_scale=sr_scale,",
+            "            latent_spatial_down_factor=latent_spatial_down_factor,",
+            "            latent_unpatchify_factor=lq_latent_unpatchify_factor,",
+            "            num_res_blocks=lq_num_res_blocks,",
+            "            num_outputs=num_lq_outputs,",
+            "            interval=lq_interval,",
+            "            conv_padding_mode=lq_conv_padding_mode,",
+            "            gate_per_token=lq_gate_per_token,",
+            "            pit_output=pit_lq_inject,",
+            "            dtype=dtype,"
+          ]
+        },
+        {
+          "before_lines": [
+            "            operations=operations,",
+            "        )",
+            "",
+            "    def _fetch_patch_pos(self, height, width, device, dtype, **rope_opts):"
+          ],
+          "after_lines": [
+            "            operations=operations,",
+            "        )",
+            "        self.pit_lq_gate = SigmaAwareGate(",
+            "            self.hidden_size, per_token=lq_gate_per_token, dtype=dtype, device=device, operations=operations",
+            "        ) if pit_lq_inject else None",
+            "",
+            "    def _fetch_patch_pos(self, height, width, device, dtype, **rope_opts):"
+          ]
+        },
+        {
+          "before_lines": [
+            "        return self.lq_proj.gate(s, pid_lq_features[out_idx], pid_degrade_sigma, out_idx)",
+            "",
+            "    def _forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, lq_latent=None, degrade_sigma=None, **kwargs):"
+          ],
+          "after_lines": [
+            "        return self.lq_proj.gate(s, pid_lq_features[out_idx], pid_degrade_sigma, out_idx)",
+            "",
+            "    def _pre_pixel_blocks(self, s, pid_pit_lq_feature=None, pid_degrade_sigma=None, **kwargs):",
+            "        if pid_pit_lq_feature is None:",
+            "            return s",
+            "        return self.pit_lq_gate(s, pid_pit_lq_feature, pid_degrade_sigma)",
+            "",
+            "    def _forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, lq_latent=None, degrade_sigma=None, **kwargs):"
+          ]
+        },
+        {
+          "before_lines": [
+            "        lq_features = self.lq_proj(lq_latent=lq_latent.to(x), target_pH=Hs, target_pW=Ws)",
+            "",
+            "        return super()._forward("
+          ],
+          "after_lines": [
+            "        lq_features = self.lq_proj(lq_latent=lq_latent.to(x), target_pH=Hs, target_pW=Ws)",
+            "        pit_lq_feature = lq_features.pop() if self.pit_lq_inject else None",
+            "",
+            "        return super()._forward("
+          ]
+        },
+        {
+          "before_lines": [
+            "            transformer_options=transformer_options,",
+            "            pid_lq_features=lq_features,",
+            "            pid_degrade_sigma=degrade_sigma,"
+          ],
+          "after_lines": [
+            "            transformer_options=transformer_options,",
+            "            pid_lq_features=lq_features,",
+            "            pid_pit_lq_feature=pit_lq_feature,",
+            "            pid_degrade_sigma=degrade_sigma,"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "comfy/model_detection.py",
+      "before_sha256": "8dbe3a22bf6e0202b5aecb796ae4b1fabe206663202b4f2c977c1d4612af4a3f",
+      "after_sha256": "92c689b0ac2c8a50cbca26f23e507c8543f6435c1c95a19c2ffe430e31333d37",
+      "replacements": [
+        {
+          "before_lines": [
+            "    if _lq_w_key in state_dict_keys:",
+            "        in_ch = int(state_dict[_lq_w_key].shape[1])",
+            "        _gate_prefix = '{}lq_proj.gate_modules.'.format(key_prefix)",
+            "        num_gates = len({k[len(_gate_prefix):].split('.')[0]",
+            "                         for k in state_dict_keys if k.startswith(_gate_prefix)})",
+            "        dit_config = {\"image_model\": \"pid\",",
+            "                      \"lq_latent_channels\": in_ch,",
+            "                      \"latent_spatial_down_factor\": 16 if in_ch >= 64 else 8}",
+            "        if num_gates > 0:",
+            "            dit_config[\"lq_interval\"] = (14 + num_gates - 1) // num_gates",
+            "        return dit_config"
+          ],
+          "after_lines": [
+            "    if _lq_w_key in state_dict_keys:",
+            "        latent_proj_in_channels = int(state_dict[_lq_w_key].shape[1])",
+            "        hidden_dim = int(state_dict[_lq_w_key].shape[0])",
+            "        _gate_prefix = '{}lq_proj.gate_modules.'.format(key_prefix)",
+            "        num_gates = len({k[len(_gate_prefix):].split('.')[0]",
+            "                         for k in state_dict_keys if k.startswith(_gate_prefix)})",
+            "        pid_v1_5 = '{}lq_proj.pit_head.weight'.format(key_prefix) in state_dict_keys",
+            "        dit_config = {\"image_model\": \"pid\",",
+            "                      \"lq_hidden_dim\": hidden_dim}",
+            "        if num_gates > 0:",
+            "            dit_config[\"lq_interval\"] = (14 + num_gates - 1) // num_gates",
+            "        if pid_v1_5:",
+            "            pid_v1_5_variants = {",
+            "                16: {  # Flux and QwenImage",
+            "                    \"lq_latent_channels\": 16,",
+            "                    \"latent_spatial_down_factor\": 8,",
+            "                    \"lq_latent_unpatchify_factor\": 1,",
+            "                },",
+            "                32: {  # Flux2 after 2x latent unpatchify",
+            "                    \"lq_latent_channels\": 128,",
+            "                    \"latent_spatial_down_factor\": 16,",
+            "                    \"lq_latent_unpatchify_factor\": 2,",
+            "                },",
+            "            }",
+            "            variant = pid_v1_5_variants.get(latent_proj_in_channels)",
+            "            if variant is None:",
+            "                raise ValueError(f\"Unsupported PiD v1.5 latent projection with {latent_proj_in_channels} input channels\")",
+            "            gate_weight = state_dict['{}lq_proj.gate_modules.0.content_proj.weight'.format(key_prefix)]",
+            "            dit_config.update(variant)",
+            "            dit_config.update({",
+            "                \"lq_conv_padding_mode\": \"replicate\",",
+            "                \"lq_gate_per_token\": gate_weight.shape[0] == 1,",
+            "                \"pit_lq_inject\": True,",
+            "                \"rope_ref_h\": 2048,",
+            "                \"rope_ref_w\": 2048,",
+            "            })",
+            "        else:",
+            "            dit_config.update({",
+            "                \"lq_latent_channels\": latent_proj_in_channels,",
+            "                \"latent_spatial_down_factor\": 16 if latent_proj_in_channels >= 64 else 8,",
+            "            })",
+            "        return dit_config"
+          ]
+        }
+      ]
+    }
+  ]
+}

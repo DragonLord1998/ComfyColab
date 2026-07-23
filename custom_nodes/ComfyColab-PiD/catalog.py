@@ -5,6 +5,8 @@ from typing import Any
 
 PIXELDIT_REVISION = "70e1298e4e1798c6af6393153f145366fec7bf35"
 PIXELDIT_BASE = f"https://huggingface.co/Comfy-Org/PixelDiT/resolve/{PIXELDIT_REVISION}"
+MAGE_FLOW_REVISION = "d272c957b204b92040be6e6edfac8912823a0e15"
+MAGE_VAE_EXPERIMENTAL = "Mage-VAE (experimental)"
 
 
 class CatalogError(RuntimeError):
@@ -86,6 +88,25 @@ BACKBONES: dict[str, dict[str, dict[str, Any]]] = {
             "size_bytes": 253806246,
             "display_size": "254 MB",
         },
+    },
+}
+
+BACKBONES[MAGE_VAE_EXPERIMENTAL] = {
+    # NVIDIA has not published a PiD checkpoint trained specifically for
+    # Mage-VAE. This experimental bridge uses the FLUX.2 PiD decoder because
+    # Mage-VAE emits the same unscaled 128-channel, 16x-downsampled latent shape.
+    "model": BACKBONES["FLUX.2"]["model"],
+    "vae": {
+        "filename": "mage-vae.safetensors",
+        "folder_key": "vae",
+        "url": (
+            "https://huggingface.co/microsoft/Mage-Flow/resolve/"
+            f"{MAGE_FLOW_REVISION}/vae/diffusion_pytorch_model.safetensors"
+            "?download=true"
+        ),
+        "sha256": "34e076dc1e8a15321e1e07be5111d59cf16dd10b804b7c7e20b4de29013427e0",
+        "size_bytes": 345053056,
+        "display_size": "345 MB",
     },
 }
 

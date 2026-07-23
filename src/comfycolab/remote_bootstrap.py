@@ -75,6 +75,7 @@ TRELLIS_PATCH_ID = "trellis2-strict-1536-birefnet-pin-metrics-v4"
 TRELLIS_CATEGORY_PATCH_ID = "trellis2-advanced-categories-v1"
 TRELLIS_MULTIVIEW_PATCH_ID = "trellis2-multiview-weight-cache-v1"
 ULTRASHAPE_PATCH_ID = "ultrashape-inference-compat-v3"
+COMFY_PID_PATCH_ID = "comfyui-pid15-compat-917faef-v1"
 COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
 PIXAL3D_CACHE_MANIFEST = "pixal3d-g4-v1.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
@@ -1960,6 +1961,7 @@ def running_comfy_matches(
         and previous.get("corsOrigin") == cors_origin
         and previous.get("runtimeMode") == runtime_mode
         and previous.get("acceptedLicenses") == accepted_licenses
+        and previous.get("comfyPidPatch") == COMFY_PID_PATCH_ID
         and bool(previous.get("comfyUrl"))
         and pid_alive(previous.get("comfyPid"))
         and http_ready(port)
@@ -2311,6 +2313,10 @@ def main() -> None:
         str(CONFIG["repository_ref"]),
     )
     configured_node_packs = prepare_configured_node_packs()
+    comfy_pid_patch = apply_pinned_patch(
+        COMFY_DIR,
+        REPO_DIR / "patches" / "comfyui-pid15-compat.json",
+    )
     trellis_patch = apply_pinned_patch(
         TRELLIS_DIR,
         REPO_DIR / "patches" / "trellis2-no-1536-downgrade.json",
@@ -2464,6 +2470,7 @@ def main() -> None:
             "birefnetModelRef": BIREFNET_MODEL_REF,
             "triposplatCoreRef": COMFY_REF,
             "triposplatCoreReady": True,
+            "comfyPidPatch": comfy_pid_patch,
             "pixal3dModelRef": PIXAL3D_MODEL_REF,
             "pixal3dDinov3ModelRef": PIXAL3D_DINOV3_MODEL_REF,
             "pixal3dMogeModelRef": PIXAL3D_MOGE_MODEL_REF,

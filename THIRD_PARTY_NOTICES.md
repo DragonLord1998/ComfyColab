@@ -12,10 +12,11 @@ before enabling model-backed nodes, especially when deploying a hosted service.
   `microsoft/Mage-Flow-Edit`, and `microsoft/Mage-Flow-Edit-Turbo`
 - Declared source and model license: MIT
 
-The ComfyColab worker uses the four inference checkpoints only. It deliberately
-bypasses the upstream prompt/image screening and Gaussian-Shading watermark,
-uses ordinary seeded Gaussian noise, and exposes no controls for those removed
-features.
+The ComfyColab worker uses the four inference checkpoints and the Mage-VAE
+weights bundled in `microsoft/Mage-Flow`. For Mage-Flow image generation it
+deliberately bypasses the upstream prompt/image screening and Gaussian-Shading
+watermark, uses ordinary seeded Gaussian noise, and exposes no controls for
+those removed features.
 
 ## LTX-2.3 video
 
@@ -77,11 +78,13 @@ architecture or weights.
 - Code license: Apache-2.0
 - Model license label: NVIDIA Source Code License / `NSCLv1`
 
-ComfyColab uses ComfyUI's native PiD implementation and downloads only the
-selected matched PiD decoder, PixelDiT text encoder, and VAE. The node blocks
-before model download until `accept_nvidia_noncommercial_license` is enabled.
-Review the upstream license before accepting it. ComfyColab does not grant
-commercial rights or alter restrictions that apply to the weights or outputs.
+ComfyColab uses ComfyUI's native PiD implementation and downloads the selected
+PiD decoder, PixelDiT text encoder, and VAE. Standard selections are matched
+pairs; the clearly labeled experimental Mage-VAE selection uses the FLUX.2 PiD
+decoder without claiming an upstream-trained pair. The node blocks before model
+download until `accept_nvidia_noncommercial_license` is enabled. Review the
+upstream license before accepting it. ComfyColab does not grant commercial
+rights or alter restrictions that apply to the weights or outputs.
 
 ## TripoSplat
 

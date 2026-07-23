@@ -39,12 +39,20 @@ class MageFlowWorkerCommand:
     guidance_scale: float
     num_images: int = 1
     input_image: str = ""
+    input_latent: str = ""
+    output_latent: str = ""
+    output_tensor: str = ""
+    prompts: tuple[str, ...] = ()
+    sigmas: tuple[float, ...] = ()
     strength: float = 0.75
+    tile_size: int = 1536
+    tile_overlap: int = 384
     source_ref: str = ""
     keep_worker_loaded: bool = True
     site_packages: str = ""
 
     def server_argv(self) -> list[str]:
+        server_mode = "native" if self.mode.startswith("native_") else self.mode
         return [
             self.python,
             self.worker_script,
@@ -56,7 +64,7 @@ class MageFlowWorkerCommand:
             "--model-revision",
             self.model_revision,
             "--mode",
-            self.mode,
+            server_mode,
         ]
 
     def argv(self) -> list[str]:
@@ -75,7 +83,14 @@ class MageFlowWorkerCommand:
             ("--guidance-scale", request["guidance_scale"]),
             ("--num-images", request["num_images"]),
             ("--input-image", request["input_image"]),
+            ("--input-latent", request["input_latent"]),
+            ("--output-latent", request["output_latent"]),
+            ("--output-tensor", request["output_tensor"]),
             ("--strength", request["strength"]),
+            ("--tile-size", request["tile_size"]),
+            ("--tile-overlap", request["tile_overlap"]),
+            ("--prompts-json", json.dumps(request["prompts"])),
+            ("--sigmas-json", json.dumps(request["sigmas"])),
         ):
             values.extend((name, str(value)))
         return values
@@ -83,15 +98,26 @@ class MageFlowWorkerCommand:
 
 def build_mage_flow_request(command: MageFlowWorkerCommand) -> dict:
     mode = str(command.mode)
-    if mode not in {"text", "edit"}:
-        raise ValueError("MageFlow mode must be text or edit")
+    valid_modes = {
+        "text",
+        "edit",
+        "vae_encode",
+        "native_denoise",
+        "native_vae_encode",
+        "native_vae_decode",
+    }
+    if mode not in valid_modes:
+        raise ValueError(f"Unsupported MageFlow mode: {mode}")
     seed = int(command.seed)
     if seed < 0 or seed > (2**31) - 1:
         raise ValueError("MageFlow seed must be between 0 and 2147483647")
     width = int(command.width)
     height = int(command.height)
-    if width < 256 or height < 256 or width > 2048 or height > 2048:
-        raise ValueError("MageFlow width and height must be between 256 and 2048")
+    minimum = 16 if mode in {"vae_encode", "native_denoise", "native_vae_encode", "native_vae_decode"} else 256
+    if width < minimum or height < minimum or width > 2048 or height > 2048:
+        raise ValueError(
+            f"MageFlow {mode} width and height must be between {minimum} and 2048"
+        )
     if width % 16 or height % 16:
         raise ValueError("MageFlow width and height must be multiples of 16")
     steps = int(command.steps)
@@ -107,11 +133,39 @@ def build_mage_flow_request(command: MageFlowWorkerCommand) -> dict:
     if not 0.0 <= strength <= 1.0:
         raise ValueError("MageFlow edit strength must be between 0 and 1")
     input_image = str(command.input_image)
-    if mode == "edit" and not input_image:
-        raise ValueError("MageFlow edit mode requires input_image")
+    if mode in {"edit", "vae_encode"} and not input_image:
+        raise ValueError(f"MageFlow {mode} mode requires input_image")
+    input_latent = str(command.input_latent)
+    if mode in {"native_denoise", "native_vae_encode", "native_vae_decode"} and not input_latent:
+        raise ValueError(f"MageFlow {mode} mode requires input_latent")
+    if mode == "native_denoise" and "Edit" in str(command.model_id) and not input_image:
+        raise ValueError("MageFlow native edit sampling requires input_image")
+    output_latent = str(command.output_latent)
+    if mode in {"vae_encode", "native_denoise", "native_vae_encode"} and not output_latent:
+        raise ValueError(f"MageFlow {mode} mode requires output_latent")
+    output_tensor = str(command.output_tensor)
+    if mode == "native_vae_decode" and not output_tensor:
+        raise ValueError("MageFlow native_vae_decode mode requires output_tensor")
+    prompts = tuple(str(value) for value in command.prompts)
+    sigmas = tuple(float(value) for value in command.sigmas)
+    if mode == "native_denoise":
+        if not prompts or len(prompts) != len(sigmas):
+            raise ValueError(
+                "MageFlow native_denoise requires one prompt and sigma per latent batch"
+            )
+    tile_size = int(command.tile_size)
+    tile_overlap = int(command.tile_overlap)
+    if tile_size < 64 or tile_size > 4096 or tile_size % 16:
+        raise ValueError("MageFlow tile_size must be a multiple of 16 between 64 and 4096")
+    if tile_overlap < 0 or tile_overlap >= tile_size or tile_overlap % 16:
+        raise ValueError(
+            "MageFlow tile_overlap must be a non-negative multiple of 16 "
+            "smaller than tile_size"
+        )
     return {
         "protocol": PROTOCOL_VERSION,
         "request_id": str(command.request_id),
+        "model_id": str(command.model_id),
         "mode": mode,
         "prompt": str(command.prompt),
         "negative_prompt": str(command.negative_prompt),
@@ -124,7 +178,14 @@ def build_mage_flow_request(command: MageFlowWorkerCommand) -> dict:
         "guidance_scale": guidance,
         "num_images": num_images,
         "input_image": input_image,
+        "input_latent": input_latent,
+        "output_latent": output_latent,
+        "output_tensor": output_tensor,
+        "prompts": list(prompts),
+        "sigmas": list(sigmas),
         "strength": strength,
+        "tile_size": tile_size,
+        "tile_overlap": tile_overlap,
         "revisions": {
             "source": str(command.source_ref),
             "model": str(command.model_revision),
@@ -165,7 +226,14 @@ def _terminate_process(process: subprocess.Popen, timeout: float = 5.0) -> None:
 def _cleanup(command: MageFlowWorkerCommand, *, include_final: bool = True) -> None:
     paths = [Path(command.metadata_output)]
     if include_final:
-        paths.append(Path(command.output_image))
+        if command.mode in {"vae_encode", "native_denoise", "native_vae_encode"}:
+            final_path = command.output_latent
+        elif command.mode == "native_vae_decode":
+            final_path = command.output_tensor
+        else:
+            final_path = command.output_image
+        if final_path:
+            paths.append(Path(final_path))
     for path in paths:
         try:
             if path.exists():
@@ -319,14 +387,27 @@ class MageFlowWorkerPool:
                         raise RuntimeError(
                             f"MageFlow worker failed: {error_type}: {message}{detail}"
                         )
-                    output = Path(str(result.get("output_image", "")))
+                    if command.mode in {
+                        "vae_encode",
+                        "native_denoise",
+                        "native_vae_encode",
+                    }:
+                        output_key = "output_latent"
+                        expected_output = command.output_latent
+                    elif command.mode == "native_vae_decode":
+                        output_key = "output_tensor"
+                        expected_output = command.output_tensor
+                    else:
+                        output_key = "output_image"
+                        expected_output = command.output_image
+                    output = Path(str(result.get(output_key, "")))
                     metadata = Path(str(result.get("metadata_output", "")))
-                    if output.resolve() != Path(command.output_image).resolve():
+                    if output.resolve() != Path(expected_output).resolve():
                         raise RuntimeError("MageFlow worker reported an unexpected output path")
                     if metadata.resolve() != Path(command.metadata_output).resolve():
                         raise RuntimeError("MageFlow worker reported an unexpected metadata path")
                     if not output.is_file():
-                        raise RuntimeError("MageFlow worker output image is missing")
+                        raise RuntimeError(f"MageFlow worker {output_key} is missing")
                     if not metadata.is_file():
                         raise RuntimeError("MageFlow worker metadata is missing")
                     if not command.keep_worker_loaded:

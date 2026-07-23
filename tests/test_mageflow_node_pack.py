@@ -21,7 +21,9 @@ PUBLIC_NODE_IDS = [
     "ComfyColabMageFlowTurbo",
     "ComfyColabMageFlowEdit",
     "ComfyColabMageFlowEditTurbo",
+    "ComfyColabMageFlowEmptyLatent",
 ]
+FLOW_NODE_IDS = set(PUBLIC_NODE_IDS) - {"ComfyColabMageFlowEmptyLatent"}
 EDIT_NODE_IDS = {"ComfyColabMageFlowEdit", "ComfyColabMageFlowEditTurbo"}
 FORBIDDEN_SCHEMA_INPUTS = {
     "content_screening",
@@ -276,7 +278,7 @@ class MageFlowNodePackTests(unittest.TestCase):
                         stack.enter_context(mock.patch.object(module, name, return_value={}))
             yield
 
-    def test_import_is_lazy_and_exposes_exactly_four_public_facades(self):
+    def test_import_is_lazy_and_exposes_four_facades_plus_native_empty_latent(self):
         before = set(sys.modules)
         package = load_package()
         imported = set(sys.modules) - before
@@ -294,12 +296,12 @@ class MageFlowNodePackTests(unittest.TestCase):
         ]
 
         self.assertEqual(public, PUBLIC_NODE_IDS)
-        self.assertEqual(len(set(public)), 4)
+        self.assertEqual(len(set(public)), 5)
         self.assertFalse(any("Base" in node_id for node_id in public))
 
     def test_public_schemas_have_no_screening_or_watermark_controls(self):
         _, nodes = self._modules()
-        for node_id in PUBLIC_NODE_IDS:
+        for node_id in FLOW_NODE_IDS:
             with self.subTest(node_id=node_id):
                 schema = nodes.NODE_CLASS_MAPPINGS[node_id].define_schema()
                 input_names = [item["name"] for item in schema.inputs]
@@ -319,7 +321,7 @@ class MageFlowNodePackTests(unittest.TestCase):
                     self.assertNotIn("image", normalized)
 
                 outputs = {item["io_type"] for item in schema.outputs}
-                self.assertIn("IMAGE", outputs)
+                self.assertEqual(outputs, {"IMAGE", "MODEL", "CLIP", "VAE"})
 
     def test_public_mappings_do_not_expose_base_or_auxiliary_nodes(self):
         _, nodes = self._modules()
@@ -332,10 +334,85 @@ class MageFlowNodePackTests(unittest.TestCase):
         self.assertEqual(public_keys, PUBLIC_NODE_IDS)
         self.assertFalse(any("Base" in key for key in nodes.NODE_CLASS_MAPPINGS))
 
+    def test_internal_mage_vae_encoder_is_dev_only_and_returns_latent(self):
+        _, nodes = self._modules()
+        encoder = nodes.NODE_CLASS_MAPPINGS["ComfyColabMageVAEEncode"]
+        schema = encoder.define_schema()
+        self.assertTrue(schema.is_dev_only)
+        self.assertEqual([item["io_type"] for item in schema.outputs], ["LATENT"])
+        self.assertEqual(
+            [item["name"] for item in schema.inputs],
+            ["image", "vae_name", "tile_size", "tile_overlap", "keep_worker_loaded"],
+        )
+
+    def test_component_loader_exposes_standard_sampler_types(self):
+        _, nodes = self._modules()
+        loader = nodes.NODE_CLASS_MAPPINGS["ComfyColabMageFlowComponents"]
+        schema = loader.define_schema()
+        self.assertTrue(schema.is_dev_only)
+        self.assertEqual(
+            [item["io_type"] for item in schema.outputs],
+            ["MODEL", "CLIP", "VAE"],
+        )
+        self.assertEqual(
+            [item["name"] for item in schema.inputs],
+            ["image", "variant", "keep_worker_loaded"],
+        )
+        native = types.ModuleType("comfycolab_mageflow_test.native")
+        native.build_components = mock.Mock(
+            return_value=("MODEL_OBJECT", "CLIP_OBJECT", "VAE_OBJECT")
+        )
+        with mock.patch.dict(
+            sys.modules,
+            {"comfycolab_mageflow_test.native": native},
+        ), mock.patch.object(
+            nodes,
+            "_source_dir",
+            return_value=Path("/source"),
+        ), mock.patch.object(
+            nodes,
+            "_worker_script",
+            return_value=Path("/worker.py"),
+        ), mock.patch.object(
+            nodes,
+            "_worker_site_packages",
+            return_value="/packages",
+        ), mock.patch.object(
+            nodes,
+            "_runtime_root",
+            return_value=Path("/runtime"),
+        ):
+            result = loader.execute(
+                image="reference",
+                variant="flow",
+                keep_worker_loaded=True,
+            )
+        self.assertEqual(
+            result.values,
+            ("MODEL_OBJECT", "CLIP_OBJECT", "VAE_OBJECT"),
+        )
+        self.assertEqual(
+            native.build_components.call_args.kwargs["reference_image"],
+            "reference",
+        )
+
+    def test_empty_latent_uses_mage_128_channel_16x_contract(self):
+        _, nodes = self._modules()
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("torch is required")
+        latent = nodes.ComfyColabMageFlowEmptyLatent.execute(
+            width=512,
+            height=768,
+            batch_size=2,
+        ).values[0]["samples"]
+        self.assertEqual(tuple(latent.shape), (2, 128, 48, 32))
+
     def test_public_facades_expand_with_seeded_random_noise_and_no_policy_nodes(self):
         _, nodes, modules = self._module_candidates()
         with self._mock_model_downloads(modules):
-            for node_id in PUBLIC_NODE_IDS:
+            for node_id in FLOW_NODE_IDS:
                 with self.subTest(node_id=node_id):
                     facade = nodes.NODE_CLASS_MAPPINGS[node_id]
                     signature = inspect.signature(facade.execute)
@@ -365,6 +442,7 @@ class MageFlowNodePackTests(unittest.TestCase):
                     joined = " ".join(str(node_type) for node_type in node_types)
 
                     self.assertIn("RandomNoise", node_types)
+                    self.assertIn("ComfyColabMageFlowComponents", node_types)
                     for token in FORBIDDEN_NODE_TOKENS:
                         self.assertNotIn(token, joined)
 
@@ -375,6 +453,18 @@ class MageFlowNodePackTests(unittest.TestCase):
                         and (item.get("class_type") or item.get("type")) == "RandomNoise"
                     )
                     self.assertEqual(random_noise["inputs"]["noise_seed"], 123)
+                    self.assertEqual(len(result.values), 4)
+                    components = next(
+                        item
+                        for item in expanded
+                        if isinstance(item, dict)
+                        and (item.get("class_type") or item.get("type"))
+                        == "ComfyColabMageFlowComponents"
+                    )
+                    self.assertEqual(
+                        components["inputs"]["image"],
+                        "image" if node_id in EDIT_NODE_IDS else None,
+                    )
 
     def test_worker_compatibility_packages_are_isolated_and_cached(self):
         _, nodes = self._modules()

@@ -179,8 +179,11 @@ option that deliberately discards resumable partial data.
 
 `ComfyColab PiD — Image Upscaler` performs a native 4x pixel-diffusion decode
 from any input image. Choose the matching VAE family inside the node:
-`FLUX.1`, `FLUX.2`, or `Qwen Image`. The node downloads the matched
-VAE, PiD v1.5 decoder, and PixelDiT text encoder on first use.
+`FLUX.1`, `FLUX.2`, or `Qwen Image`. An additional
+`Mage-VAE (experimental)` option bridges Mage's 128-channel latent into the
+FLUX.2 PiD checkpoint; it is not a natively trained VAE/PiD pair. The node
+downloads the selected VAE, PiD v1.5 decoder, and PixelDiT text encoder on first
+use.
 
 `Experimental 16x (tiled)` cascades two native 4x passes. The second pass uses
 overlapped ComfyUI context-window sampling and tiled VAE encoding to reduce peak
@@ -242,7 +245,7 @@ Non-Commercial License.
 
 ## Mage-Flow image generation and editing
 
-The Image pack exposes exactly four Mage-Flow nodes under
+The Image pack exposes four Mage-Flow generation/edit facades under
 `ComfyColab / Image`:
 
 - `ComfyColab MageFlow — Text to Image`
@@ -254,6 +257,17 @@ The standard nodes default to the upstream quality-oriented schedules; Turbo
 uses the upstream low-step schedule. The first run downloads the selected,
 revision-pinned Microsoft model into the persistent ComfyColab cache and starts
 an isolated worker so Mage's dependencies do not alter ComfyUI's environment.
+
+Each facade keeps its ready-to-preview `IMAGE` output and also exposes standard
+`MODEL`, `CLIP` (text encoder), and `VAE` outputs. Connect those outputs to
+ComfyUI's `CLIP Text Encode`, a sampler of your choice, and `VAE Decode`.
+For text-to-image sampling, use `ComfyColab Mage-Flow — Empty Latent`; Mage-VAE
+uses 128 latent channels at 16x spatial downsampling, which does not match the
+ordinary four-channel Empty Latent node. The exposed objects remain
+worker-backed so Mage's pinned Transformers dependency stays isolated from
+ComfyUI. Edit models retain the node's connected source image as reference
+conditioning when their `MODEL` output is sent to an external sampler. The
+exported VAE preserves batches and supports ComfyUI's tiled encode/decode nodes.
 
 This personal-project integration does not expose or run Microsoft's prompt or
 image screening. It also removes Gaussian-Shading watermark generation and uses

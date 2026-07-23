@@ -16,17 +16,20 @@ PACKAGE_DIR = ROOT / "custom_nodes" / "ComfyColab-PiD"
 
 PUBLIC_NODE_ID = "ComfyColabPiDUpscale"
 DISPLAY_NAME = "ComfyColab PiD — Image Upscaler"
-BACKBONES = ["FLUX.1", "FLUX.2", "Qwen Image"]
+MAGE_VAE = "Mage-VAE (experimental)"
+BACKBONES = ["FLUX.1", "FLUX.2", "Qwen Image", MAGE_VAE]
 SCALES = ["4x", "Experimental 16x (tiled)"]
 PID_FILENAMES = {
     "FLUX.1": "pid_1.5_flux1_1024_to_4096_4step_bf16.safetensors",
     "FLUX.2": "pid_1.5_flux2_1024_to_4096_4step_bf16.safetensors",
     "Qwen Image": "pid_1.5_qwenimage_1024_to_4096_4step_bf16.safetensors",
+    MAGE_VAE: "pid_1.5_flux2_1024_to_4096_4step_bf16.safetensors",
 }
 VAE_FILENAMES = {
     "FLUX.1": "ae.safetensors",
     "FLUX.2": "flux2-dev-vae.safetensors",
     "Qwen Image": "qwen_image_vae.safetensors",
+    MAGE_VAE: "mage-vae.safetensors",
 }
 
 
@@ -78,6 +81,7 @@ class FakeIO:
     Float = PortFactory("FLOAT")
     Boolean = PortFactory("BOOLEAN")
     Image = PortFactory("IMAGE")
+    Latent = PortFactory("LATENT")
 
     @staticmethod
     def Schema(**kwargs):
@@ -153,6 +157,7 @@ REQUIRED_NATIVE_NODES = {
     "VAEDecode",
     "ContextWindowsManual",
     "ImageScale",
+    "ComfyColabMageVAEEncode",
 }
 
 
@@ -282,6 +287,22 @@ class PiDNodePackTests(unittest.TestCase):
         self.assertFalse(inputs["accept_nvidia_noncommercial_license"]["default"])
         self.assertIn("force_redownload", inputs)
 
+    def test_mage_vae_catalog_is_revision_and_digest_pinned(self):
+        self._modules()
+        catalog = importlib.import_module("comfycolab_pid_test.catalog")
+        assets = catalog.selected_assets(MAGE_VAE)
+        self.assertEqual(
+            assets["model"]["filename"],
+            PID_FILENAMES[MAGE_VAE],
+        )
+        self.assertEqual(assets["vae"]["filename"], "mage-vae.safetensors")
+        self.assertIn(catalog.MAGE_FLOW_REVISION, assets["vae"]["url"])
+        self.assertEqual(
+            assets["vae"]["sha256"],
+            "34e076dc1e8a15321e1e07be5111d59cf16dd10b804b7c7e20b4de29013427e0",
+        )
+        self.assertEqual(assets["vae"]["size_bytes"], 345053056)
+
     def test_license_gate_blocks_before_any_model_download(self):
         _, nodes, _, _ = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
@@ -305,8 +326,18 @@ class PiDNodePackTests(unittest.TestCase):
                     node_types = [item["class_type"] for item in expanded]
                     self.assertEqual(node_types.count("UNETLoader"), 1)
                     self.assertEqual(node_types.count("CLIPLoader"), 1)
-                    self.assertEqual(node_types.count("VAELoader"), 2)
-                    self.assertEqual(node_types.count("VAEEncode"), 1)
+                    self.assertEqual(
+                        node_types.count("VAELoader"),
+                        1 if backbone == MAGE_VAE else 2,
+                    )
+                    self.assertEqual(
+                        node_types.count("VAEEncode"),
+                        0 if backbone == MAGE_VAE else 1,
+                    )
+                    self.assertEqual(
+                        node_types.count("ComfyColabMageVAEEncode"),
+                        1 if backbone == MAGE_VAE else 0,
+                    )
                     self.assertEqual(node_types.count("VAEEncodeTiled"), 0)
                     self.assertEqual(node_types.count("PiDConditioning"), 1)
                     self.assertEqual(node_types.count("SamplerCustom"), 1)
@@ -332,9 +363,12 @@ class PiDNodePackTests(unittest.TestCase):
                     self.assertEqual(unet["inputs"]["unet_name"], PID_FILENAMES[backbone])
                     self.assertEqual(clip["inputs"]["clip_name"], "gemma_2_2b_it_elm_bf16.safetensors")
                     self.assertEqual(clip["inputs"]["type"], "pixeldit")
+                    expected_vaes = {"pixel_space"}
+                    if backbone != MAGE_VAE:
+                        expected_vaes.add(VAE_FILENAMES[backbone])
                     self.assertEqual(
                         {item["inputs"]["vae_name"] for item in vaes},
-                        {VAE_FILENAMES[backbone], "pixel_space"},
+                        expected_vaes,
                     )
                     self.assertEqual(latent["inputs"]["width"], 2048)
                     self.assertEqual(latent["inputs"]["height"], 2048)
@@ -366,6 +400,18 @@ class PiDNodePackTests(unittest.TestCase):
                         decoded["inputs"]["vae"],
                         Link(pixel_vae_index, 0),
                     )
+                    if backbone == MAGE_VAE:
+                        mage_encode = next(
+                            item
+                            for item in expanded
+                            if item["class_type"] == "ComfyColabMageVAEEncode"
+                        )
+                        self.assertEqual(
+                            mage_encode["inputs"]["vae_name"],
+                            "mage-vae.safetensors",
+                        )
+                        self.assertEqual(mage_encode["inputs"]["tile_size"], 1536)
+                        self.assertEqual(mage_encode["inputs"]["tile_overlap"], 384)
 
     def test_experimental_16x_is_two_4x_passes_and_tiles_second_pass(self):
         _, nodes, graph, models = self._modules()
@@ -407,6 +453,33 @@ class PiDNodePackTests(unittest.TestCase):
         self.assertEqual(second_encode["inputs"]["tile_size"], 1536)
         self.assertEqual(second_encode["inputs"]["overlap"], 384)
 
+    def test_mage_vae_16x_uses_isolated_tiled_encoder_for_both_passes(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                backbone=MAGE_VAE,
+                scale="Experimental 16x (tiled)",
+                image=FakeImage(width=256, height=384),
+            )
+        expanded = result.expand
+        node_types = [item["class_type"] for item in expanded]
+        self.assertEqual(node_types.count("ComfyColabMageVAEEncode"), 2)
+        self.assertEqual(node_types.count("VAEEncode"), 0)
+        self.assertEqual(node_types.count("VAEEncodeTiled"), 0)
+        encoders = [
+            item
+            for item in expanded
+            if item["class_type"] == "ComfyColabMageVAEEncode"
+        ]
+        self.assertTrue(
+            all(item["inputs"]["tile_size"] == 1536 for item in encoders)
+        )
+        self.assertTrue(
+            all(item["inputs"]["tile_overlap"] == 384 for item in encoders)
+        )
+
     def test_arbitrary_image_dimensions_are_exactly_resized_after_pid(self):
         _, nodes, graph, models = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
@@ -420,6 +493,44 @@ class PiDNodePackTests(unittest.TestCase):
         )
         self.assertEqual(resize["inputs"]["width"], 2052)
         self.assertEqual(resize["inputs"]["height"], 2044)
+
+    def test_mage_vae_alignment_drives_pid_target_then_resizes_exactly(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                backbone=MAGE_VAE,
+                image=FakeImage(width=257, height=259),
+            )
+        latent = next(
+            item
+            for item in result.expand
+            if item["class_type"] == "EmptyChromaRadianceLatentImage"
+        )
+        self.assertEqual(latent["inputs"]["width"], 1088)
+        self.assertEqual(latent["inputs"]["height"], 1088)
+        resize = next(
+            item for item in result.expand if item["class_type"] == "ImageScale"
+        )
+        self.assertEqual(resize["inputs"]["width"], 1028)
+        self.assertEqual(resize["inputs"]["height"], 1036)
+
+    def test_mage_vae_accepts_small_images_after_16_pixel_alignment(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                backbone=MAGE_VAE,
+                image=FakeImage(width=128, height=96),
+            )
+        encoder = next(
+            item
+            for item in result.expand
+            if item["class_type"] == "ComfyColabMageVAEEncode"
+        )
+        self.assertEqual(encoder["inputs"]["vae_name"], "mage-vae.safetensors")
 
     def test_output_caps_are_validated_before_downloads(self):
         _, nodes, _, _ = self._modules()
