@@ -1302,6 +1302,10 @@ class BootstrapRenderingTests(unittest.TestCase):
                 commands[5],
                 ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
             )
+            self.assertEqual(
+                commands[6][0][-1],
+                remote_bootstrap.LTX_VIDEO_KORNIA_REQUIREMENT,
+            )
             timeout_patch.assert_called_once_with()
 
     def test_comfyenv_timeout_patch_is_exact_idempotent_and_cache_preserving(self) -> None:
@@ -1805,8 +1809,20 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap.install_dependencies()
             self.assertFalse(install_hash.exists())
             self.assertEqual(
-                run.call_args_list[-1],
+                run.call_args_list[-2],
                 mock.call([remote_bootstrap.sys.executable, "install.py"], cwd=trellis_dir),
+            )
+            self.assertEqual(
+                run.call_args_list[-1],
+                mock.call(
+                    [
+                        remote_bootstrap.sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        remote_bootstrap.LTX_VIDEO_KORNIA_REQUIREMENT,
+                    ]
+                ),
             )
 
     def test_colab_proxy_accepts_googleusercontent_url(self) -> None:

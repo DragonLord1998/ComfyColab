@@ -68,6 +68,7 @@ READY_PREFIX = "COMFYCOLAB_READY="
 COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
 LTX_VIDEO_REF = "aceeae9635f6d493f2893ba3c411a1c36031788a"
+LTX_VIDEO_KORNIA_REQUIREMENT = "kornia==0.8.1"
 TRELLIS_REF = "9b878516f2dc2fd873f4f6cceadba403dd12d83e"
 GEOMETRY_REF = "c67199de05705642258e727fa118f412877b4ebf"
 ULTRASHAPE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
@@ -1654,6 +1655,18 @@ def install_dependencies() -> str:
             flush=True,
         )
         install_ultrashape_overlay()
+    # The pinned LTXVideo revision imports ``pad`` from Kornia's pyramid module.
+    # Install the compatible version last so later dependency installers cannot
+    # upgrade it back to a release that removed that re-export.
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            LTX_VIDEO_KORNIA_REQUIREMENT,
+        ]
+    )
     patch_comfyenv_call_timeout()
     return cache_profile or "source-install"
 
