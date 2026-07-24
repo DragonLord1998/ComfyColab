@@ -16,6 +16,7 @@ from comfycolab.notebook import (
     NotebookConfigError,
     RuntimeResolvedMainNotebookConfig,
     _bootstrap_proxy_prelude,
+    _huggingface_setup_source,
     _proxy_helpers_source,
     notebook_bytes,
     render_notebook,
@@ -118,6 +119,59 @@ class NotebookTests(unittest.TestCase):
         self.assertNotIn("print(COMFYCOLAB_PROXY_URL)", proxy)
         self.assertNotIn("serve_kernel_port_as_iframe", proxy)
         self.assertNotIn("Open ComfyUI", proxy)
+
+    def test_first_cell_loads_hf_token_and_enables_fast_xet_downloads(self) -> None:
+        notebook = render_notebook(self.config())
+        first_cell = "".join(notebook["cells"][0]["source"])
+        self.assertIn('userdata.get("HF_TOKEN")', first_cell)
+        self.assertIn('os.environ["HF_TOKEN"] = token.strip()', first_cell)
+        self.assertIn('os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"', first_cell)
+        self.assertIn(
+            'os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")',
+            first_cell,
+        )
+        self.assertNotIn("print(token", first_cell)
+
+    def test_hf_secret_is_exported_without_being_printed(self) -> None:
+        secret = "hf_test_secret"
+        modules = self.fake_colab_modules(hf_token=secret)
+        namespace: dict[str, object] = {}
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "HF_TOKEN",
+                "HF_XET_HIGH_PERFORMANCE",
+                "HF_HUB_DOWNLOAD_TIMEOUT",
+            }
+        }
+        with (
+            mock.patch.dict(sys.modules, modules),
+            mock.patch.dict(os.environ, environment, clear=True),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            exec(_huggingface_setup_source(), namespace)
+            self.assertEqual(os.environ["HF_TOKEN"], secret)
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+        self.assertTrue(namespace["COMFYCOLAB_HF_AUTHENTICATED"])
+        self.assertNotIn(secret, output.getvalue())
+
+    def test_missing_hf_secret_keeps_public_downloads_available(self) -> None:
+        modules = self.fake_colab_modules(hf_token_error=KeyError("missing"))
+        namespace: dict[str, object] = {}
+        with (
+            mock.patch.dict(sys.modules, modules),
+            mock.patch.dict(os.environ, {}, clear=True),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            exec(_huggingface_setup_source(), namespace)
+            self.assertNotIn("HF_TOKEN", os.environ)
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+        self.assertFalse(namespace["COMFYCOLAB_HF_AUTHENTICATED"])
+        self.assertIn("continue anonymously", output.getvalue())
 
     def test_bootstrap_reserves_before_stage0_then_probes_and_embeds(self) -> None:
         notebook = render_notebook(self.config())
@@ -261,6 +315,7 @@ class NotebookTests(unittest.TestCase):
         self.assertNotIn("serve_kernel_port_as_iframe", bootstrap)
         self.assertNotIn("COMFYCOLAB_CORS_ORIGIN", bootstrap)
         self.assertIn("CONFIG_B64 =", bootstrap)
+        self.assertIn('userdata.get("HF_TOKEN")', proxy)
 
     def test_runtime_resolved_main_notebook_defers_immutable_config_to_colab(self) -> None:
         config = RuntimeResolvedMainNotebookConfig.create(
@@ -314,10 +369,13 @@ class NotebookTests(unittest.TestCase):
         *,
         value: str = "https://abc.prod.colab.dev/",
         error: Exception | None = None,
+        hf_token: str | None = None,
+        hf_token_error: Exception | None = None,
     ) -> dict[str, types.ModuleType]:
         google = types.ModuleType("google")
         colab = types.ModuleType("google.colab")
         output = types.ModuleType("google.colab.output")
+        userdata = types.ModuleType("google.colab.userdata")
 
         def eval_js(*_args: object, **_kwargs: object) -> str:
             if error is not None:
@@ -325,12 +383,21 @@ class NotebookTests(unittest.TestCase):
             return value
 
         output.eval_js = eval_js  # type: ignore[attr-defined]
+
+        def get_secret(_name: str) -> str | None:
+            if hf_token_error is not None:
+                raise hf_token_error
+            return hf_token
+
+        userdata.get = get_secret  # type: ignore[attr-defined]
         colab.output = output  # type: ignore[attr-defined]
+        colab.userdata = userdata  # type: ignore[attr-defined]
         google.colab = colab  # type: ignore[attr-defined]
         return {
             "google": google,
             "google.colab": colab,
             "google.colab.output": output,
+            "google.colab.userdata": userdata,
         }
 
 

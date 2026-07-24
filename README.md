@@ -127,6 +127,15 @@ CoreStage0ConfigV1, lock, and stage-1 digest flow. Review and accept those
 upstream terms before running Cell 2. The CubePart node still requires its
 per-request acceptance checkbox.
 
+Before running the notebook, add a Colab secret named exactly `HF_TOKEN` and
+grant the notebook access to it. Cell 1 exports that secret to the runtime
+without printing it, so the Hugging Face CLI, `huggingface_hub`, worker
+processes, and node bundle downloaders all inherit authenticated access. Cell 1
+also enables Hugging Face Xet high-performance mode and raises the Hub download
+timeout. If the secret is unavailable, public downloads continue anonymously.
+All model storage remains under `/content`; ComfyColab does not mount or write
+Google Drive.
+
 Always run `comfycolab stop` when you are finished so the Colab runtime is not
 left consuming compute units.
 

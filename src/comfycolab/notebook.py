@@ -199,8 +199,39 @@ def _proxy_helpers_source(port: int) -> str:
     )
 
 
+def _huggingface_setup_source() -> str:
+    return (
+        "import os\n"
+        "from google.colab import userdata\n"
+        "\n"
+        "\n"
+        "def _comfycolab_configure_huggingface():\n"
+        "    os.environ[\"HF_XET_HIGH_PERFORMANCE\"] = \"1\"\n"
+        "    os.environ.setdefault(\"HF_HUB_DOWNLOAD_TIMEOUT\", \"120\")\n"
+        "    try:\n"
+        "        token = userdata.get(\"HF_TOKEN\")\n"
+        "    except Exception:\n"
+        "        token = None\n"
+        "    if not isinstance(token, str) or not token.strip():\n"
+        "        print(\n"
+        "            \"Colab secret HF_TOKEN is unavailable; public Hugging Face \"\n"
+        "            \"downloads will continue anonymously.\"\n"
+        "        )\n"
+        "        return False\n"
+        "    os.environ[\"HF_TOKEN\"] = token.strip()\n"
+        "    print(\n"
+        "        \"Hugging Face authentication enabled from the Colab HF_TOKEN \"\n"
+        "        \"secret; Xet high-performance downloads enabled.\"\n"
+        "    )\n"
+        "    return True\n"
+        "\n"
+        "\n"
+        "COMFYCOLAB_HF_AUTHENTICATED = _comfycolab_configure_huggingface()\n"
+    )
+
+
 def _proxy_cell_source(port: int) -> str:
-    return _proxy_helpers_source(port) + (
+    return _proxy_helpers_source(port) + "\n" + _huggingface_setup_source() + (
         "\n"
         "COMFYCOLAB_PROXY_URL = None\n"
         "COMFYCOLAB_CORS_ORIGIN = None\n"
@@ -447,7 +478,10 @@ def render_notebook(config: CoreStage0ConfigV1) -> dict[str, Any]:
     proxy_source = (
         _proxy_cell_source(config.port)
         if config.colab_proxy
-        else "print(\"Colab proxy disabled for this notebook.\")\n"
+        else (
+            _huggingface_setup_source()
+            + "\nprint(\"Colab proxy disabled for this notebook.\")\n"
+        )
     )
     bootstrap_source = _render_bootstrap_cell(config)
     notebook: dict[str, Any] = {
@@ -494,7 +528,10 @@ def render_runtime_resolved_main_notebook(
     proxy_source = (
         _proxy_cell_source(config.port)
         if config.colab_proxy
-        else "print(\"Colab proxy disabled for this notebook.\")\n"
+        else (
+            _huggingface_setup_source()
+            + "\nprint(\"Colab proxy disabled for this notebook.\")\n"
+        )
     )
     bootstrap_source = _render_runtime_resolved_bootstrap_cell(config)
     notebook: dict[str, Any] = {
