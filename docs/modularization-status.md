@@ -32,9 +32,9 @@
 The local filesystem split is complete. Each sibling is an independent, clean
 Git repository whose local `main` matches its public remote:
 
-- `../ComfyColab-Image` -> `f776cc7cdececb1616fb6a5dfe1e5d2302491680`
-- `../ComfyColab-Video` -> `828d5f6543472901f797e028f7cd20750f472e38`
-- `../ComfyColab-3D` -> `92a7a2b4b48f3ab144e122b262a406f1ce8c4aba`
+- `../ComfyColab-Image` -> `dcd277a31fd97eaced7537f5076ec9a624dcd4bc`
+- `../ComfyColab-Video` -> `fe87a2d24f456709673d66fc1fdc754e5f9c4476`
+- `../ComfyColab-3D` -> `c72deee57c443d3e2d99056fd4015fd91544eccf`
 - `../ComfyColab-3DGS` -> `788e1fd5b27af5007f6fe3263bed8dcc57a967d0`
 - `../ComfyColab-WorldModels` -> public repository `ComfyColab-WM` at
   `96329dd9bb46f2755fbfefbbef40648917911d05`
@@ -61,9 +61,9 @@ deleted.
 
 | Repository | Local contract status | Live/release status |
 | --- | --- | --- |
-| ComfyColab-Image | 51 tests pass; Mage sampler components and PiD 1.5 inference validated on G4 | Exact-lock rollback remains |
-| ComfyColab-Video | 15 tests pass; pinned upstream requirements are declared | Exact-lock Colab install, startup, node discovery, inference, and rollback remain |
-| ComfyColab-3D | 140 tests pass | Generic environment-TOML installation, cache restore, and live G4 gates remain |
+| ComfyColab-Image | 58 tests pass; all 12 nodes discovered on stock ComfyUI; Mage generation/editing and PiD 4x/16x validated on G4 | Exact-lock rollback remains |
+| ComfyColab-Video | 17 tests pass; node discovery and LTX-2.3 MP4 generation validated on G4 | Exact-lock rollback remains |
+| ComfyColab-3D | 178 tests pass; all 8 nodes discovered; pinned TRELLIS environment install and textured GLB generation validated on G4 | Optional worker backends and exact-lock cache restoration remain |
 | ComfyColab-3DGS | 27 tests pass | Resolved model-path ownership and live splat generation remain |
 | ComfyColab-WM | 4 tests pass, zero capabilities | Intentional World Model contract skeleton; no node or model claim |
 
