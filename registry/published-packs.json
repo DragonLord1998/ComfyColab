@@ -5,28 +5,28 @@
       "schema": 1,
       "id": "3d",
       "repository": "https://github.com/DragonLord1998/ComfyColab-3D.git",
-      "ref": "c72deee57c443d3e2d99056fd4015fd91544eccf",
+      "ref": "5a4235df8e414de86be5333fceedc81e52a71c4f",
       "manifest_sha256": "062ffdb10d4e66d74f2c16530d40f3ce265426bdcedabc27f4a87359b38cedf3"
     },
     "3dgs": {
       "schema": 1,
       "id": "3dgs",
       "repository": "https://github.com/DragonLord1998/ComfyColab-3DGS.git",
-      "ref": "788e1fd5b27af5007f6fe3263bed8dcc57a967d0",
+      "ref": "6b6abe2d0e07ef37d356d163f2050d2a2526b157",
       "manifest_sha256": "c5c2419d09fd88fefa30d3413620d98c3cbdb3a33829f542f8336a2a9be75e4c"
     },
     "image": {
       "schema": 1,
       "id": "image",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Image.git",
-      "ref": "dcd277a31fd97eaced7537f5076ec9a624dcd4bc",
+      "ref": "ed6269f0f02fb71c808173a9605351b8311cc177",
       "manifest_sha256": "212c3fa5cea57da339c9d59808d2f67762e6b3d879a7efcf628284081e2ced0b"
     },
     "video": {
       "schema": 1,
       "id": "video",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Video.git",
-      "ref": "fe87a2d24f456709673d66fc1fdc754e5f9c4476",
+      "ref": "8ffbe066e233c7aca89eb44140ce26a536476487",
       "manifest_sha256": "fe53c5275dcd509b0455b265e2c4795b1641dc786f9e1f307fe9a944decf975c"
     },
     "world": {

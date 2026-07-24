@@ -7,6 +7,7 @@ import io
 import os
 import sys
 import tempfile
+import types
 import unittest
 import urllib.error
 from pathlib import Path
@@ -76,6 +77,61 @@ class DownloadTests(unittest.TestCase):
             marker = destination.with_suffix(".gguf.sha256").read_text(encoding="ascii")
             self.assertIn(digest, marker)
 
+    def test_huggingface_download_uses_hub_xet_primary_without_urllib(self) -> None:
+        with tempfile.TemporaryDirectory() as target_directory:
+            directory = Path(target_directory)
+            content = b"hub cached model bytes"
+            digest = hashlib.sha256(content).hexdigest()
+            cache_file = directory / "cache" / "model.gguf"
+            cache_file.parent.mkdir()
+            cache_file.write_bytes(content)
+            destination = directory / "model.gguf"
+            destination.with_suffix(".gguf.part").write_bytes(b"stale partial")
+            calls = []
+
+            fake_hub = types.ModuleType("huggingface_hub")
+
+            def hf_hub_download(**kwargs):
+                calls.append(kwargs)
+                return str(cache_file)
+
+            fake_hub.hf_hub_download = hf_hub_download
+            with mock.patch.dict(sys.modules, {"huggingface_hub": fake_hub}), mock.patch.dict(
+                os.environ, {"HF_TOKEN": "valid-token"}, clear=False
+            ), mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=AssertionError("urllib fallback should not run"),
+            ):
+                result = self.download.download_file(
+                    url=(
+                        "https://huggingface.co/org/model/resolve/"
+                        "0123456789abcdef0123456789abcdef01234567/nested/model.gguf"
+                        "?download=true"
+                    ),
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+                self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+                self.assertEqual(os.environ["HF_HUB_ETAG_TIMEOUT"], "60")
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertFalse(destination.with_suffix(".gguf.part").exists())
+            self.assertEqual(
+                calls,
+                [
+                    {
+                        "repo_id": "org/model",
+                        "filename": "nested/model.gguf",
+                        "revision": "0123456789abcdef0123456789abcdef01234567",
+                        "token": "valid-token",
+                        "force_download": False,
+                        "local_dir": str(directory / ".model.gguf.hf-xet"),
+                    }
+                ],
+            )
+
     def test_existing_verified_file_skips_network(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "cached.gguf"
@@ -93,7 +149,43 @@ class DownloadTests(unittest.TestCase):
             )
             self.assertEqual(result.read_bytes(), content)
 
-    def test_transient_403_retries_anonymously_without_force_redownload(self) -> None:
+    def test_hub_stale_token_retries_anonymously_before_urllib_fallback(self) -> None:
+        class StaleTokenError(RuntimeError):
+            response = types.SimpleNamespace(status_code=403)
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "public.gguf"
+            content = b"public model bytes"
+            digest = hashlib.sha256(content).hexdigest()
+            calls = []
+
+            def hub_download(**kwargs):
+                calls.append(kwargs)
+                if len(calls) == 1:
+                    raise StaleTokenError("stale")
+                destination.with_suffix(".gguf.part").write_bytes(content)
+                destination.with_suffix(".gguf.part").replace(destination)
+                return destination
+
+            with mock.patch.dict(os.environ, {"HF_TOKEN": "stale-token"}, clear=False), mock.patch.object(
+                self.download._hf_download,
+                "_download_with_hub",
+                side_effect=hub_download,
+            ), mock.patch.object(
+                self.download.urllib.request,
+                "urlopen",
+                side_effect=AssertionError("urllib fallback should not run"),
+            ):
+                result = self.download.download_file(
+                    url="https://huggingface.co/public/model/resolve/revision/model.gguf",
+                    destination=destination,
+                    expected_sha256=digest,
+                )
+
+            self.assertEqual(result.read_bytes(), content)
+            self.assertEqual([call["include_auth"] for call in calls], [True, False])
+
+    def test_urllib_fallback_retries_stale_token_anonymously(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "public.gguf"
             content = b"public model bytes"
@@ -114,6 +206,10 @@ class DownloadTests(unittest.TestCase):
                 return FakeResponse(content)
 
             with mock.patch.dict(os.environ, {"HF_TOKEN": "stale-token"}, clear=False), mock.patch.object(
+                self.download._hf_download,
+                "_download_with_hub",
+                side_effect=ImportError("missing huggingface_hub"),
+            ), mock.patch.object(
                 self.download.urllib.request,
                 "urlopen",
                 side_effect=open_request,
@@ -186,7 +282,7 @@ class DownloadTests(unittest.TestCase):
             ) as urlopen, mock.patch.object(self.download.time, "sleep") as sleep:
                 with self.assertRaisesRegex(self.download.DownloadError, "not retryable"):
                     self.download.download_file(
-                        url=error.url,
+                        url="https://example.test/missing.gguf",
                         destination=destination,
                         expected_sha256="0" * 64,
                     )

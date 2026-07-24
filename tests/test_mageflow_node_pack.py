@@ -508,6 +508,8 @@ class MageFlowNodePackTests(unittest.TestCase):
         self.assertIn("--target", argv)
         self.assertIn("transformers==5.5.0", argv)
         self.assertIn("loguru==0.7.3", argv)
+        self.assertIn("huggingface_hub[hf_xet]>=0.36.0,<1", argv)
+        self.assertIn("hf-xet>=1.1.0", argv)
 
     def test_legacy_path_self_provisions_exact_mage_source_revision(self):
         _, nodes = self._modules()

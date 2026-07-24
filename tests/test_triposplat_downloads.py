@@ -143,6 +143,49 @@ class TriposplatDownloadTests(unittest.TestCase):
     def setUp(self):
         self.download = load_module("download")
 
+    def test_hub_primary_uses_token_and_high_performance_xet(self):
+        content = b"triposplat-xet-primary"
+        digest = hashlib.sha256(content).hexdigest()
+        calls = []
+
+        def hf_hub_download(**kwargs):
+            calls.append(kwargs)
+            destination = Path(str(kwargs["local_dir"])) / str(kwargs["filename"])
+            destination.write_bytes(content)
+            return str(destination)
+
+        fake_hub = types.SimpleNamespace(hf_hub_download=hf_hub_download)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            sys.modules,
+            {"huggingface_hub": fake_hub},
+        ), mock.patch.dict(
+            os.environ,
+            {"HF_TOKEN": "test-token"},
+            clear=False,
+        ), mock.patch.object(
+            self.download.urllib.request,
+            "urlopen",
+        ) as urlopen:
+            destination = Path(directory) / "model.safetensors"
+            result = self.download.download_file(
+                url=(
+                    "https://huggingface.co/VAST-AI/TripoSplat/resolve/"
+                    f"{MODEL_REVISION}/model.safetensors?download=true"
+                ),
+                destination=destination,
+                expected_sha256=digest,
+                expected_size=len(content),
+            )
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+            self.assertEqual(result.read_bytes(), content)
+
+        self.assertEqual(calls[0]["repo_id"], "VAST-AI/TripoSplat")
+        self.assertEqual(calls[0]["revision"], MODEL_REVISION)
+        self.assertEqual(calls[0]["filename"], "model.safetensors")
+        self.assertEqual(calls[0]["token"], "test-token")
+        urlopen.assert_not_called()
+
     def test_model_catalog_uses_immutable_official_revision_and_expected_folders(self):
         models = load_module("models")
         assets = all_assets(models)
@@ -225,6 +268,10 @@ class TriposplatDownloadTests(unittest.TestCase):
             digest = hashlib.sha256(content).hexdigest()
             destination = Path(directory) / "triposplat_fp16.safetensors"
             with mock.patch.object(
+                self.download,
+                "_download_with_hub",
+                return_value=False,
+            ), mock.patch.object(
                 self.download.urllib.request,
                 "urlopen",
                 return_value=FakeResponse(content),
@@ -396,7 +443,15 @@ class TriposplatDownloadTests(unittest.TestCase):
                     )
                 return FakeResponse(content)
 
-            with mock.patch.dict(os.environ, {"HF_TOKEN": "stale-token"}, clear=False), mock.patch.object(
+            with mock.patch.dict(
+                os.environ,
+                {"HF_TOKEN": "stale-token"},
+                clear=False,
+            ), mock.patch.object(
+                self.download,
+                "_download_with_hub",
+                return_value=False,
+            ), mock.patch.object(
                 self.download.urllib.request,
                 "urlopen",
                 side_effect=open_request,

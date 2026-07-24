@@ -24,7 +24,7 @@ CUBEPART_RUNTIME_REQUIREMENTS = (
     "diffusers==0.37.1",
     "transformers==4.57.3",
     "accelerate==1.13.0",
-    "huggingface-hub>=0.36.0,<1.0",
+    "huggingface_hub[hf_xet]>=0.36.0,<1",
 )
 CUBEPART_CODE_LICENSE = "Cube3D Research-Only RAIL-MS"
 CUBEPART_WEIGHTS_LICENSE = "OpenRAIL / Cube3D Research-Only RAIL-MS"
@@ -230,20 +230,41 @@ def ensure_cubepart_artifacts(
                 "CubePart first install needs at least 14 GiB free for its roughly "
                 f"10 GiB model set; only {free_gib:.1f} GiB is available."
             )
+        os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
         try:
             from huggingface_hub import snapshot_download
         except ImportError as error:
             raise RuntimeError(
                 "huggingface_hub is required to provision pinned CubePart model artifacts"
             ) from error
-        _emit(progress, "snapshot", repo=CUBEPART_MODEL_REPO, revision=CUBEPART_MODEL_REF)
-        snapshot_download(
-            repo_id=CUBEPART_MODEL_REPO,
-            revision=CUBEPART_MODEL_REF,
-            local_dir=str(weights),
-            allow_patterns=[CUBEPART_CHECKPOINT, CUBEPART_VAE_CHECKPOINT],
-            resume_download=True,
+        token = os.environ.get("HF_TOKEN") or os.environ.get(
+            "HUGGING_FACE_HUB_TOKEN"
         )
+        candidates: tuple[str | bool | None, ...] = (
+            (token, False) if token else (False,)
+        )
+        _emit(progress, "snapshot", repo=CUBEPART_MODEL_REPO, revision=CUBEPART_MODEL_REF)
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                snapshot_download(
+                    repo_id=CUBEPART_MODEL_REPO,
+                    revision=CUBEPART_MODEL_REF,
+                    local_dir=str(weights),
+                    allow_patterns=[CUBEPART_CHECKPOINT, CUBEPART_VAE_CHECKPOINT],
+                    token=candidate,
+                )
+                last_error = None
+                break
+            except Exception as error:
+                last_error = error
+        if last_error is not None:
+            raise RuntimeError(
+                f"Unable to download pinned CubePart artifact "
+                f"{CUBEPART_MODEL_REPO}@{CUBEPART_MODEL_REF}. If the repository "
+                "requires access, accept its terms and provide HF_TOKEN."
+            ) from last_error
         missing = [name for name in (CUBEPART_CHECKPOINT, CUBEPART_VAE_CHECKPOINT) if not (weights / name).is_file()]
         if missing:
             raise RuntimeError(

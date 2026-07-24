@@ -35,6 +35,7 @@ TUNNEL_LOG = STATE_DIR / "cloudflared.log"
 PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
+HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<1"
 LEGACY_FULL_PACK_IDS = frozenset({"3d", "3dgs", "image", "video"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -681,17 +682,38 @@ def install_dependency(
             raise RuntimeContractError(f"dependency {dependency_id} HF repository is invalid")
         validate_commit(commit, field=f"dependency {dependency_id} ref")
         destination.mkdir(parents=True, exist_ok=True)
-        run(
-            [
-                "huggingface-cli",
-                "download",
-                repository,
-                "--revision",
-                commit,
-                "--local-dir",
-                str(destination),
-            ]
+        os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as error:
+            raise RuntimeContractError(
+                "huggingface_hub with hf-xet is required for Hugging Face dependencies"
+            ) from error
+        token = os.environ.get("HF_TOKEN") or os.environ.get(
+            "HUGGING_FACE_HUB_TOKEN"
         )
+        candidates: tuple[str | bool | None, ...] = (
+            (token, False) if token else (False,)
+        )
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                snapshot_download(
+                    repo_id=repository,
+                    revision=commit,
+                    local_dir=str(destination),
+                    token=candidate,
+                )
+                last_error = None
+                break
+            except Exception as error:
+                last_error = error
+        if last_error is not None:
+            raise RuntimeContractError(
+                f"unable to download Hugging Face dependency "
+                f"{repository}@{commit}"
+            ) from last_error
         verify_huggingface_artifacts(
             dependency_id,
             destination,
@@ -1398,6 +1420,15 @@ def install_core_requirements() -> None:
     if not requirements.is_file():
         raise RuntimeContractError("ComfyUI requirements.txt is missing")
     run([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            HUGGINGFACE_HUB_REQUIREMENT,
+        ]
+    )
 
 
 def git_commit(directory: Path) -> str:
@@ -2238,6 +2269,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
     args = build_parser().parse_args(argv)
     config = load_stage1_config(args.config)
     lock = load_lock(Path(config["lock_path"]), str(config["lock_sha256"]))

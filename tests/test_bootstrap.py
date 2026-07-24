@@ -1285,17 +1285,21 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap.install_dependencies()
 
             self.assertEqual(commands[0][1], comfy_dir)
-            self.assertEqual(commands[1][0][-1], str(gguf_dir / "requirements.txt"))
             self.assertEqual(
-                commands[2][0][-1],
+                commands[1][0][-1],
+                "huggingface_hub[hf_xet]>=0.36.0,<1",
+            )
+            self.assertEqual(commands[2][0][-1], str(gguf_dir / "requirements.txt"))
+            self.assertEqual(
+                commands[3][0][-1],
                 str(ltx_video_dir / "requirements.txt"),
             )
             self.assertEqual(
-                commands[3][0][-3:],
+                commands[4][0][-3:],
                 ["-r", str(trellis_dir / "requirements.txt"), "--upgrade"],
             )
             self.assertEqual(
-                commands[4],
+                commands[5],
                 ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
             )
             timeout_patch.assert_called_once_with()

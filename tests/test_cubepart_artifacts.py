@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,6 +25,70 @@ def load_artifacts():
 
 
 class CubePartArtifactProvisioningTests(unittest.TestCase):
+    def test_model_snapshot_uses_authenticated_high_performance_xet(self) -> None:
+        artifacts = load_artifacts()
+        calls: list[dict[str, object]] = []
+
+        def snapshot_download(**kwargs):
+            calls.append(kwargs)
+            weights = Path(str(kwargs["local_dir"]))
+            weights.mkdir(parents=True, exist_ok=True)
+            (weights / artifacts.CUBEPART_CHECKPOINT).write_bytes(b"dit")
+            (weights / artifacts.CUBEPART_VAE_CHECKPOINT).write_bytes(b"vae")
+            return str(weights)
+
+        fake_hub = types.ModuleType("huggingface_hub")
+
+        def hub_getattr(name):
+            if name == "snapshot_download":
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+                self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+                return snapshot_download
+            raise AttributeError(name)
+
+        fake_hub.__getattr__ = hub_getattr
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "cube" / "cubepart"
+            source.mkdir(parents=True)
+            (source / "pyproject.toml").write_text(
+                "[project]\nname='cube_part'\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                artifacts,
+                "_git_revision",
+                return_value=artifacts.CUBEPART_SOURCE_REF,
+            ), mock.patch.object(
+                artifacts.shutil,
+                "disk_usage",
+                return_value=types.SimpleNamespace(free=artifacts.MIN_FREE_BYTES),
+            ), mock.patch.dict(
+                sys.modules,
+                {"huggingface_hub": fake_hub},
+            ), mock.patch.dict(
+                os.environ,
+                {
+                    "HF_TOKEN": "test-token",
+                    "COMFYCOLAB_CUBEPART_SKIP_ENV_INSTALL": "1",
+                },
+                clear=False,
+            ):
+                artifacts.ensure_cubepart_artifacts(
+                    accept_research_license=True,
+                    source_dir=source,
+                    environment_dir=root / "env",
+                    weights_root=root / "models",
+                )
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+                self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+
+        self.assertEqual(calls[0]["token"], "test-token")
+        self.assertIn(
+            "huggingface_hub[hf_xet]>=0.36.0,<1",
+            artifacts.CUBEPART_RUNTIME_REQUIREMENTS,
+        )
+
     def test_license_gate_runs_before_any_provisioning(self) -> None:
         artifacts = load_artifacts()
         with tempfile.TemporaryDirectory() as directory:

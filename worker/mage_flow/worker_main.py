@@ -288,6 +288,9 @@ def _resolve_model_dir(model_id: str, revision: str) -> str:
     candidate = Path(model_id).expanduser()
     if candidate.is_dir():
         return str(candidate.resolve())
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
     from huggingface_hub import snapshot_download
 
     environment_names = {
@@ -297,10 +300,18 @@ def _resolve_model_dir(model_id: str, revision: str) -> str:
         "microsoft/Mage-Flow-Edit-Turbo": "COMFYCOLAB_MAGEFLOW_EDIT_TURBO_MODEL",
     }
     local_dir = os.environ.get(environment_names.get(model_id, ""))
-    kwargs = {"repo_id": model_id, "revision": revision}
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    kwargs = {"repo_id": model_id, "revision": revision, "token": token}
     if local_dir:
         kwargs["local_dir"] = local_dir
-    return snapshot_download(**kwargs)
+    try:
+        return snapshot_download(**kwargs)
+    except Exception as error:
+        response = getattr(error, "response", None)
+        if token and getattr(response, "status_code", None) in {401, 403}:
+            kwargs["token"] = False
+            return snapshot_download(**kwargs)
+        raise
 
 
 def _instantiate_pipeline(module: ModuleType, model_id: str, revision: str):

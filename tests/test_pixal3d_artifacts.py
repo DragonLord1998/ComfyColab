@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,49 @@ def load_artifacts():
 
 
 class Pixal3DArtifactTests(unittest.TestCase):
+    def test_snapshot_uses_xet_token_then_retries_public_repo_anonymously(self) -> None:
+        artifacts = load_artifacts()
+        calls: list[object] = []
+
+        def snapshot_download(*, local_dir, token, **_kwargs):
+            calls.append(token)
+            if token:
+                raise RuntimeError("stale token")
+            root = Path(local_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            return str(root)
+
+        fake_hub = types.ModuleType("huggingface_hub")
+
+        def hub_getattr(name):
+            if name == "snapshot_download":
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+                self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+                return snapshot_download
+            raise AttributeError(name)
+
+        fake_hub.__getattr__ = hub_getattr
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            sys.modules,
+            {"huggingface_hub": fake_hub},
+        ), mock.patch.dict(
+            os.environ,
+            {"HF_TOKEN": "test-token"},
+            clear=False,
+        ):
+            artifacts._ensure_snapshot(
+                repo_id="owner/model",
+                revision="a" * 40,
+                destination=Path(directory) / "snapshot",
+                sentinel="config.json",
+                progress=lambda _event: None,
+            )
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+
+        self.assertEqual(calls, ["test-token", False])
+
     def test_moge_snapshot_accepts_model_checkpoint_without_config_json(self) -> None:
         artifacts = load_artifacts()
 

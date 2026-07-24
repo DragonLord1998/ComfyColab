@@ -46,6 +46,12 @@ MIN_FREE_BYTES = 35 * 1024**3
 _VALIDATED_SNAPSHOT_STATS: dict[tuple[str, str, str], tuple[tuple[str, int, int], ...]] = {}
 
 
+def _configure_hf_transfer() -> str | None:
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
 @dataclass(frozen=True)
 class Pixal3DArtifacts:
     model_dir: Path
@@ -215,6 +221,7 @@ def _ensure_snapshot(
         if invalid.is_file() and destination in invalid.parents:
             invalid.unlink(missing_ok=True)
     destination.mkdir(parents=True, exist_ok=True)
+    token = _configure_hf_transfer()
     try:
         from huggingface_hub import snapshot_download
     except ImportError as error:
@@ -222,19 +229,26 @@ def _ensure_snapshot(
             "huggingface_hub is required to provision the pinned Pixal3D model artifacts"
         ) from error
     _emit(progress, "snapshot", repo=repo_id, revision=revision)
-    try:
-        snapshot_download(
-            repo_id=repo_id,
-            revision=revision,
-            local_dir=str(destination),
-            resume_download=True,
-            allow_patterns=allow_patterns,
-        )
-    except BaseException as error:
+    candidates: tuple[str | bool | None, ...] = (token, False) if token else (False,)
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            snapshot_download(
+                repo_id=repo_id,
+                revision=revision,
+                local_dir=str(destination),
+                allow_patterns=allow_patterns,
+                token=candidate,
+            )
+            last_error = None
+            break
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
         raise RuntimeError(
             f"Unable to download pinned artifact {repo_id}@{revision}. "
             "If the repository requires access, accept its terms and provide HF_TOKEN."
-        ) from error
+        ) from last_error
     if not (destination / sentinel).is_file():
         raise RuntimeError(f"Pinned artifact {repo_id}@{revision} is incomplete: missing {sentinel}")
     inventory = _snapshot_inventory(destination)

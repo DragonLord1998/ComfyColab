@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import types
@@ -24,6 +25,51 @@ def load_worker():
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def test_model_snapshot_download_uses_hub_xet_token_and_stale_token_fallback(self):
+        worker = load_worker()
+        calls = []
+        fake_hub = types.ModuleType("huggingface_hub")
+
+        class StaleTokenError(RuntimeError):
+            response = types.SimpleNamespace(status_code=403)
+
+        def snapshot_download(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise StaleTokenError("stale")
+            return "/cached/mage-flow"
+
+        fake_hub.snapshot_download = snapshot_download
+        with mock.patch.dict(sys.modules, {"huggingface_hub": fake_hub}), mock.patch.dict(
+            os.environ,
+            {"HF_TOKEN": "stale-token"},
+            clear=False,
+        ):
+            result = worker._resolve_model_dir(
+                "microsoft/Mage-Flow",
+                "d272c957b204b92040be6e6edfac8912823a0e15",
+            )
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+            self.assertEqual(os.environ["HF_HUB_ETAG_TIMEOUT"], "60")
+
+        self.assertEqual(result, "/cached/mage-flow")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "repo_id": "microsoft/Mage-Flow",
+                    "revision": "d272c957b204b92040be6e6edfac8912823a0e15",
+                    "token": "stale-token",
+                },
+                {
+                    "repo_id": "microsoft/Mage-Flow",
+                    "revision": "d272c957b204b92040be6e6edfac8912823a0e15",
+                    "token": False,
+                },
+            ],
+        )
+
     def test_native_sampler_request_requires_prompt_and_sigma_per_batch(self):
         worker_module_path = ROOT / "custom_nodes" / "ComfyColab-MageFlow" / "mage_flow_worker.py"
         name = "comfycolab_mageflow_protocol_test"

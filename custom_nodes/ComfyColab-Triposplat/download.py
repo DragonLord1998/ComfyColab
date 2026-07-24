@@ -6,6 +6,7 @@ import os
 import shutil
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
@@ -73,6 +74,79 @@ def _request(url: str, offset: int, *, include_auth: bool) -> urllib.request.Req
     return urllib.request.Request(url, headers=headers)
 
 
+def _parse_huggingface_url(url: str) -> tuple[str, str, str] | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
+        return None
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 5 or parts[2] != "resolve":
+        return None
+    return f"{parts[0]}/{parts[1]}", parts[3], "/".join(parts[4:])
+
+
+def _download_with_hub(
+    *,
+    url: str,
+    destination: Path,
+    expected_sha256: str,
+    expected_size: int,
+) -> bool:
+    coordinates = _parse_huggingface_url(url)
+    if coordinates is None:
+        return False
+
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return False
+
+    repo_id, revision, filename = coordinates
+    token = os.environ.get("HF_TOKEN") or os.environ.get(
+        "HUGGING_FACE_HUB_TOKEN"
+    )
+    candidates: tuple[str | bool | None, ...] = (
+        (token, False) if token else (False,)
+    )
+    for candidate in candidates:
+        try:
+            downloaded = Path(
+                hf_hub_download(
+                    repo_id=repo_id,
+                    revision=revision,
+                    filename=filename,
+                    local_dir=str(destination.parent),
+                    token=candidate,
+                )
+            )
+            if downloaded.resolve() != destination.resolve():
+                raise DownloadError(
+                    f"hf_hub_download returned an unexpected path for "
+                    f"{destination.name}: {downloaded}"
+                )
+            if destination.stat().st_size != expected_size:
+                raise DownloadError(
+                    f"Wrong byte count for {destination.name}: expected "
+                    f"{expected_size}, received {destination.stat().st_size}."
+                )
+            actual_sha256 = sha256_file(destination)
+            if actual_sha256 != expected_sha256:
+                raise DownloadError(
+                    f"Checksum mismatch for {destination.name}: expected "
+                    f"{expected_sha256}, received {actual_sha256}."
+                )
+            _record_verified(destination, expected_sha256, expected_size)
+            return True
+        except Exception:
+            _forget_verified(destination)
+            destination.unlink(missing_ok=True)
+            destination.with_suffix(destination.suffix + ".sha256").unlink(
+                missing_ok=True
+            )
+    return False
+
+
 def download_file(
     *,
     url: str,
@@ -100,6 +174,17 @@ def download_file(
         _forget_verified(destination)
         destination.unlink()
         marker.unlink(missing_ok=True)
+
+    if _download_with_hub(
+        url=url,
+        destination=destination,
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+    ):
+        partial.unlink(missing_ok=True)
+        if progress:
+            progress(expected_size, expected_size)
+        return destination
 
     include_auth = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
     last_error: Exception | None = None

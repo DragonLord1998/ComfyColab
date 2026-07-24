@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import os
+import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -19,8 +22,6 @@ def load_artifacts():
     spec = importlib.util.spec_from_file_location(name, ARTIFACTS)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    import sys
-
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
@@ -81,6 +82,44 @@ class UltraShapeArtifactTests(unittest.TestCase):
             )
         self.assertTrue(output.getvalue().startswith("COMFYCOLAB_PROGRESS="))
 
+    def test_hub_primary_uses_token_and_enables_high_performance_xet(self) -> None:
+        artifacts = self.artifacts
+        payload = b"xet-primary"
+        spec = artifacts.ArtifactSpec(
+            name="fixture",
+            repository="example/model",
+            revision="a" * 40,
+            filename="fixture.bin",
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            expected_size=len(payload),
+        )
+        calls: list[dict[str, object]] = []
+
+        def hf_hub_download(**kwargs):
+            calls.append(kwargs)
+            destination = Path(str(kwargs["local_dir"])) / str(kwargs["filename"])
+            destination.write_bytes(payload)
+            return str(destination)
+
+        fake_hub = types.SimpleNamespace(hf_hub_download=hf_hub_download)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            sys.modules,
+            {"huggingface_hub": fake_hub},
+        ), mock.patch.dict(
+            os.environ,
+            {"HF_TOKEN": "test-token"},
+            clear=False,
+        ):
+            destination = Path(directory) / spec.filename
+            artifacts._download_with_hub(spec, destination)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertTrue(destination.with_suffix(".bin.sha256").is_file())
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+
+        self.assertEqual(calls[0]["token"], "test-token")
+        self.assertEqual(calls[0]["revision"], spec.revision)
+
     def test_resumes_partial_and_reports_percentage_speed_and_eta(self) -> None:
         artifacts = self.artifacts
         payload = b"already-" + b"remaining"
@@ -110,7 +149,9 @@ class UltraShapeArtifactTests(unittest.TestCase):
                     },
                 )
 
-            with mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
+            with mock.patch.object(
+                artifacts, "_download_with_hub", side_effect=artifacts.ArtifactDownloadError("offline")
+            ), mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
                 result = artifacts.download_artifact(
                     spec,
                     destination,
@@ -157,7 +198,9 @@ class UltraShapeArtifactTests(unittest.TestCase):
                 return responses.pop(0)
 
             events: list[dict[str, object]] = []
-            with mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
+            with mock.patch.object(
+                artifacts, "_download_with_hub", side_effect=artifacts.ArtifactDownloadError("offline")
+            ), mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
                 artifacts.download_artifact(
                     spec,
                     destination,
@@ -192,7 +235,9 @@ class UltraShapeArtifactTests(unittest.TestCase):
                 status=200,
                 headers={"Content-Length": str(len(payload))},
             )
-            with mock.patch.object(artifacts.urllib.request, "urlopen", return_value=response):
+            with mock.patch.object(
+                artifacts, "_download_with_hub", side_effect=artifacts.ArtifactDownloadError("offline")
+            ), mock.patch.object(artifacts.urllib.request, "urlopen", return_value=response):
                 artifacts.download_artifact(
                     spec,
                     destination,
@@ -236,7 +281,9 @@ class UltraShapeArtifactTests(unittest.TestCase):
                     raise range_error
                 return response
 
-            with mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
+            with mock.patch.object(
+                artifacts, "_download_with_hub", side_effect=artifacts.ArtifactDownloadError("offline")
+            ), mock.patch.object(artifacts.urllib.request, "urlopen", side_effect=urlopen):
                 artifacts.download_artifact(
                     spec,
                     destination,

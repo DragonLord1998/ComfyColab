@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -862,15 +865,22 @@ class RuntimeContractTests(unittest.TestCase):
             payload = b"pinned model bytes"
             expected = hashlib.sha256(payload).hexdigest()
 
-            def fake_run(command: list[str], **_: object) -> object:
-                destination = Path(command[command.index("--local-dir") + 1])
+            calls: list[dict[str, object]] = []
+
+            def fake_snapshot_download(**kwargs: object) -> str:
+                calls.append(kwargs)
+                destination = Path(str(kwargs["local_dir"]))
                 (destination / "weights").mkdir(parents=True, exist_ok=True)
                 (destination / "weights" / "model.bin").write_bytes(payload)
-                return mock.Mock(stdout="")
+                return str(destination)
+
+            hub = types.ModuleType("huggingface_hub")
+            hub.snapshot_download = fake_snapshot_download  # type: ignore[attr-defined]
 
             with (
                 mock.patch.object(runtime, "DEPENDENCIES_DIR", dependencies),
-                mock.patch.object(runtime, "run", side_effect=fake_run),
+                mock.patch.dict(sys.modules, {"huggingface_hub": hub}),
+                mock.patch.dict(os.environ, {"HF_TOKEN": "test-token"}, clear=False),
             ):
                 resolved: dict[str, str] = {}
                 runtime.install_dependency(
@@ -893,10 +903,95 @@ class RuntimeContractTests(unittest.TestCase):
                     pack_roots={},
                     accepted_licenses=set(),
                 )
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
 
             self.assertEqual(
                 resolved["model"],
                 str(dependencies / "models" / "example"),
+            )
+            self.assertEqual(
+                calls,
+                [
+                    {
+                        "repo_id": "example/model",
+                        "revision": "a" * 40,
+                        "local_dir": str(dependencies / "models" / "example"),
+                        "token": "test-token",
+                    }
+                ],
+            )
+
+    def test_huggingface_dependency_retries_stale_token_anonymously(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dependencies = Path(directory) / "dependencies"
+            calls: list[object] = []
+
+            def fake_snapshot_download(**kwargs: object) -> str:
+                calls.append(kwargs["token"])
+                if kwargs["token"]:
+                    raise RuntimeError("stale token")
+                return str(kwargs["local_dir"])
+
+            hub = types.ModuleType("huggingface_hub")
+            hub.snapshot_download = fake_snapshot_download  # type: ignore[attr-defined]
+            with (
+                mock.patch.object(runtime, "DEPENDENCIES_DIR", dependencies),
+                mock.patch.dict(sys.modules, {"huggingface_hub": hub}),
+                mock.patch.dict(
+                    os.environ,
+                    {"HF_TOKEN": "stale-token"},
+                    clear=False,
+                ),
+            ):
+                runtime.install_dependency(
+                    {
+                        "id": "model",
+                        "kind": "huggingface",
+                        "repository": "example/model",
+                        "ref": "a" * 40,
+                        "destination": "models/example",
+                        "scope": "isolated",
+                    },
+                    resolved_paths={},
+                    pack_roots={},
+                    accepted_licenses=set(),
+                )
+
+            self.assertEqual(calls, ["stale-token", False])
+
+    def test_core_requirements_install_hf_xet_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            comfy_dir = Path(directory)
+            requirements = comfy_dir / "requirements.txt"
+            requirements.write_text("torch\n", encoding="utf-8")
+            with (
+                mock.patch.object(runtime, "COMFY_DIR", comfy_dir),
+                mock.patch.object(runtime, "run") as run,
+            ):
+                runtime.install_core_requirements()
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    mock.call(
+                        [
+                            runtime.sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "-r",
+                            str(requirements),
+                        ]
+                    ),
+                    mock.call(
+                        [
+                            runtime.sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            runtime.HUGGINGFACE_HUB_REQUIREMENT,
+                        ]
+                    ),
+                ],
             )
 
     def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:

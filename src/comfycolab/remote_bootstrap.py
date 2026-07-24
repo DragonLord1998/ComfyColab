@@ -143,7 +143,7 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
     "diffusers==0.37.1",
     "accelerate==1.13.0",
     "plyfile==1.1.3",
-    "huggingface_hub>=0.36.0",
+    "huggingface_hub[hf_xet]>=0.36.0,<1",
     "einops==0.8.1",
     "safetensors==0.7.0",
 )
@@ -1594,6 +1594,15 @@ def install_ultrashape_overlay() -> None:
 
 def install_dependencies() -> str:
     run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], cwd=COMFY_DIR)
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "huggingface_hub[hf_xet]>=0.36.0,<1",
+        ]
+    )
     gguf_requirements = GGUF_DIR / "requirements.txt"
     if gguf_requirements.exists():
         run([sys.executable, "-m", "pip", "install", "-r", str(gguf_requirements)])
@@ -2223,6 +2232,8 @@ def emit_ready(payload: dict[str, object]) -> None:
 
 
 def main() -> None:
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     port = int(CONFIG["port"])
     refresh = bool(CONFIG.get("refresh", False))

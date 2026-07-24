@@ -32,6 +32,7 @@ SKINTOKENS_RUNTIME_PINS = (
     "bpy==4.2.22",
     "transformers==4.57.3",
     "diffusers==0.37.1",
+    "huggingface_hub[hf_xet]>=0.36.0,<1",
 )
 SKINTOKENS_FLASH_ATTN_PACKAGE = "flash-attn==2.8.3.post1"
 SKINTOKENS_LICENSE = {
@@ -188,26 +189,40 @@ def _ensure_snapshot(
         return destination
 
     destination.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
     try:
         from huggingface_hub import snapshot_download
     except ImportError as error:
         raise RuntimeError("huggingface_hub is required to provision SkinTokens artifacts") from error
 
+    token = os.environ.get("HF_TOKEN") or os.environ.get(
+        "HUGGING_FACE_HUB_TOKEN"
+    )
+    candidates: tuple[str | bool | None, ...] = (
+        (token, False) if token else (False,)
+    )
     _emit(progress, "snapshot", repo=repo_id, revision=revision)
-    try:
-        snapshot_download(
-            repo_id=repo_id,
-            revision=revision,
-            local_dir=str(destination),
-            allow_patterns=allow_patterns,
-            ignore_patterns=ignore_patterns,
-            resume_download=True,
-        )
-    except BaseException as error:
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            snapshot_download(
+                repo_id=repo_id,
+                revision=revision,
+                local_dir=str(destination),
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+                token=candidate,
+            )
+            last_error = None
+            break
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
         raise RuntimeError(
             f"Unable to download pinned artifact {repo_id}@{revision}. "
             "If the repository requires access, accept its terms and provide HF_TOKEN."
-        ) from error
+        ) from last_error
     if not (destination / sentinel).is_file():
         raise RuntimeError(f"Pinned artifact {repo_id}@{revision} is incomplete: missing {sentinel}")
     inventory = _inventory(destination)

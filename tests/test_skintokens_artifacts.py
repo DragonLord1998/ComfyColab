@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import types
@@ -28,10 +29,18 @@ def load_artifacts():
 class SkinTokensArtifactTests(unittest.TestCase):
     def test_snapshot_manifest_rejects_corrupted_checkpoint_and_redownloads(self) -> None:
         artifacts = load_artifacts()
-        calls: list[tuple[str, str]] = []
+        calls: list[tuple[str, str, object]] = []
 
-        def snapshot_download(*, repo_id, revision, local_dir, allow_patterns=None, **_kwargs):
-            calls.append((repo_id, revision))
+        def snapshot_download(
+            *,
+            repo_id,
+            revision,
+            local_dir,
+            allow_patterns=None,
+            token=None,
+            **_kwargs,
+        ):
+            calls.append((repo_id, revision, token))
             root = Path(local_dir)
             root.mkdir(parents=True, exist_ok=True)
             files = allow_patterns or ["config.json"]
@@ -41,9 +50,22 @@ class SkinTokensArtifactTests(unittest.TestCase):
                 path.write_bytes(f"{repo_id}@{revision}:{relative}".encode())
             return str(root)
 
-        fake_hub = types.SimpleNamespace(snapshot_download=snapshot_download)
+        fake_hub = types.ModuleType("huggingface_hub")
+
+        def hub_getattr(name):
+            if name == "snapshot_download":
+                self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+                self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
+                return snapshot_download
+            raise AttributeError(name)
+
+        fake_hub.__getattr__ = hub_getattr
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             sys.modules, {"huggingface_hub": fake_hub}
+        ), mock.patch.dict(
+            os.environ,
+            {"HF_TOKEN": "test-token"},
+            clear=False,
         ):
             destination = Path(directory) / "snapshot"
             artifacts._ensure_snapshot(
@@ -66,8 +88,11 @@ class SkinTokensArtifactTests(unittest.TestCase):
                 progress=lambda _event: None,
             )
             self.assertIn("owner/model", (destination / "experiments/model.ckpt").read_text())
+            self.assertEqual(os.environ["HF_XET_HIGH_PERFORMANCE"], "1")
+            self.assertEqual(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"], "120")
 
         self.assertEqual(len(calls), 2)
+        self.assertEqual([call[2] for call in calls], ["test-token", "test-token"])
 
     def test_environment_skip_uses_current_python_without_main_env_mutation(self) -> None:
         artifacts = load_artifacts()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import builtins
 import importlib.util
 import sys
 import tempfile
@@ -25,6 +27,11 @@ SPATIAL_FILENAMES = {
     "2x": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
 }
 TEMPORAL_FILENAME = "ltx-2.3-temporal-upscaler-x2-1.0.safetensors"
+PINNED_LTX_URL = (
+    "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/"
+    "96e8ed4925ead3db9ff4d0084f165ef6a74f28d0/"
+    "distilled-1.1/ltx-2.3-22b-distilled-1.1-Q3_K_S.gguf"
+)
 
 
 def load_package_module(module_name):
@@ -69,6 +76,30 @@ def asset_field(asset, name, *aliases):
         if hasattr(asset, candidate):
             return getattr(asset, candidate)
     return None
+
+
+class FakeResponse:
+    status = 200
+
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self._offset = 0
+        self.headers = {"Content-Length": str(len(payload))}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, size=-1):
+        if self._offset >= len(self._payload):
+            return b""
+        if size is None or size < 0:
+            size = len(self._payload) - self._offset
+        chunk = self._payload[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
 
 
 class LTXModelTests(unittest.TestCase):
@@ -284,6 +315,124 @@ class LTXModelTests(unittest.TestCase):
                 sys.modules.pop("folder_paths", None)
             else:
                 sys.modules["folder_paths"] = previous
+
+    def test_download_uses_huggingface_hub_xet_before_urllib(self):
+        download = load_package_module("download")
+        payload = b"hub transport payload"
+        expected_sha256 = hashlib.sha256(payload).hexdigest()
+        progress_calls = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_file = root / "hf-cache" / "model.gguf"
+            destination = root / "models" / "model.gguf"
+            captured = {}
+            import_flags = {}
+
+            def fake_hf_hub_download(**kwargs):
+                captured.update(kwargs)
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                cache_file.write_bytes(payload)
+                return str(cache_file)
+
+            fake_hub = types.SimpleNamespace(hf_hub_download=fake_hf_hub_download)
+            real_import = builtins.__import__
+
+            def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "huggingface_hub":
+                    self.assertEqual(
+                        download.os.environ["HF_XET_HIGH_PERFORMANCE"],
+                        "1",
+                    )
+                    self.assertEqual(
+                        download.os.environ["HF_HUB_DOWNLOAD_TIMEOUT"],
+                        "120",
+                    )
+                    import_flags["checked"] = True
+                    return fake_hub
+                return real_import(name, globals, locals, fromlist, level)
+
+            with (
+                mock.patch.object(builtins, "__import__", side_effect=fake_import),
+                mock.patch.dict(
+                    "os.environ",
+                    {
+                        "HF_TOKEN": "test-token",
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(download.urllib.request, "urlopen") as urlopen,
+            ):
+                result = download.download_file(
+                    url=PINNED_LTX_URL,
+                    destination=destination,
+                    expected_sha256=expected_sha256,
+                    expected_size=len(payload),
+                    progress=lambda done, total: progress_calls.append((done, total)),
+                    attempts=1,
+                )
+
+            self.assertEqual(result, destination)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertTrue(destination.with_suffix(".gguf.sha256").is_file())
+            urlopen.assert_not_called()
+            self.assertEqual(captured["repo_id"], "unsloth/LTX-2.3-GGUF")
+            self.assertEqual(
+                captured["revision"],
+                "96e8ed4925ead3db9ff4d0084f165ef6a74f28d0",
+            )
+            self.assertEqual(
+                captured["filename"],
+                "distilled-1.1/ltx-2.3-22b-distilled-1.1-Q3_K_S.gguf",
+            )
+            self.assertEqual(captured["token"], "test-token")
+            self.assertEqual(progress_calls, [(len(payload), len(payload))])
+            self.assertTrue(import_flags["checked"])
+
+    def test_download_falls_back_to_urllib_only_after_hub_failure(self):
+        download = load_package_module("download")
+        payload = b"urllib fallback payload"
+        expected_sha256 = hashlib.sha256(payload).hexdigest()
+        calls = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "models" / "model.gguf"
+
+            def failing_hf_hub_download(**kwargs):
+                calls.append(("hub", kwargs["repo_id"]))
+                raise RuntimeError("simulated hub transport failure")
+
+            def fake_urlopen(request, timeout):
+                calls.append(("urllib", request.full_url, timeout))
+                return FakeResponse(payload)
+
+            fake_hub = types.SimpleNamespace(hf_hub_download=failing_hf_hub_download)
+            with (
+                mock.patch.dict(sys.modules, {"huggingface_hub": fake_hub}),
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch.object(
+                    download.urllib.request,
+                    "urlopen",
+                    side_effect=fake_urlopen,
+                ),
+            ):
+                result = download.download_file(
+                    url=PINNED_LTX_URL,
+                    destination=destination,
+                    expected_sha256=expected_sha256,
+                    expected_size=len(payload),
+                    attempts=1,
+                )
+
+            self.assertEqual(result, destination)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(
+                calls,
+                [
+                    ("hub", "unsloth/LTX-2.3-GGUF"),
+                    ("urllib", PINNED_LTX_URL, 120),
+                ],
+            )
 
 
 if __name__ == "__main__":

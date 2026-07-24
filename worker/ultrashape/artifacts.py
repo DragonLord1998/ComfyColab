@@ -178,6 +178,72 @@ def _request(spec: ArtifactSpec, offset: int) -> urllib.request.Request:
     return urllib.request.Request(spec.url, headers=headers)
 
 
+def _configure_hf_transfer() -> str | None:
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def _download_with_hub(spec: ArtifactSpec, destination: Path) -> None:
+    """Use authenticated hf-xet first, leaving verification to this pack."""
+
+    token = _configure_hf_transfer()
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as error:
+        raise ArtifactDownloadError(
+            "huggingface_hub with hf-xet is unavailable"
+        ) from error
+
+    attempts: tuple[str | bool | None, ...] = (token, False) if token else (False,)
+    last_error: Exception | None = None
+    for candidate in attempts:
+        try:
+            downloaded = Path(
+                hf_hub_download(
+                    repo_id=spec.repository,
+                    revision=spec.revision,
+                    filename=spec.filename,
+                    local_dir=str(destination.parent),
+                    token=candidate,
+                )
+            )
+            if downloaded.resolve() != destination.resolve():
+                raise ArtifactDownloadError(
+                    f"hf_hub_download returned an unexpected path for {spec.name}: "
+                    f"{downloaded}"
+                )
+            actual_sha256 = sha256_file(destination)
+            if (
+                spec.expected_size is not None
+                and destination.stat().st_size != spec.expected_size
+            ):
+                raise ArtifactDownloadError(
+                    f"Size mismatch for {destination.name}: expected "
+                    f"{spec.expected_size} bytes, received {destination.stat().st_size}."
+                )
+            if (
+                spec.expected_sha256 is not None
+                and actual_sha256 != spec.expected_sha256
+            ):
+                raise ArtifactDownloadError(
+                    f"Checksum mismatch for {destination.name}: expected "
+                    f"{spec.expected_sha256}, received {actual_sha256}."
+                )
+            _write_text_atomic(
+                _sidecar_path(destination),
+                f"{actual_sha256} {destination.stat().st_size}\n",
+            )
+            return
+        except Exception as error:
+            last_error = error
+            destination.unlink(missing_ok=True)
+            _sidecar_path(destination).unlink(missing_ok=True)
+    raise ArtifactDownloadError(
+        f"hf-xet download failed for {spec.name}: {last_error}"
+    )
+
+
 def _parse_content_range(
     headers: Mapping[str, str],
 ) -> tuple[int, int, int] | None:
@@ -342,6 +408,33 @@ def download_artifact(
             return destination
 
     last_error: BaseException | None = None
+    try:
+        reporter.report(0, spec.expected_size, 1, "xet", force=True)
+        _download_with_hub(spec, destination)
+        partial.unlink(missing_ok=True)
+        reporter.report(
+            destination.stat().st_size,
+            destination.stat().st_size,
+            1,
+            "complete",
+            force=True,
+        )
+        return destination
+    except ArtifactDownloadError as error:
+        last_error = error
+        progress(
+            {
+                "stage": "artifact_download",
+                "artifact": spec.name,
+                "filename": spec.filename,
+                "revision": spec.revision,
+                "status": "transport_fallback",
+                "failed_transport": "huggingface_hub_hf_xet",
+                "fallback_transport": "resumable_urllib",
+                "reason": str(error),
+            }
+        )
+
     for attempt in range(1, attempts + 1):
         offset = partial.stat().st_size if partial.is_file() else 0
         reporter.begin_attempt(offset)

@@ -16,10 +16,7 @@ from typing import Callable, Optional
 ProgressCallback = Callable[[int, Optional[int]], None]
 CHUNK_SIZE = 4 * 1024 * 1024
 DEFAULT_ATTEMPTS = 5
-RETRYABLE_HTTP_CODES = frozenset(
-    {401, 403, 408, 416, 425, 429, 500, 502, 503, 504}
-)
-_VERIFIED_FILES: set[tuple[str, int, int, str]] = set()
+RETRYABLE_HTTP_CODES = frozenset({401, 403, 408, 416, 425, 429, 500, 502, 503, 504})
 
 
 class DownloadError(RuntimeError):
@@ -27,7 +24,7 @@ class DownloadError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class _HuggingFaceFile:
+class HuggingFaceFile:
     repo_id: str
     revision: str
     filename: str
@@ -41,44 +38,41 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verification_key(path: Path, expected_sha256: str) -> tuple[str, int, int, str]:
-    stat = path.stat()
-    return (str(path.resolve()), stat.st_size, stat.st_mtime_ns, expected_sha256)
-
-
-def _forget_verified(path: Path) -> None:
-    resolved = str(path.resolve())
-    _VERIFIED_FILES.difference_update(
-        key for key in _VERIFIED_FILES if key[0] == resolved
+def parse_huggingface_url(url: str) -> HuggingFaceFile | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    try:
+        resolve_index = parts.index("resolve")
+    except ValueError:
+        return None
+    if resolve_index < 2 or len(parts) <= resolve_index + 2:
+        return None
+    repo_id = "/".join(parts[:resolve_index])
+    revision = parts[resolve_index + 1]
+    filename = "/".join(parts[resolve_index + 2 :])
+    if not repo_id or not revision or not filename:
+        return None
+    return HuggingFaceFile(
+        repo_id=urllib.parse.unquote(repo_id),
+        revision=urllib.parse.unquote(revision),
+        filename=urllib.parse.unquote(filename),
     )
 
 
-def _record_verified(path: Path, expected_sha256: str, expected_size: int) -> None:
-    marker = path.with_suffix(path.suffix + ".sha256")
-    marker.write_text(f"{expected_sha256} {expected_size}\n", encoding="ascii")
-    _VERIFIED_FILES.add(_verification_key(path, expected_sha256))
+def _token() -> str | None:
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 
 
-def _verified(path: Path, expected_sha256: str, expected_size: int) -> bool:
-    if not path.is_file() or path.stat().st_size != expected_size:
-        return False
-    key = _verification_key(path, expected_sha256)
-    if key in _VERIFIED_FILES:
-        return True
-    if sha256_file(path) != expected_sha256:
-        return False
-    _record_verified(path, expected_sha256, expected_size)
-    return True
-
-
-def _request(url: str, offset: int, *, include_auth: bool) -> urllib.request.Request:
+def _request(url: str, offset: int, *, include_auth: bool, user_agent: str) -> urllib.request.Request:
     headers = {
         "Accept-Encoding": "identity",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "User-Agent": "ComfyColab-LTXVideo/0.1",
+        "User-Agent": user_agent,
     }
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = _token()
     if token and include_auth:
         headers["Authorization"] = f"Bearer {token}"
     if offset:
@@ -86,89 +80,65 @@ def _request(url: str, offset: int, *, include_auth: bool) -> urllib.request.Req
     return urllib.request.Request(url, headers=headers)
 
 
-def _hf_token() -> str | None:
-    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+def _is_stale_token_error(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in {401, 403}
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) in {401, 403}
 
 
-def _parse_huggingface_url(url: str) -> _HuggingFaceFile | None:
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
-        return None
-    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
-    if len(parts) < 5 or parts[2] != "resolve":
-        return None
-    revision = parts[3]
-    filename = "/".join(parts[4:])
-    if not revision or not filename:
-        return None
-    return _HuggingFaceFile(
-        repo_id="/".join(parts[:2]),
-        revision=revision,
-        filename=filename,
-    )
-
-
-def _download_with_huggingface_hub(
+def _download_with_hub(
     *,
-    url: str,
+    hf_file: HuggingFaceFile,
     destination: Path,
     expected_sha256: str,
-    expected_size: int,
-    progress: ProgressCallback | None = None,
+    expected_size: int | None,
+    force: bool,
+    include_auth: bool,
+    progress: ProgressCallback | None,
 ) -> Path:
-    reference = _parse_huggingface_url(url)
-    if reference is None:
-        raise DownloadError(f"{destination.name} is not a Hugging Face resolve URL.")
+    # Set before importing huggingface_hub so hf-xet sees the intended mode.
     os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
     os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError as error:
-        raise DownloadError(
-            "huggingface_hub with hf-xet is not installed."
-        ) from error
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+    from huggingface_hub import hf_hub_download
 
-    token = _hf_token()
-    candidates: tuple[str | bool | None, ...] = (
-        (token, False) if token else (False,)
-    )
+    token: str | bool | None = _token() if include_auth else False
     staging = destination.parent / f".{destination.name}.hf-xet"
-    last_error: Exception | None = None
-    for candidate in candidates:
-        staging.mkdir(parents=True, exist_ok=True)
-        try:
-            downloaded = Path(
-                hf_hub_download(
-                    repo_id=reference.repo_id,
-                    filename=reference.filename,
-                    revision=reference.revision,
-                    token=candidate,
-                    local_dir=str(staging),
-                )
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        cached = Path(
+            hf_hub_download(
+                repo_id=hf_file.repo_id,
+                filename=hf_file.filename,
+                revision=hf_file.revision,
+                token=token,
+                force_download=force,
+                local_dir=str(staging),
             )
-            if downloaded.stat().st_size != expected_size:
-                raise DownloadError(
-                    f"Wrong byte count for {destination.name}: expected "
-                    f"{expected_size}, received {downloaded.stat().st_size}."
-                )
-            actual_sha256 = sha256_file(downloaded)
-            if actual_sha256 != expected_sha256:
-                raise DownloadError(
-                    f"Checksum mismatch for {destination.name}: expected "
-                    f"{expected_sha256}, received {actual_sha256}."
-                )
-            if progress:
-                progress(expected_size, expected_size)
-            os.replace(downloaded, destination)
-            _record_verified(destination, expected_sha256, expected_size)
+        )
+        actual_size = cached.stat().st_size
+        if expected_size is not None and actual_size != expected_size:
+            raise DownloadError(
+                f"Wrong byte count for {destination.name}: expected "
+                f"{expected_size}, received {actual_size}."
+            )
+        actual_sha256 = sha256_file(cached)
+        if actual_sha256 != expected_sha256:
+            raise DownloadError(
+                f"Checksum mismatch for {destination.name}: expected "
+                f"{expected_sha256}, received {actual_sha256}."
+            )
+        if progress:
+            progress(actual_size, actual_size)
+        os.replace(cached, destination)
+        return destination
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    finally:
+        if destination.is_file():
             shutil.rmtree(staging, ignore_errors=True)
-            return destination
-        except Exception as error:
-            last_error = error
-            shutil.rmtree(staging, ignore_errors=True)
-    raise DownloadError(
-        f"Hugging Face Hub/Xet failed for {destination.name}: {last_error}"
-    ) from last_error
 
 
 def _download_with_urllib(
@@ -176,21 +146,22 @@ def _download_with_urllib(
     url: str,
     destination: Path,
     expected_sha256: str,
-    expected_size: int,
+    expected_size: int | None,
     progress: ProgressCallback | None,
     attempts: int,
+    user_agent: str,
 ) -> Path:
     partial = destination.with_suffix(destination.suffix + ".part")
-    include_auth = bool(_hf_token())
+    include_auth = bool(_token())
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         offset = partial.stat().st_size if partial.exists() else 0
-        if offset > expected_size:
+        if expected_size is not None and offset > expected_size:
             partial.unlink(missing_ok=True)
             offset = 0
         try:
             with urllib.request.urlopen(
-                _request(url, offset, include_auth=include_auth),
+                _request(url, offset, include_auth=include_auth, user_agent=user_agent),
                 timeout=120,
             ) as response:
                 status = getattr(response, "status", 200) or 200
@@ -227,10 +198,15 @@ def _download_with_urllib(
                             f"Connection closed early for {destination.name} "
                             f"at {completed} of {total or 'unknown'} bytes."
                         ) from error
-                if completed != expected_size:
+                if expected_size is not None and completed != expected_size:
                     raise DownloadError(
                         f"Wrong byte count for {destination.name}: expected "
                         f"{expected_size}, received {completed}."
+                    )
+                if expected_size is None and total is not None and completed < total:
+                    raise DownloadError(
+                        f"Connection closed early for {destination.name} "
+                        f"at {completed} of {total} bytes."
                     )
 
             actual_sha256 = sha256_file(partial)
@@ -241,7 +217,6 @@ def _download_with_urllib(
                     f"{expected_sha256}, received {actual_sha256}."
                 )
             partial.replace(destination)
-            _record_verified(destination, expected_sha256, expected_size)
             return destination
         except (
             OSError,
@@ -253,11 +228,10 @@ def _download_with_urllib(
                 isinstance(error, urllib.error.HTTPError)
                 and error.code == 416
                 and partial.is_file()
-                and partial.stat().st_size == expected_size
+                and (expected_size is None or partial.stat().st_size == expected_size)
                 and sha256_file(partial) == expected_sha256
             ):
                 partial.replace(destination)
-                _record_verified(destination, expected_sha256, expected_size)
                 return destination
             if isinstance(error, urllib.error.HTTPError):
                 if error.code == 416:
@@ -273,9 +247,7 @@ def _download_with_urllib(
             if attempt < attempts:
                 time.sleep(min(2**attempt, 30))
 
-    partial_note = (
-        f" Partial data was kept at {partial}." if partial.exists() else ""
-    )
+    partial_note = f" Partial data was kept at {partial}." if partial.exists() else ""
     raise DownloadError(
         f"Unable to download {destination.name} after {attempts} attempts: "
         f"{last_error}.{partial_note}"
@@ -287,10 +259,14 @@ def download_file(
     url: str,
     destination: Path,
     expected_sha256: str,
-    expected_size: int,
+    expected_size: int | None = None,
     force: bool = False,
     progress: ProgressCallback | None = None,
     attempts: int = DEFAULT_ATTEMPTS,
+    user_agent: str = "ComfyColab/0.1",
+    is_verified: Callable[[Path, str, int | None], bool],
+    record_verified: Callable[[Path, str, int | None], None],
+    forget_verified: Callable[[Path], None] | None = None,
 ) -> Path:
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
@@ -299,38 +275,63 @@ def download_file(
     partial = destination.with_suffix(destination.suffix + ".part")
 
     if force:
-        _forget_verified(destination)
+        if forget_verified:
+            forget_verified(destination)
         destination.unlink(missing_ok=True)
         marker.unlink(missing_ok=True)
         partial.unlink(missing_ok=True)
-    elif _verified(destination, expected_sha256, expected_size):
+    elif is_verified(destination, expected_sha256, expected_size):
         return destination
     elif destination.exists():
-        _forget_verified(destination)
+        if forget_verified:
+            forget_verified(destination)
         destination.unlink()
         marker.unlink(missing_ok=True)
 
-    try:
-        return _download_with_huggingface_hub(
-            url=url,
-            destination=destination,
-            expected_sha256=expected_sha256,
-            expected_size=expected_size,
-            progress=progress,
-        )
-    except (OSError, DownloadError) as hub_error:
+    hf_file = parse_huggingface_url(url)
+    if hf_file is not None:
+        include_auth = bool(_token())
         try:
-            return _download_with_urllib(
-                url=url,
+            result = _download_with_hub(
+                hf_file=hf_file,
                 destination=destination,
                 expected_sha256=expected_sha256,
                 expected_size=expected_size,
+                force=force,
+                include_auth=include_auth,
                 progress=progress,
-                attempts=attempts,
             )
-        except DownloadError as urllib_error:
-            raise DownloadError(
-                f"Unable to download {destination.name} with Hugging Face Hub/Xet "
-                f"or urllib fallback. Hub/Xet error: {hub_error}. "
-                f"urllib error: {urllib_error}"
-            ) from urllib_error
+            partial.unlink(missing_ok=True)
+            record_verified(result, expected_sha256, expected_size)
+            return result
+        except Exception as error:
+            if include_auth and _is_stale_token_error(error):
+                try:
+                    result = _download_with_hub(
+                        hf_file=hf_file,
+                        destination=destination,
+                        expected_sha256=expected_sha256,
+                        expected_size=expected_size,
+                        force=force,
+                        include_auth=False,
+                        progress=progress,
+                    )
+                    partial.unlink(missing_ok=True)
+                    record_verified(result, expected_sha256, expected_size)
+                    return result
+                except Exception:
+                    pass
+            # Keep urllib as a compatibility fallback for hub import/version/network
+            # failures and for environments where a stale token only breaks hub.
+
+    result = _download_with_urllib(
+        url=url,
+        destination=destination,
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+        progress=progress,
+        attempts=attempts,
+        user_agent=user_agent,
+    )
+    record_verified(result, expected_sha256, expected_size)
+    return result
