@@ -35,7 +35,7 @@ TUNNEL_LOG = STATE_DIR / "cloudflared.log"
 PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
-HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<1"
+HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<2"
 LEGACY_FULL_PACK_IDS = frozenset({"3d", "3dgs", "image", "video"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

@@ -143,7 +143,7 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
     "diffusers==0.37.1",
     "accelerate==1.13.0",
     "plyfile==1.1.3",
-    "huggingface_hub[hf_xet]>=0.36.0,<1",
+    "huggingface_hub[hf_xet]>=0.36.0,<2",
     "einops==0.8.1",
     "safetensors==0.7.0",
 )
@@ -1600,7 +1600,7 @@ def install_dependencies() -> str:
             "-m",
             "pip",
             "install",
-            "huggingface_hub[hf_xet]>=0.36.0,<1",
+            "huggingface_hub[hf_xet]>=0.36.0,<2",
         ]
     )
     gguf_requirements = GGUF_DIR / "requirements.txt"

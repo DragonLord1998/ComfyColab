@@ -85,7 +85,7 @@ class CubePartArtifactProvisioningTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["token"], "test-token")
         self.assertIn(
-            "huggingface_hub[hf_xet]>=0.36.0,<1",
+            "huggingface_hub[hf_xet]>=0.36.0,<2",
             artifacts.CUBEPART_RUNTIME_REQUIREMENTS,
         )
 

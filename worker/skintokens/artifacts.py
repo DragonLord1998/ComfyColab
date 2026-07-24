@@ -32,7 +32,7 @@ SKINTOKENS_RUNTIME_PINS = (
     "bpy==4.2.22",
     "transformers==4.57.3",
     "diffusers==0.37.1",
-    "huggingface_hub[hf_xet]>=0.36.0,<1",
+    "huggingface_hub[hf_xet]>=0.36.0,<2",
 )
 SKINTOKENS_FLASH_ATTN_PACKAGE = "flash-attn==2.8.3.post1"
 SKINTOKENS_LICENSE = {

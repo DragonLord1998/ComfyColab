@@ -1287,7 +1287,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             self.assertEqual(commands[0][1], comfy_dir)
             self.assertEqual(
                 commands[1][0][-1],
-                "huggingface_hub[hf_xet]>=0.36.0,<1",
+                "huggingface_hub[hf_xet]>=0.36.0,<2",
             )
             self.assertEqual(commands[2][0][-1], str(gguf_dir / "requirements.txt"))
             self.assertEqual(

@@ -24,7 +24,7 @@ CUBEPART_RUNTIME_REQUIREMENTS = (
     "diffusers==0.37.1",
     "transformers==4.57.3",
     "accelerate==1.13.0",
-    "huggingface_hub[hf_xet]>=0.36.0,<1",
+    "huggingface_hub[hf_xet]>=0.36.0,<2",
 )
 CUBEPART_CODE_LICENSE = "Cube3D Research-Only RAIL-MS"
 CUBEPART_WEIGHTS_LICENSE = "OpenRAIL / Cube3D Research-Only RAIL-MS"
