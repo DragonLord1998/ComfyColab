@@ -8,3 +8,6 @@ build/
 *.egg-info/
 .DS_Store
 generation_outputs/
+.env
+.env.*
+!.env.example

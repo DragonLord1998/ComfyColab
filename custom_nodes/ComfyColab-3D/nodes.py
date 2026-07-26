@@ -17,6 +17,7 @@ from .cache import (
     canonical_trimesh_digest,
     deterministic_cache_key,
     cubepart_cache_key,
+    meshflow_cache_key,
     pixal3d_cache_key,
     pixal3d_multiview_cache_key,
     skintokens_cache_key,
@@ -72,13 +73,45 @@ from .cubepart_worker import (
     normalize_part_names,
     validate_cubepart_output,
 )
+from .meshflow_worker import MeshFlowWorkerCommand, run_meshflow_worker
 
 ULTRASHAPE_SOURCE_REF = "5e8dcef05df101ab00ab6cd5fdd0ed0c74fbca66"
 DEFAULT_ULTRASHAPE_SOURCE = "/content/UltraShape-1.0"
 DEFAULT_ULTRASHAPE_PYTHON = str(Path.home() / ".ce/.pixi/envs/trellis2-nodes/bin/python")
 DEFAULT_PIXAL3D_SOURCE = "/content/Pixal3D"
 DEFAULT_PIXAL3D_PYTHON = str(Path.home() / ".ce/.pixi/envs/pixal3d-worker/bin/python")
+DEFAULT_MESHFLOW_SOURCE = "/content/meshflow"
 TRANSFORM_SCHEMA = "comfycolab-3d-transform-v1"
+
+CANONICAL_VIEW_PROMPTS = {
+    "front": (
+        "Preserve the exact same object identity, proportions, materials, colors, and "
+        "details. Render one isolated orthographic FRONT view, camera centered at zero "
+        "elevation, full object visible, neutral lighting, plain background. Do not add, "
+        "remove, mirror, crop, stylize, or redesign anything."
+    ),
+    "back": (
+        "Preserve the exact same object identity, proportions, materials, colors, and "
+        "details. Rotate the same object exactly 180 degrees and render one isolated "
+        "orthographic BACK view, camera centered at zero elevation, full object visible, "
+        "neutral lighting, plain background. Do not add, remove, mirror, crop, stylize, "
+        "or redesign anything."
+    ),
+    "left": (
+        "Preserve the exact same object identity, proportions, materials, colors, and "
+        "details. Rotate the same object exactly 90 degrees to show its LEFT side and "
+        "render one isolated orthographic view, camera centered at zero elevation, full "
+        "object visible, neutral lighting, plain background. Do not add, remove, mirror, "
+        "crop, stylize, or redesign anything."
+    ),
+    "right": (
+        "Preserve the exact same object identity, proportions, materials, colors, and "
+        "details. Rotate the same object exactly 90 degrees to show its RIGHT side and "
+        "render one isolated orthographic view, camera centered at zero elevation, full "
+        "object visible, neutral lighting, plain background. Do not add, remove, mirror, "
+        "crop, stylize, or redesign anything."
+    ),
+}
 
 
 def _io():
@@ -168,6 +201,38 @@ def _remove_owned_pixal3d_temp(path: str | Path) -> None:
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def _remove_owned_pixal3d_surface_temp(path: str | Path) -> None:
+    resolved = Path(path).resolve()
+    parent = resolved.parent
+    roots = {Path(tempfile.gettempdir()).resolve()}
+    try:
+        roots.add(Path(importlib.import_module("folder_paths").get_temp_directory()).resolve())
+    except (ModuleNotFoundError, AttributeError):
+        pass
+    if (
+        resolved.name == "surface_point_cloud.ply"
+        and parent.name.startswith("comfycolab-pixal3d-surface-")
+        and parent.parent in roots
+    ):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def _remove_owned_meshflow_temp(path: str | Path) -> None:
+    resolved = Path(path).resolve()
+    parent = resolved.parent
+    roots = {Path(tempfile.gettempdir()).resolve()}
+    try:
+        roots.add(Path(importlib.import_module("folder_paths").get_temp_directory()).resolve())
+    except (ModuleNotFoundError, AttributeError):
+        pass
+    if (
+        resolved.name == "meshflow.glb"
+        and parent.name.startswith("comfycolab-meshflow-")
+        and parent.parent in roots
+    ):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
 def _require_upstream_nodes(node_ids: set[str]) -> None:
     try:
         registry = importlib.import_module("nodes").NODE_CLASS_MAPPINGS
@@ -176,9 +241,22 @@ def _require_upstream_nodes(node_ids: set[str]) -> None:
     missing = sorted(node_ids - set(registry))
     if missing:
         raise RuntimeError(
-            "ComfyColab 3D requires the pinned ComfyUI-TRELLIS2 node pack. "
+            "ComfyColab 3D requires the pinned ComfyUI core and node packs. "
             f"Missing node IDs: {', '.join(missing)}. Restart with `comfycolab start --refresh`."
         )
+
+
+def _resolve_lora_path(name: str) -> Path:
+    folder_paths = importlib.import_module("folder_paths")
+    resolver = getattr(folder_paths, "get_full_path_or_raise", None)
+    if callable(resolver):
+        return Path(resolver("loras", name))
+    path = folder_paths.get_full_path("loras", name)
+    if not path:
+        raise FileNotFoundError(
+            f"FLUX.2 canonical-view LoRA is missing from ComfyUI/models/loras: {name}"
+        )
+    return Path(path)
 
 
 def _load_worker_artifact_provisioner(repo_root: Path, lane: str):
@@ -724,8 +802,6 @@ class ComfyColabPixal3DImageTo3D:
         if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
             _send_progress_text(_hidden_value(cls, "unique_id"), "Complete - Loaded cached Pixal3D model")
             return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
-        if remove_background != "Off":
-            _require_upstream_nodes({"Trellis2RemoveBackground"})
         progress_node_id = _hidden_value(cls, "unique_id")
         _send_progress_text(progress_node_id, "Stage 1/3 - Preparing Pixal3D input and worker...")
         return build_pixal3d_graph(
@@ -771,7 +847,16 @@ class ComfyColabPixal3DMV:
                     advanced=True,
                 ),
                 io.Float.Input("fusion_temperature", default=2.0, min=0.1, max=10.0, step=0.1, advanced=True),
-                io.Combo.Input("remove_background", options=["Auto", "On", "Off"], default="Auto", advanced=True),
+                io.Combo.Input(
+                    "remove_background",
+                    options=["Auto", "On", "Off"],
+                    default="Auto",
+                    tooltip=(
+                        "Auto and On run pinned BEN2 foreground extraction inside the "
+                        "isolated Pixal3D worker. Off preserves the complete input image."
+                    ),
+                    advanced=True,
+                ),
                 io.Float.Input("camera_fov_degrees", default=0.0, min=0.0, max=178.0, step=0.1, advanced=True),
                 io.Int.Input("sampling_steps", default=0, min=0, max=100, advanced=True),
                 io.Int.Input("target_face_count", default=0, min=0, max=2_000_000, advanced=True),
@@ -860,8 +945,6 @@ class ComfyColabPixal3DMV:
         if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
             _send_progress_text(progress_node_id, "Complete - Loaded cached Pixal3DMV model")
             return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
-        if remove_background != "Off":
-            _require_upstream_nodes({"Trellis2RemoveBackground"})
         _send_progress_text(
             progress_node_id,
             f"Stage 1/3 - Preparing {len(views)} views for experimental Pixal3D fusion...",
@@ -895,22 +978,51 @@ class ComfyColabPixal3DMVAdvanced:
             display_name="ComfyColab Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D",
             category="ComfyColab/3D",
             description=(
-                "Experimental frozen VGGT-Ω depth/confidence guidance for the existing "
-                "Pixal3D labeled-view projection adapter. Exact Pixal cameras remain "
-                "authoritative; this is not official/native Pixal3D multiview support "
-                "and does not use a trained Pixal/VGGT feature adapter. The official "
-                "VGGT-Ω checkpoint is gated; an exact-digest pinned public mirror is "
-                "available as a retrieval fallback. The checkpoint remains "
-                "noncommercial-research licensed."
+                "Advanced staged reconstruction. Either supply four canonical images or "
+                "provide one source image and a FLUX.2 Klein 9B canonical-view LoRA; the "
+                "node generates four separate full-resolution views, runs frozen VGGT-Ω "
+                "guided Pixal3D fusion, and can pass the Pixal mesh through MeshFlow. "
+                "This remains an experimental adapter, not official/native Pixal3D "
+                "multiview support. Both MeshFlow and VGGT-Ω remain noncommercial "
+                "research components."
             ),
             enable_expand=True,
             inputs=[
-                io.Image.Input("front_image", tooltip="Object viewed from the front."),
-                io.Image.Input("back_image", tooltip="Object viewed from directly behind."),
-                io.Image.Input("left_image", tooltip="Object viewed from its left side."),
-                io.Image.Input("right_image", tooltip="Object viewed from its right side."),
+                io.Image.Input(
+                    "front_image",
+                    tooltip=(
+                        "Explicit front view, or the single source image when generated-view "
+                        "mode is selected."
+                    ),
+                ),
+                io.Image.Input("back_image", optional=True, tooltip="Explicit back view."),
+                io.Image.Input("left_image", optional=True, tooltip="Explicit left-side view."),
+                io.Image.Input("right_image", optional=True, tooltip="Explicit right-side view."),
                 io.Image.Input("top_image", optional=True, tooltip="Optional top-down view; connect bottom_image too."),
                 io.Image.Input("bottom_image", optional=True, tooltip="Optional bottom-up view; connect top_image too."),
+                io.Combo.Input(
+                    "view_mode",
+                    options=[
+                        "Supplied canonical views",
+                        "Generate separate views — FLUX.2 Klein 9B LoRA",
+                    ],
+                    default="Supplied canonical views",
+                ),
+                io.String.Input(
+                    "multiview_lora_name",
+                    default="comfycolab_flux2_klein_9b_canonical_views.safetensors",
+                    tooltip=(
+                        "Filename under ComfyUI/models/loras. The LoRA must generate one "
+                        "requested canonical angle per inference, not a contact sheet."
+                    ),
+                    advanced=True,
+                ),
+                io.Combo.Input(
+                    "flux_quantization",
+                    options=["Q4_K_M", "Q5_K_M", "Q8_0", "Q3_K_M"],
+                    default="Q4_K_M",
+                    advanced=True,
+                ),
                 io.Combo.Input("quality", options=list(PIXAL3D_PRESETS), default="1024 — Stable"),
                 io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
                 io.Float.Input("front_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True),
@@ -949,16 +1061,62 @@ class ComfyColabPixal3DMVAdvanced:
                     step=0.01,
                     advanced=True,
                 ),
-                io.Combo.Input("remove_background", options=["Auto", "On", "Off"], default="Auto", advanced=True),
+                io.Combo.Input(
+                    "remove_background",
+                    options=["Auto", "On", "Off"],
+                    default="Auto",
+                    tooltip=(
+                        "Auto and On remove each view background with pinned BEN2 before "
+                        "VGGT-Omega and Pixal3D. Off preserves every input pixel."
+                    ),
+                    advanced=True,
+                ),
                 io.Float.Input("camera_fov_degrees", default=0.0, min=0.0, max=178.0, step=0.1, advanced=True),
                 io.Int.Input("sampling_steps", default=0, min=0, max=100, advanced=True),
                 io.Int.Input("target_face_count", default=0, min=0, max=2_000_000, advanced=True),
                 io.Int.Input("texture_size", default=0, min=0, max=8192, advanced=True),
                 io.Int.Input("max_tokens", default=49_152, min=16_384, max=262_144, advanced=True),
                 io.Boolean.Input("keep_worker_loaded", default=True, advanced=True),
+                io.Boolean.Input(
+                    "run_meshflow",
+                    default=False,
+                    tooltip="Generate a second artist-topology mesh conditioned by the Pixal mesh.",
+                ),
+                io.Int.Input("meshflow_steps", default=28, min=1, max=100, advanced=True),
+                io.Int.Input(
+                    "meshflow_num_verts",
+                    default=4096,
+                    min=1024,
+                    max=16384,
+                    step=1024,
+                    advanced=True,
+                ),
+                io.Float.Input(
+                    "meshflow_guidance_scale",
+                    default=2.5,
+                    min=0.0,
+                    max=30.0,
+                    step=0.1,
+                    advanced=True,
+                ),
+                io.Combo.Input(
+                    "meshflow_dtype",
+                    options=["fp16", "bf16", "fp32"],
+                    default="fp16",
+                    advanced=True,
+                ),
+                io.Boolean.Input("meshflow_compile", default=False, advanced=True),
+                io.Boolean.Input(
+                    "accept_meshflow_research_license",
+                    default=False,
+                    tooltip="Required to download and execute the gated MeshFlow checkpoint.",
+                ),
                 io.Combo.Input("cache_mode", options=list(CACHE_MODES), default="Use cache", advanced=True),
             ],
-            outputs=[io.File3DGLB.Output("model_3d")],
+            outputs=[
+                io.File3DGLB.Output("model_3d"),
+                io.File3DGLB.Output("pixal_stage_model_3d"),
+            ],
             hidden=[io.Hidden.unique_id],
         )
 
@@ -966,11 +1124,14 @@ class ComfyColabPixal3DMVAdvanced:
     def execute(
         cls,
         front_image,
-        back_image,
-        left_image,
-        right_image,
+        back_image=None,
+        left_image=None,
+        right_image=None,
         top_image=None,
         bottom_image=None,
+        view_mode="Supplied canonical views",
+        multiview_lora_name="comfycolab_flux2_klein_9b_canonical_views.safetensors",
+        flux_quantization="Q4_K_M",
         quality="1024 — Stable",
         seed=0,
         front_quality=1.0,
@@ -996,10 +1157,56 @@ class ComfyColabPixal3DMVAdvanced:
         texture_size=0,
         max_tokens=49_152,
         keep_worker_loaded=True,
+        run_meshflow=False,
+        meshflow_steps=28,
+        meshflow_num_verts=4096,
+        meshflow_guidance_scale=2.5,
+        meshflow_dtype="fp16",
+        meshflow_compile=False,
+        accept_meshflow_research_license=False,
         cache_mode="Use cache",
     ):
+        generated_view_mode = (
+            view_mode == "Generate separate views — FLUX.2 Klein 9B LoRA"
+        )
+        if view_mode not in {
+            "Supplied canonical views",
+            "Generate separate views — FLUX.2 Klein 9B LoRA",
+        }:
+            raise ValueError(f"Unknown Advanced Pixal3DMV view_mode: {view_mode}")
+        if not generated_view_mode and any(
+            image is None for image in (back_image, left_image, right_image)
+        ):
+            raise ValueError(
+                "Supplied-view mode requires front, back, left, and right images"
+            )
+        if generated_view_mode and any(
+            image is not None for image in (back_image, left_image, right_image)
+        ):
+            raise ValueError(
+                "Generated-view mode accepts one source image only; disconnect explicit "
+                "back, left, and right images"
+            )
+        if generated_view_mode and (top_image is not None or bottom_image is not None):
+            raise ValueError("Generated-view mode currently produces exactly four views")
+        if generated_view_mode and not str(multiview_lora_name).strip():
+            raise ValueError("Generated-view mode requires multiview_lora_name")
+        if flux_quantization not in {"Q3_K_M", "Q4_K_M", "Q5_K_M", "Q8_0"}:
+            raise ValueError(f"Unsupported FLUX Klein quantization: {flux_quantization}")
         if (top_image is None) != (bottom_image is None):
             raise ValueError("Pixal3DMV requires both top_image and bottom_image for six-view mode")
+        if run_meshflow and not accept_meshflow_research_license:
+            raise ValueError(
+                "MeshFlow requires explicit acceptance of its noncommercial research license"
+            )
+        if not 1 <= int(meshflow_steps) <= 100:
+            raise ValueError("meshflow_steps must be between 1 and 100")
+        if not 1024 <= int(meshflow_num_verts) <= 16384:
+            raise ValueError("meshflow_num_verts must be between 1024 and 16384")
+        if not 0.0 <= float(meshflow_guidance_scale) <= 30.0:
+            raise ValueError("meshflow_guidance_scale must be between 0 and 30")
+        if meshflow_dtype not in {"fp16", "bf16", "fp32"}:
+            raise ValueError("meshflow_dtype must be fp16, bf16, or fp32")
         seed = int(seed)
         fov = float(camera_fov_degrees)
         if seed < 0 or seed > (2**31) - 1:
@@ -1047,12 +1254,16 @@ class ComfyColabPixal3DMVAdvanced:
         )
         repo_root = Path(__file__).resolve().parents[2]
         artifacts = _load_pixal3d_artifact_provisioner(repo_root)
-        views = {
-            "front": front_image,
-            "back": back_image,
-            "left": left_image,
-            "right": right_image,
-        }
+        views = (
+            {"source": front_image}
+            if generated_view_mode
+            else {
+                "front": front_image,
+                "back": back_image,
+                "left": left_image,
+                "right": right_image,
+            }
+        )
         if top_image is not None:
             views.update(top=top_image, bottom=bottom_image)
         resolved_strategy = strategy_map[fusion_strategy]
@@ -1065,6 +1276,19 @@ class ComfyColabPixal3DMVAdvanced:
         if top_image is not None:
             quality_map.update(top=float(top_quality), bottom=float(bottom_quality))
         resolved_fallback = fallback_map[geometry_fallback]
+        view_generation = (
+            {
+                "backend": "flux2-klein-9b",
+                "quantization": flux_quantization,
+                "lora_name": str(multiview_lora_name),
+                "lora_path": str(_resolve_lora_path(str(multiview_lora_name))),
+                "separate_outputs": True,
+                "resolution": 1024,
+                "prompts": CANONICAL_VIEW_PROMPTS,
+            }
+            if generated_view_mode
+            else None
+        )
         key = pixal3d_multiview_cache_key(
             views,
             settings=settings,
@@ -1094,17 +1318,95 @@ class ComfyColabPixal3DMVAdvanced:
             moge_ref=artifacts.MOGE_MODEL_REF,
             naf_ref=artifacts.NAF_SOURCE_REF,
             environment_ref=artifacts.PIXAL3D_ENVIRONMENT_REF,
+            view_generation=view_generation,
         )
         destination = cache_path(_cache_root(), "pixal3d", key)
+        meshflow_config = None
+        meshflow_destination = None
+        if run_meshflow:
+            meshflow_artifacts = _load_worker_artifact_provisioner(
+                repo_root, "meshflow"
+            )
+            meshflow_key = meshflow_cache_key(
+                key,
+                reference_images=views,
+                steps=int(meshflow_steps),
+                num_verts=int(meshflow_num_verts),
+                guidance_scale=float(meshflow_guidance_scale),
+                seed=seed,
+                dtype=meshflow_dtype,
+                compile_models=bool(meshflow_compile),
+                source_ref=meshflow_artifacts.MESHFLOW_SOURCE_REF,
+                model_ref=meshflow_artifacts.MESHFLOW_MODEL_REF,
+            )
+            meshflow_destination = cache_path(
+                _cache_root(), "meshflow", meshflow_key
+            )
+            meshflow_config = {
+                "steps": int(meshflow_steps),
+                "num_verts": int(meshflow_num_verts),
+                "guidance_scale": float(meshflow_guidance_scale),
+                "seed": seed,
+                "dtype": meshflow_dtype,
+                "compile_models": bool(meshflow_compile),
+                "accept_research_license": bool(
+                    accept_meshflow_research_license
+                ),
+                "cache_key": meshflow_key,
+            }
         progress_node_id = _hidden_value(cls, "unique_id")
-        if cache_mode == "Use cache" and _valid_cached_glb(destination, require_textured=True):
+        pixal_cache_valid = (
+            cache_mode == "Use cache"
+            and _valid_cached_glb(destination, require_textured=True)
+        )
+        meshflow_cache_valid = (
+            not run_meshflow
+            or (
+                meshflow_destination is not None
+                and _valid_cached_glb(meshflow_destination)
+            )
+        )
+        if pixal_cache_valid and meshflow_cache_valid:
             _send_progress_text(progress_node_id, "Complete - Loaded cached advanced Pixal3DMV model")
-            return _io().NodeOutput(materialize_file3d(publish_glb(destination, key)))
-        if remove_background != "Off":
-            _require_upstream_nodes({"Trellis2RemoveBackground"})
+            pixal_file = materialize_file3d(publish_glb(destination, key))
+            final_file = (
+                materialize_file3d(
+                    publish_glb(
+                        meshflow_destination,
+                        str(meshflow_config["cache_key"]),
+                    )
+                )
+                if run_meshflow
+                else pixal_file
+            )
+            return _io().NodeOutput(final_file, pixal_file)
+        if generated_view_mode:
+            _require_upstream_nodes(
+                {
+                    "ComfyColabFlux2Klein9BBundleLoader",
+                    "LoraLoaderModelOnly",
+                    "ImageScaleToTotalPixels",
+                    "VAEEncode",
+                    "CLIPTextEncode",
+                    "ReferenceLatent",
+                    "EmptyFlux2LatentImage",
+                    "RandomNoise",
+                    "CFGGuider",
+                    "KSamplerSelect",
+                    "Flux2Scheduler",
+                    "SamplerCustomAdvanced",
+                    "VAEDecode",
+                    "SaveImage",
+                }
+            )
+        _require_upstream_nodes({"SaveGLB"})
         _send_progress_text(
             progress_node_id,
-            f"Stage 1/3 - Preparing {len(views)} views for frozen VGGT-Ω geometry guidance...",
+            (
+                "Stage 1/3 - Generating four separate FLUX canonical views..."
+                if generated_view_mode
+                else f"Stage 1/3 - Preparing {len(views)} supplied views..."
+            ),
         )
         return build_pixal3d_multiview_graph(
             front_image,
@@ -1132,10 +1434,24 @@ class ComfyColabPixal3DMVAdvanced:
             camera_fov_degrees=fov,
             fusion_strategy=resolved_strategy,
             fusion_temperature=float(fusion_temperature),
-            keep_worker_loaded=bool(keep_worker_loaded),
+            keep_worker_loaded=(
+                bool(keep_worker_loaded)
+                and not generated_view_mode
+                and not run_meshflow
+            ),
             cache_mode=cache_mode,
             cache_key=key,
             progress_node_id=progress_node_id,
+            generated_view_source=front_image if generated_view_mode else None,
+            generated_view_lora=(
+                str(multiview_lora_name) if generated_view_mode else ""
+            ),
+            generated_view_prompts=(
+                CANONICAL_VIEW_PROMPTS if generated_view_mode else None
+            ),
+            flux_quantization=flux_quantization,
+            meshflow_config=meshflow_config,
+            return_stage_outputs=True,
         )
 
 
@@ -1847,6 +2163,15 @@ def _save_reference_image(image, mask, path: Path) -> None:
     pil_image.fromarray(array).save(path)
 
 
+def _save_rgb_reference_image(image, path: Path) -> None:
+    numpy = importlib.import_module("numpy")
+    pil_image = importlib.import_module("PIL.Image")
+    value = image[0].detach().cpu().numpy() if hasattr(image, "detach") else image[0]
+    rgb = numpy.clip(value[..., :3] * 255.0, 0, 255).astype(numpy.uint8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pil_image.fromarray(rgb).save(path)
+
+
 def _load_pixal3d_artifact_provisioner(repo_root: Path):
     module_name = "comfycolab_pixal3d_artifacts"
     if module_name in sys.modules:
@@ -1883,6 +2208,7 @@ class ComfyColab3DPixal3DWorker(_DevNode):
                 io.Boolean.Input("keep_worker_loaded"),
                 io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
                 io.String.Input("cache_key"),
+                io.String.Input("background_removal", default="none", optional=True),
             ],
             [io.String.Output("glb_path")],
         )
@@ -1902,8 +2228,11 @@ class ComfyColab3DPixal3DWorker(_DevNode):
         keep_worker_loaded=True,
         cache_mode="Use cache",
         cache_key="",
+        background_removal="none",
     ):
         del cache_mode, cache_key
+        if background_removal not in {"none", "ben2"}:
+            raise ValueError("Pixal3D background_removal must be none or ben2")
         repo_root = Path(__file__).resolve().parents[2]
         input_directory = Path(tempfile.mkdtemp(prefix="comfycolab-pixal3d-input-"))
         output_directory = _make_temp_directory("comfycolab-pixal3d-")
@@ -1960,6 +2289,7 @@ class ComfyColab3DPixal3DWorker(_DevNode):
                 naf_checkpoint_ref=artifact_module.NAF_CHECKPOINT_SHA256,
                 environment_ref=artifact_module.PIXAL3D_ENVIRONMENT_REF,
                 keep_worker_loaded=bool(keep_worker_loaded),
+                background_removal=str(background_removal),
             )
 
             def cancelled() -> bool:
@@ -2010,6 +2340,7 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 io.Boolean.Input("keep_worker_loaded"),
                 io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
                 io.String.Input("cache_key"),
+                io.String.Input("background_removal", default="none", optional=True),
                 io.Image.Input("top_image", optional=True),
                 io.Mask.Input("top_mask", optional=True),
                 io.Float.Input("top_quality", default=1.0, min=0.0, max=10.0, step=0.05, advanced=True, optional=True),
@@ -2039,7 +2370,10 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                     optional=True,
                 ),
             ],
-            [io.String.Output("glb_path")],
+            [
+                io.String.Output("glb_path"),
+                io.String.Output("surface_point_cloud_path"),
+            ],
         )
 
     @classmethod
@@ -2069,6 +2403,7 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         keep_worker_loaded=True,
         cache_mode="Use cache",
         cache_key="",
+        background_removal="none",
         top_image=None,
         top_mask=None,
         top_quality=1.0,
@@ -2093,6 +2428,8 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
             raise ValueError("Pixal3DMV worker requires complete top and bottom image/mask pairs")
         if fusion_strategy not in {"directional_softmax", "average"}:
             raise ValueError("Pixal3DMV fusion_strategy must be directional_softmax or average")
+        if background_removal not in {"none", "ben2"}:
+            raise ValueError("Pixal3DMV background_removal must be none or ben2")
         if geometry_guidance not in {"none", "vggt_omega_depth_conf"}:
             raise ValueError(
                 "Pixal3DMV geometry_guidance must be none or vggt_omega_depth_conf"
@@ -2106,6 +2443,7 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
         output_directory = _make_temp_directory("comfycolab-pixal3d-")
         output = output_directory / "model.glb"
         metadata = output_directory / "model.json"
+        surface_point_cloud = output_directory / "surface_point_cloud.ply"
         view_values = [
             ("front", front_image, front_mask, float(front_quality)),
             ("back", back_image, back_mask, float(back_quality)),
@@ -2191,6 +2529,7 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 naf_checkpoint_ref=artifact_module.NAF_CHECKPOINT_SHA256,
                 environment_ref=artifact_module.PIXAL3D_ENVIRONMENT_REF,
                 keep_worker_loaded=bool(keep_worker_loaded),
+                background_removal=str(background_removal),
                 views=tuple(serialized_views),
                 fusion_temperature=float(fusion_temperature),
                 fusion_strategy=str(fusion_strategy),
@@ -2237,6 +2576,8 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 max_normalized_alignment_error=float(
                     max_normalized_alignment_error
                 ),
+                surface_point_cloud=str(surface_point_cloud),
+                surface_point_count=65_536,
             )
             result = global_pixal3d_worker_pool().run(
                 command,
@@ -2244,7 +2585,7 @@ class ComfyColab3DPixal3DMultiViewWorker(_DevNode):
                 on_progress=progress,
             )
             print(RESULT_PREFIX + json.dumps(result, sort_keys=True), flush=True)
-            return _io().NodeOutput(str(output))
+            return _io().NodeOutput(str(output), str(surface_point_cloud))
         except BaseException:
             shutil.rmtree(output_directory, ignore_errors=True)
             raise
@@ -2261,16 +2602,39 @@ class ComfyColab3DPixal3DPathToFile3D(_DevNode):
                 io.String.Input("glb_path"),
                 io.String.Input("cache_key"),
                 io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
+                io.String.Input("surface_point_cloud_path", optional=True),
             ],
-            [io.File3DGLB.Output("model_3d")],
+            [
+                io.File3DGLB.Output("model_3d"),
+                io.String.Output("surface_point_cloud_path"),
+            ],
         )
 
     @classmethod
-    def execute(cls, glb_path, cache_key, cache_mode="Use cache"):
+    def execute(
+        cls,
+        glb_path,
+        cache_key,
+        cache_mode="Use cache",
+        surface_point_cloud_path="",
+    ):
         source = Path(glb_path)
+        source_point_cloud = None
+        stable_point_cloud = None
         try:
             # Validate the facade-owned deterministic key even when result caching is disabled.
             cache_path(_cache_root(), "pixal3d", cache_key)
+            if str(surface_point_cloud_path).strip():
+                source_point_cloud = Path(str(surface_point_cloud_path)).resolve()
+                if (
+                    not source_point_cloud.is_file()
+                    or source_point_cloud.suffix.lower() != ".ply"
+                    or source_point_cloud.stat().st_size <= 0
+                ):
+                    raise FileNotFoundError(
+                        "Pixal3D surface point cloud is missing, empty, or is not PLY: "
+                        f"{source_point_cloud}"
+                    )
             validate_volumetric_glb(
                 source,
                 stage="Pixal3D final GLB",
@@ -2280,11 +2644,24 @@ class ComfyColab3DPixal3DPathToFile3D(_DevNode):
             )
             if cache_mode == "Disable cache":
                 published = publish_glb(source, cache_key)
-                return _io().NodeOutput(materialize_file3d(published))
+                if source_point_cloud is not None:
+                    stable_directory = _make_temp_directory(
+                        "comfycolab-pixal3d-surface-"
+                    )
+                    stable_point_cloud = stable_directory / "surface_point_cloud.ply"
+                    shutil.copy2(source_point_cloud, stable_point_cloud)
+                return _io().NodeOutput(
+                    materialize_file3d(published),
+                    str(stable_point_cloud) if stable_point_cloud is not None else "",
+                )
             destination = cache_path(_cache_root(), "pixal3d", cache_key)
             destination.parent.mkdir(parents=True, exist_ok=True)
             partial = destination.with_name(f".{destination.name}.{os.getpid()}.partial")
             partial_metadata = destination.parent / f".metadata.json.{os.getpid()}.partial"
+            point_cloud_destination = destination.parent / "surface_point_cloud.ply"
+            partial_point_cloud = destination.parent / (
+                f".surface_point_cloud.ply.{os.getpid()}.partial"
+            )
             try:
                 shutil.copyfile(source, partial)
                 validate_volumetric_glb(
@@ -2297,16 +2674,226 @@ class ComfyColab3DPixal3DPathToFile3D(_DevNode):
                 source_metadata = source.with_suffix(".json")
                 if source_metadata.is_file():
                     shutil.copyfile(source_metadata, partial_metadata)
+                if source_point_cloud is not None:
+                    shutil.copy2(source_point_cloud, partial_point_cloud)
+                    if partial_point_cloud.stat().st_size <= 0:
+                        raise RuntimeError(
+                            "Pixal3D cached surface point cloud is empty"
+                        )
+                    os.replace(partial_point_cloud, point_cloud_destination)
+                    stable_point_cloud = point_cloud_destination
                 os.replace(partial, destination)
                 if partial_metadata.is_file():
                     os.replace(partial_metadata, destination.parent / "metadata.json")
             finally:
                 partial.unlink(missing_ok=True)
                 partial_metadata.unlink(missing_ok=True)
+                partial_point_cloud.unlink(missing_ok=True)
             published = publish_glb(destination, cache_key)
-            return _io().NodeOutput(materialize_file3d(published))
+            return _io().NodeOutput(
+                materialize_file3d(published),
+                str(stable_point_cloud) if stable_point_cloud is not None else "",
+            )
+        except BaseException:
+            if stable_point_cloud is not None:
+                _remove_owned_pixal3d_surface_temp(stable_point_cloud)
+            raise
         finally:
             _remove_owned_pixal3d_temp(source)
+
+
+class ComfyColab3DMeshFlowWorker(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.File3DGLB.Input("model_3d"),
+                io.String.Input("surface_point_cloud_path", optional=True),
+                io.Image.Input("front_reference_image", optional=True),
+                io.Image.Input("back_reference_image", optional=True),
+                io.Image.Input("left_reference_image", optional=True),
+                io.Image.Input("right_reference_image", optional=True),
+                io.Image.Input("top_reference_image", optional=True),
+                io.Image.Input("bottom_reference_image", optional=True),
+                io.Int.Input("steps", default=28, min=1, max=100),
+                io.Int.Input("num_verts", default=4096, min=1024, max=16384),
+                io.Float.Input("guidance_scale", default=2.5, min=0.0, max=30.0, step=0.1),
+                io.Int.Input("seed", default=0, min=0, max=(2**31) - 1),
+                io.Combo.Input("dtype", options=["fp16", "bf16", "fp32"]),
+                io.Boolean.Input("compile_models", default=False),
+                io.Boolean.Input("accept_research_license", default=False),
+            ],
+            [io.String.Output("glb_path")],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        model_3d,
+        surface_point_cloud_path="",
+        front_reference_image=None,
+        back_reference_image=None,
+        left_reference_image=None,
+        right_reference_image=None,
+        top_reference_image=None,
+        bottom_reference_image=None,
+        steps=28,
+        num_verts=4096,
+        guidance_scale=2.5,
+        seed=0,
+        dtype="fp16",
+        compile_models=False,
+        accept_research_license=False,
+    ):
+        if not accept_research_license:
+            raise ValueError("MeshFlow research license acceptance is required")
+        repo_root = Path(__file__).resolve().parents[2]
+        staging = _make_temp_directory("comfycolab-meshflow-input-")
+        output_directory = _make_temp_directory("comfycolab-meshflow-")
+        appearance_mesh = staging / "pixal.glb"
+        input_geometry = appearance_mesh
+        output_mesh = output_directory / "meshflow.glb"
+        metadata = output_directory / "meshflow.json"
+        reference_inputs = (
+            ("front", front_reference_image),
+            ("back", back_reference_image),
+            ("left", left_reference_image),
+            ("right", right_reference_image),
+            ("top", top_reference_image),
+            ("bottom", bottom_reference_image),
+        )
+        reference_paths: list[Path] = []
+        source_point_cloud = None
+        try:
+            copy_file3d_to(model_3d, appearance_mesh)
+            if str(surface_point_cloud_path).strip():
+                source_point_cloud = Path(str(surface_point_cloud_path)).resolve()
+                if (
+                    not source_point_cloud.is_file()
+                    or source_point_cloud.suffix.lower() != ".ply"
+                ):
+                    raise FileNotFoundError(
+                        "MeshFlow Pixal surface point cloud is missing or is not PLY: "
+                        f"{source_point_cloud}"
+                    )
+                input_geometry = staging / "pixal_surface.ply"
+                shutil.copy2(source_point_cloud, input_geometry)
+            for name, reference in reference_inputs:
+                if reference is None:
+                    continue
+                reference_path = staging / f"reference-{name}.png"
+                _save_rgb_reference_image(reference, reference_path)
+                reference_paths.append(reference_path)
+            validate_volumetric_glb(
+                appearance_mesh,
+                stage="MeshFlow Pixal appearance input",
+                require_material=True,
+                require_texture=True,
+                require_uv=True,
+            )
+            artifact_module = _load_worker_artifact_provisioner(
+                repo_root, "meshflow"
+            )
+            progress, cancelled = _worker_callbacks()
+            artifacts = artifact_module.ensure_meshflow_artifacts(
+                os.environ.get(
+                    "COMFYCOLAB_MESHFLOW_MODEL_ROOT",
+                    "/content/.comfycolab/models/3d/meshflow",
+                ),
+                include_dinov3=bool(reference_paths),
+                progress=progress,
+            )
+            command = MeshFlowWorkerCommand(
+                python=os.environ.get(
+                    "COMFYCOLAB_PIXAL3D_PYTHON", DEFAULT_PIXAL3D_PYTHON
+                ),
+                worker_script=str(repo_root / "worker/meshflow/worker_main.py"),
+                source_dir=os.environ.get(
+                    "COMFYCOLAB_MESHFLOW_SOURCE", DEFAULT_MESHFLOW_SOURCE
+                ),
+                checkpoint_dir=str(artifacts.checkpoint_dir),
+                dinov3_model_dir=(
+                    str(artifacts.dinov3_dir)
+                    if artifacts.dinov3_dir is not None
+                    else ""
+                ),
+                input_mesh=str(input_geometry),
+                appearance_mesh=str(appearance_mesh),
+                reference_images=tuple(str(path) for path in reference_paths),
+                output_mesh=str(output_mesh),
+                metadata_output=str(metadata),
+                steps=int(steps),
+                num_verts=int(num_verts),
+                guidance_scale=float(guidance_scale),
+                seed=int(seed),
+                dtype=str(dtype),
+                compile_models=bool(compile_models),
+                source_ref=artifact_module.MESHFLOW_SOURCE_REF,
+                model_ref=artifact_module.MESHFLOW_MODEL_REF,
+            )
+            run_meshflow_worker(
+                command,
+                is_cancelled=cancelled,
+                on_progress=progress,
+            )
+            return _io().NodeOutput(str(output_mesh))
+        except BaseException:
+            shutil.rmtree(output_directory, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+            if source_point_cloud is not None:
+                _remove_owned_pixal3d_surface_temp(source_point_cloud)
+
+
+class ComfyColab3DMeshFlowPathToFile3D(_DevNode):
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return cls._schema(
+            [
+                io.String.Input("glb_path"),
+                io.String.Input("cache_key"),
+                io.Combo.Input("cache_mode", options=list(CACHE_MODES)),
+            ],
+            [io.File3DGLB.Output("model_3d")],
+        )
+
+    @classmethod
+    def execute(cls, glb_path, cache_key, cache_mode="Use cache"):
+        source = Path(glb_path)
+        try:
+            validate_volumetric_glb(
+                source,
+                stage="MeshFlow final GLB",
+                require_material=False,
+            )
+            if cache_mode == "Disable cache":
+                return _io().NodeOutput(
+                    materialize_file3d(publish_glb(source, cache_key))
+                )
+            destination = cache_path(_cache_root(), "meshflow", cache_key)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _copy_worker_glb_to_cache(
+                source,
+                destination,
+                lambda path: validate_volumetric_glb(
+                    path,
+                    stage="MeshFlow cache candidate",
+                    require_material=False,
+                ),
+            )
+            source_metadata = source.with_suffix(".json")
+            if source_metadata.is_file():
+                shutil.copyfile(
+                    source_metadata, destination.parent / "metadata.json"
+                )
+            return _io().NodeOutput(
+                materialize_file3d(publish_glb(destination, cache_key))
+            )
+        finally:
+            _remove_owned_meshflow_temp(source)
 
 
 def _load_artifact_provisioner(repo_root: Path):
@@ -2473,6 +3060,8 @@ NODE_CLASS_MAPPINGS = {
     "ComfyColab3DPixal3DWorker": ComfyColab3DPixal3DWorker,
     "ComfyColab3DPixal3DMultiViewWorker": ComfyColab3DPixal3DMultiViewWorker,
     "ComfyColab3DPixal3DPathToFile3D": ComfyColab3DPixal3DPathToFile3D,
+    "ComfyColab3DMeshFlowWorker": ComfyColab3DMeshFlowWorker,
+    "ComfyColab3DMeshFlowPathToFile3D": ComfyColab3DMeshFlowPathToFile3D,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2481,7 +3070,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabUltraShapeRefine": "ComfyColab UltraShape — Refine Geometry",
     "ComfyColabPixal3DImageTo3D": "ComfyColab Pixal3D — Image to 3D",
     "ComfyColabPixal3DMV": "ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D",
-    "ComfyColabPixal3DMVAdvanced": "ComfyColab Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D",
+    "ComfyColabPixal3DMVAdvanced": "ComfyColab Pixal3DMV Advanced — Single Image / Multi-View / MeshFlow",
     "ComfyColabSkinTokensAutoRig": "ComfyColab SkinTokens — Auto Rig 3D",
     "ComfyColabCubePartSegment": "ComfyColab CubePart — Segment 3D Parts",
 }

@@ -24,6 +24,11 @@ READY_PREFIX = "COMFYCOLAB_PIXAL3D_READY="
 PROGRESS_PREFIX = "COMFYCOLAB_PIXAL3D_PROGRESS="
 RESULT_PREFIX = "COMFYCOLAB_PIXAL3D_RESULT="
 PROTOCOL_VERSION = 1
+MAX_PIXAL3D_CONNECTED_COMPONENTS = 64
+BEN2_SOURCE_REF = "2c99a5da477b5523585bfa5c893888a6e818a8f6"
+BEN2_MODEL_REPO = "PramaLLC/BEN2"
+BEN2_MODEL_REF = "e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f"
+BEN2_BATCH_SIZE = 3
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 NODE_PACK = REPO_ROOT / "custom_nodes" / "ComfyColab-3D"
@@ -31,6 +36,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from multiview import (  # noqa: E402
     ADAPTER_NAME,
+    GEOMETRY_CONDITIONING_POLICY,
+    SPARSE_STRUCTURE_POLICY,
     camera_transform_for_view,
     run_multiview_projection_fusion,
     validate_multiview_request,
@@ -211,6 +218,76 @@ def _prepare_image_without_rmbg(image_path: Path):
     return Image.fromarray((composited * 255.0).astype(np.uint8), mode="RGB")
 
 
+def _run_ben2_background_removal(
+    image_paths: list[Path],
+    output_paths: list[Path],
+    *,
+    request_id: str,
+) -> None:
+    """Extract transparent foregrounds with the pinned open-source BEN2 Base model."""
+
+    if not image_paths or len(image_paths) != len(output_paths):
+        raise ValueError("BEN2 requires matching non-empty input and output path lists")
+    torch = importlib.import_module("torch")
+    if not torch.cuda.is_available():
+        raise RuntimeError("BEN2 background removal requires the Pixal3D CUDA runtime")
+    ben2 = importlib.import_module("ben2")
+    huggingface_hub = importlib.import_module("huggingface_hub")
+    pil_image = importlib.import_module("PIL.Image")
+    snapshot = huggingface_hub.snapshot_download(
+        repo_id=BEN2_MODEL_REPO,
+        revision=BEN2_MODEL_REF,
+    )
+    model = ben2.BEN_Base.from_pretrained(snapshot)
+    model.to("cuda").eval()
+    completed = 0
+    emit_progress(
+        request_id,
+        "background_removal",
+        completed,
+        len(image_paths),
+        backend="ben2",
+    )
+    try:
+        for offset in range(0, len(image_paths), BEN2_BATCH_SIZE):
+            chunk_paths = image_paths[offset : offset + BEN2_BATCH_SIZE]
+            images = [pil_image.open(path).convert("RGB") for path in chunk_paths]
+            try:
+                with torch.inference_mode():
+                    foregrounds = model.inference(
+                        images,
+                        refine_foreground=True,
+                    )
+                if not isinstance(foregrounds, list):
+                    foregrounds = [foregrounds]
+                if len(foregrounds) != len(chunk_paths):
+                    raise RuntimeError(
+                        "BEN2 returned a different number of foregrounds than inputs"
+                    )
+                for foreground, output_path in zip(
+                    foregrounds,
+                    output_paths[offset : offset + len(chunk_paths)],
+                    strict=True,
+                ):
+                    foreground.convert("RGBA").save(output_path)
+                    completed += 1
+                    emit_progress(
+                        request_id,
+                        "background_removal",
+                        completed,
+                        len(image_paths),
+                        backend="ben2",
+                    )
+            finally:
+                for image in images:
+                    image.close()
+    finally:
+        model.cpu()
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
 def _validate_request(request: dict[str, Any]) -> None:
     if int(request.get("protocol", -1)) != PROTOCOL_VERSION:
         raise ValueError("Unsupported Pixal3D worker protocol")
@@ -227,6 +304,13 @@ def _validate_request(request: dict[str, Any]) -> None:
         raise ValueError("Pixal3D texture_size must be at least 512")
     if int(request.get("max_tokens", 0)) < 16_384:
         raise ValueError("Pixal3D max_tokens must be at least 16384")
+    if str(request.get("background_removal", "none")) not in {"none", "ben2"}:
+        raise ValueError("background_removal must be none or ben2")
+    if request.get("surface_point_cloud"):
+        if not str(request["surface_point_cloud"]).lower().endswith(".ply"):
+            raise ValueError("surface_point_cloud must use a .ply path")
+        if int(request.get("surface_point_count", 0)) < 4096:
+            raise ValueError("surface_point_count must be at least 4096")
     for name in ("image_path", "output_mesh", "metadata_output", "request_id"):
         if not str(request.get(name, "")):
             raise ValueError(f"Pixal3D request omitted {name}")
@@ -289,6 +373,95 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _export_surface_point_cloud(
+    vertices,
+    faces,
+    output_path: Path,
+    *,
+    point_count: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Export deterministic area-weighted samples from Pixal's decoded surface."""
+
+    numpy = importlib.import_module("numpy")
+    trimesh = importlib.import_module("trimesh")
+    vertex_array = vertices.detach().float().cpu().numpy()
+    face_array = faces.detach().long().cpu().numpy()
+    keep_faces, removed_planar_components = importlib.import_module(
+        "mesh_cleanup"
+    ).large_planar_component_face_mask(vertex_array, face_array)
+    face_array = face_array[keep_faces]
+    if face_array.shape[0] == 0:
+        raise RuntimeError(
+            "Pixal3D surface point-cloud export removed every decoded face"
+        )
+
+    triangles = vertex_array[face_array]
+    cross = numpy.cross(
+        triangles[:, 1] - triangles[:, 0],
+        triangles[:, 2] - triangles[:, 0],
+    )
+    areas = numpy.linalg.norm(cross, axis=1) * 0.5
+    valid = numpy.isfinite(areas) & (areas > 1e-12)
+    triangles = triangles[valid]
+    areas = areas[valid]
+    if triangles.shape[0] == 0:
+        raise RuntimeError(
+            "Pixal3D surface point-cloud export found no finite nondegenerate faces"
+        )
+
+    count = int(point_count)
+    if count < 4096:
+        raise ValueError("Pixal3D surface point cloud requires at least 4096 points")
+    rng = numpy.random.default_rng(int(seed))
+    sampled_faces = rng.choice(
+        triangles.shape[0],
+        size=count,
+        replace=True,
+        p=areas / areas.sum(),
+    )
+    selected = triangles[sampled_faces]
+    first = rng.random(count, dtype=numpy.float32)
+    second = rng.random(count, dtype=numpy.float32)
+    root = numpy.sqrt(first)
+    barycentric = numpy.stack(
+        (1.0 - root, root * (1.0 - second), root * second),
+        axis=1,
+    )
+    points = (selected * barycentric[:, :, None]).sum(axis=1).astype(
+        numpy.float32,
+        copy=False,
+    )
+
+    # Match the final Pixal GLB orientation while preserving the pre-remesh
+    # decoded surface. O-Voxel's internal axis swap followed by the worker's
+    # GLB transform simplifies to a 180-degree rotation around Y.
+    points[:, 0] *= -1.0
+    points[:, 2] *= -1.0
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = output_path.with_name(
+        f".{output_path.stem}.partial{output_path.suffix}"
+    )
+    partial.unlink(missing_ok=True)
+    trimesh.PointCloud(points).export(str(partial))
+    if not partial.is_file() or partial.stat().st_size <= 0:
+        raise RuntimeError("Pixal3D failed to export its surface point cloud")
+    os.replace(partial, output_path)
+    return {
+        "path": str(output_path),
+        "sha256": _sha256(output_path),
+        "points": int(points.shape[0]),
+        "source_vertices": int(vertex_array.shape[0]),
+        "source_faces": int(faces.shape[0]),
+        "sampled_faces": int(triangles.shape[0]),
+        "removed_planar_components": removed_planar_components,
+        "sampling": "deterministic_area_weighted_surface_v1",
+        "coordinate_frame": "pixal_final_glb",
+        "pre_glb_remesh": True,
+    }
+
+
 def _git_revision(path: Path) -> str:
     try:
         return subprocess.check_output(
@@ -316,6 +489,30 @@ def _snapshot_revision(path: Path) -> str:
 
 def _geometry_guidance_enabled(request: dict[str, Any]) -> bool:
     return str(request.get("geometry_guidance", "none")) == "vggt_omega_depth_conf"
+
+
+def _reject_excessive_fragmentation(validation) -> None:
+    if isinstance(validation, dict):
+        component_count = int(validation.get("connected_component_count", -1))
+        exact = bool(validation.get("connected_components_exact", False))
+    else:
+        component_count = int(getattr(validation, "connected_component_count", -1))
+        exact = bool(getattr(validation, "connected_components_exact", False))
+    component_limit = int(
+        os.environ.get(
+            "COMFYCOLAB_PIXAL3D_MAX_CONNECTED_COMPONENTS",
+            str(MAX_PIXAL3D_CONNECTED_COMPONENTS),
+        )
+    )
+    if component_limit < 1:
+        raise ValueError("Pixal3D connected-component limit must be positive")
+    if exact and component_count > component_limit:
+        raise RuntimeError(
+            "Pixal3D generated an excessively fragmented mesh "
+            f"({component_count} connected components; maximum accepted "
+            f"{component_limit}). The artifact was rejected "
+            "before publication."
+        )
 
 
 def _geometry_fallback_metadata(
@@ -536,37 +733,72 @@ class Pixal3DRuntime:
         started = time.monotonic()
         output = Path(str(request["output_mesh"])).resolve()
         metadata_output = Path(str(request["metadata_output"])).resolve()
+        surface_point_cloud = (
+            Path(str(request["surface_point_cloud"])).resolve()
+            if request.get("surface_point_cloud")
+            else None
+        )
         output.parent.mkdir(parents=True, exist_ok=True)
         metadata_output.parent.mkdir(parents=True, exist_ok=True)
+        if surface_point_cloud is not None:
+            surface_point_cloud.parent.mkdir(parents=True, exist_ok=True)
         partial_output = output.with_name(f".{output.stem}.{request_id}.partial.glb")
         partial_metadata = metadata_output.with_name(
             f".{metadata_output.stem}.{request_id}.partial.json"
         )
         prepared_camera_image = output.with_name(f".{output.stem}.{request_id}.camera.png")
         prepared_view_paths: list[Path] = []
+        background_removed_paths: list[Path] = []
         for path in (
             output,
             metadata_output,
             partial_output,
             partial_metadata,
             prepared_camera_image,
+            *([surface_point_cloud] if surface_point_cloud is not None else []),
         ):
             path.unlink(missing_ok=True)
         try:
             resolved_revisions = self.resolved_revisions(request)
             views = validate_multiview_request(request)
             labels = [str(view["name"]) for view in views]
-            image = _prepare_image_without_rmbg(Path(str(request["image_path"])))
+            raw_input_paths = (
+                [Path(str(view["image_path"])) for view in views]
+                if views
+                else [Path(str(request["image_path"]))]
+            )
+            prepared_input_paths = raw_input_paths
+            background_removal = str(request.get("background_removal", "none"))
+            if background_removal == "ben2":
+                background_removed_paths = [
+                    output.with_name(
+                        f".{output.stem}.{request_id}.ben2-{index}.png"
+                    )
+                    for index in range(len(raw_input_paths))
+                ]
+                for path in background_removed_paths:
+                    path.unlink(missing_ok=True)
+                _run_ben2_background_removal(
+                    raw_input_paths,
+                    background_removed_paths,
+                    request_id=request_id,
+                )
+                prepared_input_paths = background_removed_paths
+            image = _prepare_image_without_rmbg(prepared_input_paths[0])
             image.save(prepared_camera_image)
             view_images = []
-            for view in views:
+            for view, prepared_input_path in zip(
+                views,
+                prepared_input_paths if views else [],
+                strict=True,
+            ):
                 label = str(view["name"])
                 prepared_path = output.with_name(
                     f".{output.stem}.{request_id}.{label}.png"
                 )
                 prepared_path.unlink(missing_ok=True)
                 prepared_image = _prepare_image_without_rmbg(
-                    Path(str(view["image_path"]))
+                    prepared_input_path
                 )
                 prepared_image.save(prepared_path)
                 prepared_view_paths.append(prepared_path)
@@ -736,6 +968,23 @@ class Pixal3DRuntime:
             mesh = mesh_list[0]
             o_voxel = importlib.import_module("o_voxel")
             numpy = importlib.import_module("numpy")
+            surface_point_cloud_metadata = None
+            if surface_point_cloud is not None:
+                emit_progress(request_id, "surface_point_cloud", 0, 1)
+                surface_point_cloud_metadata = _export_surface_point_cloud(
+                    mesh.vertices,
+                    mesh.faces,
+                    surface_point_cloud,
+                    point_count=int(request.get("surface_point_count", 65_536)),
+                    seed=int(request["seed"]),
+                )
+                emit_progress(
+                    request_id,
+                    "surface_point_cloud",
+                    1,
+                    1,
+                    points=surface_point_cloud_metadata["points"],
+                )
             emit_progress(request_id, "export", 0, 1)
             glb = o_voxel.postprocess.to_glb(
                 vertices=mesh.vertices,
@@ -763,7 +1012,10 @@ class Pixal3DRuntime:
                     dtype=numpy.float64,
                 )
             )
-            glb.export(str(partial_output), extension_webp=True)
+            # Use core glTF image sources for broad viewer compatibility.
+            # EXT_texture_webp-only textures render as glossy black in viewers
+            # that do not implement that optional extension.
+            glb.export(str(partial_output), extension_webp=False)
             validation = _load_comfycolab_contract().validate_volumetric_glb(
                 partial_output,
                 stage="Pixal3D generated GLB",
@@ -771,6 +1023,7 @@ class Pixal3DRuntime:
                 require_texture=True,
                 require_uv=True,
             )
+            _reject_excessive_fragmentation(validation)
             validation_payload = (
                 validation.to_dict() if hasattr(validation, "to_dict") else validation
             )
@@ -785,6 +1038,19 @@ class Pixal3DRuntime:
                     "texture_size": int(request["texture_size"]),
                     "max_tokens": int(request["max_tokens"]),
                 },
+                "background_removal": {
+                    "backend": background_removal,
+                    "source_ref": (
+                        BEN2_SOURCE_REF if background_removal == "ben2" else ""
+                    ),
+                    "model_repo": (
+                        BEN2_MODEL_REPO if background_removal == "ben2" else ""
+                    ),
+                    "model_ref": (
+                        BEN2_MODEL_REF if background_removal == "ben2" else ""
+                    ),
+                    "refine_foreground": background_removal == "ben2",
+                },
                 "camera": camera_params,
                 "actual_resolution": int(actual_resolution),
                 "token_count": token_count,
@@ -794,11 +1060,14 @@ class Pixal3DRuntime:
                 "pipeline_load_count": self.pipeline_load_count,
                 "revisions": resolved_revisions,
                 "validation": validation_payload,
+                "surface_point_cloud_metadata": surface_point_cloud_metadata,
                 "bytes": partial_output.stat().st_size,
             }
             if views:
                 metadata["experimental_multiview"] = {
                     "adapter": ADAPTER_NAME,
+                    "geometry_conditioning_policy": GEOMETRY_CONDITIONING_POLICY,
+                    "sparse_structure_policy": SPARSE_STRUCTURE_POLICY,
                     "official_pixal3d_support": False,
                     "views": [
                         {
@@ -834,6 +1103,8 @@ class Pixal3DRuntime:
                 partial_metadata,
                 prepared_camera_image,
                 *prepared_view_paths,
+                *background_removed_paths,
+                *([surface_point_cloud] if surface_point_cloud is not None else []),
             ):
                 path.unlink(missing_ok=True)
             raise
@@ -841,11 +1112,13 @@ class Pixal3DRuntime:
             prepared_camera_image.unlink(missing_ok=True)
             for path in prepared_view_paths:
                 path.unlink(missing_ok=True)
+            for path in background_removed_paths:
+                path.unlink(missing_ok=True)
 
 
 def _request_from_args(args: argparse.Namespace) -> dict[str, Any]:
     fov = math.radians(args.camera_fov_degrees) if args.camera_fov_degrees > 0 else None
-    return {
+    request = {
         "protocol": PROTOCOL_VERSION,
         "request_id": args.request_id,
         "image_path": str(args.image_path),
@@ -861,6 +1134,10 @@ def _request_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "max_tokens": args.max_tokens,
         "revisions": {},
     }
+    if args.surface_point_cloud:
+        request["surface_point_cloud"] = str(args.surface_point_cloud)
+        request["surface_point_count"] = int(args.surface_point_count)
+    return request
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -879,6 +1156,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-path", type=Path)
     parser.add_argument("--output-mesh", type=Path)
     parser.add_argument("--metadata-output", type=Path)
+    parser.add_argument("--surface-point-cloud", type=Path)
+    parser.add_argument("--surface-point-count", type=int, default=65_536)
     parser.add_argument("--pipeline-type", default="1024_cascade")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--camera-fov-degrees", type=float, default=0.0)
@@ -902,6 +1181,11 @@ def _handle(runtime: Pixal3DRuntime, request: dict[str, Any]) -> bool:
                 "status": "ok",
                 "output_mesh": str(Path(request["output_mesh"]).resolve()),
                 "metadata_output": str(Path(request["metadata_output"]).resolve()),
+                "surface_point_cloud": (
+                    str(Path(request["surface_point_cloud"]).resolve())
+                    if request.get("surface_point_cloud")
+                    else ""
+                ),
             }
         )
     except BaseException as error:

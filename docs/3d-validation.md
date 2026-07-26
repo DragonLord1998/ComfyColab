@@ -75,6 +75,11 @@ ID, completion time, and passed-gate list for auditability.
       cameras and global tokens, applies depth/confidence weights only to
       projection features, and labels strict/fallback behavior without
       claiming a trained residual/register adapter.
+- [x] Advanced Pixal3DMV locally expands one source image into four independent
+      pinned-ComfyUI FLUX.2 edit samplers, persists each view separately, and
+      exposes Pixal and MeshFlow GLB stage outputs. Live G4 proof remains
+      pending until the selected canonical-view LoRA and gated MeshFlow model
+      are available in the runtime.
 - [x] SkinTokens uses a measured Python 3.11.15 environment, validates real
       `JOINTS_0`/`WEIGHTS_0` payloads, and applies deterministic bounded retries
       only to malformed autoregressive skeleton/skin sequences. Cancellation

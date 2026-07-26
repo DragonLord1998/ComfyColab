@@ -1,12 +1,12 @@
 {
-  "last_node_id": 8,
-  "last_link_id": 7,
+  "last_node_id": 5,
+  "last_link_id": 4,
   "nodes": [
     {
       "id": 1,
       "type": "LoadImage",
-      "pos": [-980, -360],
-      "size": [280, 220],
+      "pos": [-820, 0],
+      "size": [300, 300],
       "flags": {},
       "order": 0,
       "mode": 0,
@@ -18,79 +18,22 @@
         {"name": "IMAGE", "type": "IMAGE", "links": [1]},
         {"name": "MASK", "type": "MASK", "links": null}
       ],
-      "properties": {"Node name for S&R": "Front view"},
-      "widgets_values": ["front.png", "image"]
+      "properties": {"Node name for S&R": "Source image"},
+      "widgets_values": ["source.png", "image"]
     },
     {
       "id": 2,
-      "type": "LoadImage",
-      "pos": [-980, -100],
-      "size": [280, 220],
+      "type": "ComfyColabPixal3DMVAdvanced",
+      "pos": [-420, -280],
+      "size": [480, 1120],
       "flags": {},
       "order": 1,
       "mode": 0,
       "inputs": [
-        {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
-        {"name": "upload", "type": "IMAGEUPLOAD", "widget": {"name": "upload"}, "link": null}
-      ],
-      "outputs": [
-        {"name": "IMAGE", "type": "IMAGE", "links": [2]},
-        {"name": "MASK", "type": "MASK", "links": null}
-      ],
-      "properties": {"Node name for S&R": "Back view"},
-      "widgets_values": ["back.png", "image"]
-    },
-    {
-      "id": 3,
-      "type": "LoadImage",
-      "pos": [-980, 160],
-      "size": [280, 220],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "inputs": [
-        {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
-        {"name": "upload", "type": "IMAGEUPLOAD", "widget": {"name": "upload"}, "link": null}
-      ],
-      "outputs": [
-        {"name": "IMAGE", "type": "IMAGE", "links": [3]},
-        {"name": "MASK", "type": "MASK", "links": null}
-      ],
-      "properties": {"Node name for S&R": "Left view"},
-      "widgets_values": ["left.png", "image"]
-    },
-    {
-      "id": 4,
-      "type": "LoadImage",
-      "pos": [-980, 420],
-      "size": [280, 220],
-      "flags": {},
-      "order": 3,
-      "mode": 0,
-      "inputs": [
-        {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
-        {"name": "upload", "type": "IMAGEUPLOAD", "widget": {"name": "upload"}, "link": null}
-      ],
-      "outputs": [
-        {"name": "IMAGE", "type": "IMAGE", "links": [4]},
-        {"name": "MASK", "type": "MASK", "links": null}
-      ],
-      "properties": {"Node name for S&R": "Right view"},
-      "widgets_values": ["right.png", "image"]
-    },
-    {
-      "id": 5,
-      "type": "ComfyColabPixal3DMVAdvanced",
-      "pos": [-500, -260],
-      "size": [470, 1120],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
         {"name": "front_image", "type": "IMAGE", "link": 1},
-        {"name": "back_image", "type": "IMAGE", "link": 2},
-        {"name": "left_image", "type": "IMAGE", "link": 3},
-        {"name": "right_image", "type": "IMAGE", "link": 4},
+        {"name": "back_image", "type": "IMAGE", "link": null},
+        {"name": "left_image", "type": "IMAGE", "link": null},
+        {"name": "right_image", "type": "IMAGE", "link": null},
         {"name": "top_image", "type": "IMAGE", "link": null},
         {"name": "bottom_image", "type": "IMAGE", "link": null},
         {"name": "view_mode", "type": "COMBO", "widget": {"name": "view_mode"}, "link": null},
@@ -130,12 +73,12 @@
         {"name": "cache_mode", "type": "COMBO", "widget": {"name": "cache_mode"}, "link": null}
       ],
       "outputs": [
-        {"name": "model_3d", "type": "FILE_3D_GLB", "links": [5, 6]},
-        {"name": "pixal_stage_model_3d", "type": "FILE_3D_GLB", "links": [7]}
+        {"name": "model_3d", "type": "FILE_3D_GLB", "links": [2, 3]},
+        {"name": "pixal_stage_model_3d", "type": "FILE_3D_GLB", "links": [4]}
       ],
       "properties": {"Node name for S&R": "ComfyColabPixal3DMVAdvanced"},
       "widgets_values": [
-        "Supplied canonical views",
+        "Generate separate views — FLUX.2 Klein 9B LoRA",
         "comfycolab_flux2_klein_9b_canonical_views.safetensors",
         "Q4_K_M",
         "1024 — Stable",
@@ -162,8 +105,8 @@
         0,
         0,
         49152,
-        true,
         false,
+        true,
         28,
         4096,
         "fp16",
@@ -173,46 +116,46 @@
       ]
     },
     {
-      "id": 6,
+      "id": 3,
       "type": "Preview3D",
-      "pos": [40, -240],
+      "pos": [180, -180],
       "size": [420, 500],
       "flags": {},
-      "order": 5,
+      "order": 2,
       "mode": 0,
       "inputs": [
-        {"name": "model_file", "type": "STRING,FILE_3D_GLB,FILE_3D", "link": 5}
+        {"name": "model_file", "type": "STRING,FILE_3D_GLB,FILE_3D", "link": 2}
       ],
       "outputs": [],
-      "properties": {"Node name for S&R": "Preview3D"},
+      "properties": {"Node name for S&R": "Preview final MeshFlow"},
       "widgets_values": [""]
     },
     {
-      "id": 7,
+      "id": 4,
       "type": "SaveGLB",
-      "pos": [40, 320],
-      "size": [330, 82],
+      "pos": [180, 380],
+      "size": [340, 82],
       "flags": {},
-      "order": 6,
+      "order": 3,
       "mode": 0,
       "inputs": [
-        {"name": "mesh", "type": "MESH,FILE_3D_GLB,FILE_3D", "link": 6},
+        {"name": "mesh", "type": "MESH,FILE_3D_GLB,FILE_3D", "link": 3},
         {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null}
       ],
       "outputs": [],
-      "properties": {"Node name for S&R": "Save final GLB"},
-      "widgets_values": ["3d/ComfyColab_Pixal3DMV_Advanced/final"]
+      "properties": {"Node name for S&R": "Save MeshFlow stage"},
+      "widgets_values": ["3d/ComfyColab_Pixal3DMV_Advanced/meshflow_stage"]
     },
     {
-      "id": 8,
+      "id": 5,
       "type": "SaveGLB",
-      "pos": [40, 440],
-      "size": [330, 82],
+      "pos": [180, 500],
+      "size": [340, 82],
       "flags": {},
-      "order": 7,
+      "order": 4,
       "mode": 0,
       "inputs": [
-        {"name": "mesh", "type": "MESH,FILE_3D_GLB,FILE_3D", "link": 7},
+        {"name": "mesh", "type": "MESH,FILE_3D_GLB,FILE_3D", "link": 4},
         {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null}
       ],
       "outputs": [],
@@ -221,16 +164,16 @@
     }
   ],
   "links": [
-    [1, 1, 0, 5, 0, "IMAGE"],
-    [2, 2, 0, 5, 1, "IMAGE"],
-    [3, 3, 0, 5, 2, "IMAGE"],
-    [4, 4, 0, 5, 3, "IMAGE"],
-    [5, 5, 0, 6, 0, "FILE_3D_GLB"],
-    [6, 5, 0, 7, 0, "FILE_3D_GLB"],
-    [7, 5, 1, 8, 0, "FILE_3D_GLB"]
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 2, 0, 3, 0, "FILE_3D_GLB"],
+    [3, 2, 0, 4, 0, "FILE_3D_GLB"],
+    [4, 2, 1, 5, 0, "FILE_3D_GLB"]
   ],
   "groups": [],
   "config": {},
-  "extra": {"workflowRendererVersion": "LG"},
+  "extra": {
+    "workflowRendererVersion": "LG",
+    "notes": "Enable accept_meshflow_research_license only after accepting the upstream gated research terms."
+  },
   "version": 0.4
 }

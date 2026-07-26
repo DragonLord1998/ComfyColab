@@ -160,6 +160,21 @@ exact byte-size and SHA-256 checks remain mandatory. The Advanced node is a
 ComfyColab inference-time adapter, not an official Meta or TencentARC
 integration or endorsement.
 
+The Advanced Pixal3DMV adapter can optionally pass its Pixal mesh to MeshFlow:
+
+- Official source: <https://github.com/facebookresearch/meshflow>
+- Pinned source revision: `55f56f60e1bbf98d1c1991670ac998094d5f59ae`
+- Official model: <https://huggingface.co/facebook/meshflow>
+- Pinned model revision: `9249a90e4997e105e533d6f502453fa3b344676f`
+- License: FAIR Noncommercial Research License v1; gated model conditions apply
+
+ComfyColab does not redistribute MeshFlow source or weights. The runtime clones
+the pinned source and downloads only the pinned `meshflow/config.yaml` and
+`meshflow/model.pth` files after the user explicitly accepts the research
+license and supplies authorized Hugging Face access. This integration uses the
+released geometry-conditioning path and is not an official Pixal3D integration
+or endorsement.
+
 ## SkinTokens / TokenRig
 
 - Official source: <https://github.com/VAST-AI-Research/SkinTokens>

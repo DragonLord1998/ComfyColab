@@ -18,6 +18,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
             WORKFLOWS / "comfycolab_trellis2mv_to_3d.json",
             WORKFLOWS / "comfycolab_pixal3dmv_to_3d.json",
             WORKFLOWS / "comfycolab_pixal3dmv_advanced_to_3d.json",
+            WORKFLOWS / "comfycolab_pixal3dmv_advanced_single_image_meshflow.json",
             WORKFLOWS / "comfycolab_skintokens_auto_rig.json",
             WORKFLOWS / "comfycolab_cubepart_segment.json",
         ]
@@ -78,6 +79,7 @@ class ThreeDWorkflowTests(unittest.TestCase):
             "comfycolab_trellis2mv_to_3d.json": "ComfyColabTrellis2MV",
             "comfycolab_pixal3dmv_to_3d.json": "ComfyColabPixal3DMV",
             "comfycolab_pixal3dmv_advanced_to_3d.json": "ComfyColabPixal3DMVAdvanced",
+            "comfycolab_pixal3dmv_advanced_single_image_meshflow.json": "ComfyColabPixal3DMVAdvanced",
             "comfycolab_skintokens_auto_rig.json": "ComfyColabSkinTokensAutoRig",
             "comfycolab_cubepart_segment.json": "ComfyColabCubePartSegment",
         }
@@ -115,6 +117,45 @@ class ThreeDWorkflowTests(unittest.TestCase):
         self.assertEqual(
             widget_values["geometry_fallback"],
             "Strict — require VGGT-Ω",
+        )
+
+        generated = json.loads(
+            (
+                WORKFLOWS
+                / "comfycolab_pixal3dmv_advanced_single_image_meshflow.json"
+            ).read_text(encoding="utf-8")
+        )
+        generated_node = next(
+            item
+            for item in generated["nodes"]
+            if item["type"] == "ComfyColabPixal3DMVAdvanced"
+        )
+        generated_widget_names = [
+            item["widget"]["name"]
+            for item in generated_node["inputs"]
+            if "widget" in item
+        ]
+        generated_values = dict(
+            zip(generated_widget_names, generated_node["widgets_values"])
+        )
+        self.assertEqual(
+            generated_values["view_mode"],
+            "Generate separate views — FLUX.2 Klein 9B LoRA",
+        )
+        self.assertTrue(generated_values["run_meshflow"])
+        self.assertFalse(
+            generated_values["accept_meshflow_research_license"],
+            "example must not pre-accept MeshFlow research terms",
+        )
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in generated["nodes"]
+                    if item["type"] == "LoadImage"
+                ]
+            ),
+            1,
         )
 
 

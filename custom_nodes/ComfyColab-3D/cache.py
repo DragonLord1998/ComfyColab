@@ -17,6 +17,7 @@ TRELLIS_MULTIVIEW_RESULT_SCHEMA = "comfycolab-trellis-multiview-result-v1"
 PIXAL3D_MULTIVIEW_RESULT_SCHEMA = "comfycolab-pixal3d-multiview-result-v1"
 SKINTOKENS_RESULT_SCHEMA = "comfycolab-skintokens-rig-result-v1"
 CUBEPART_RESULT_SCHEMA = "comfycolab-cubepart-segmentation-result-v1"
+MESHFLOW_RESULT_SCHEMA = "comfycolab-meshflow-result-v2"
 
 
 def _stable_value(value: Any) -> Any:
@@ -251,6 +252,7 @@ def pixal3d_multiview_cache_key(
     moge_ref: str,
     naf_ref: str,
     environment_ref: str,
+    view_generation: dict[str, Any] | None = None,
     result_schema: str = PIXAL3D_MULTIVIEW_RESULT_SCHEMA,
 ) -> str:
     camera_policy = (
@@ -301,7 +303,39 @@ def pixal3d_multiview_cache_key(
                 max_normalized_alignment_error
             ),
         }
+    if view_generation:
+        inputs["view_generation"] = view_generation
     return deterministic_cache_key("pixal3d-multiview", **inputs)
+
+
+def meshflow_cache_key(
+    source_glb: Any,
+    *,
+    reference_images: Any = None,
+    steps: int,
+    num_verts: int,
+    guidance_scale: float = 2.5,
+    seed: int,
+    dtype: str,
+    compile_models: bool,
+    source_ref: str,
+    model_ref: str,
+    result_schema: str = MESHFLOW_RESULT_SCHEMA,
+) -> str:
+    return deterministic_cache_key(
+        "meshflow",
+        source_glb=source_glb,
+        reference_images=reference_images,
+        steps=int(steps),
+        num_verts=int(num_verts),
+        guidance_scale=float(guidance_scale),
+        seed=int(seed),
+        dtype=str(dtype),
+        compile_models=bool(compile_models),
+        source_ref=source_ref,
+        model_ref=model_ref,
+        result_schema=result_schema,
+    )
 
 
 def skintokens_cache_key(

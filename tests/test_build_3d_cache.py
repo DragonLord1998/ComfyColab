@@ -306,9 +306,16 @@ class Build3DCacheTests(unittest.TestCase):
         skintokens_keys = {key for key in expected if key.startswith("skinTokens")}
         self.assertTrue(pixal_keys)
         self.assertTrue(skintokens_keys)
+        stable_pixal_keys = pixal_keys - {"pixal3dEnvironment"}
         self.assertEqual(
-            {key: record["sources"][key] for key in pixal_keys},
-            {key: expected[key] for key in pixal_keys},
+            {key: record["sources"][key] for key in stable_pixal_keys},
+            {key: expected[key] for key in stable_pixal_keys},
+        )
+        self.assertEqual(record["status"], "pending")
+        self.assertNotEqual(
+            record["sources"]["pixal3dEnvironment"],
+            expected["pixal3dEnvironment"],
+            "the MeshFlow worker profile must remain a live-G4 validation gate",
         )
         self.assertEqual(
             {key: record["sources"][key] for key in skintokens_keys},

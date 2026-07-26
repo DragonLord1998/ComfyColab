@@ -300,6 +300,17 @@ def _analyze_geometry_python(
             if first_root != second_root:
                 parent[second_root] = first_root
 
+        # Textured GLBs commonly duplicate POSITION rows at UV chart seams.
+        # Those rows are distinct attribute vertices but the same geometric
+        # point, so index-only topology can misreport thousands of fragments.
+        # Weld exact coincident positions for this diagnostic only; the source
+        # mesh and its UV/normal indexing remain unchanged.
+        coordinate_owner: dict[tuple[float, float, float], int] = {}
+        for index in referenced_vertices:
+            coordinate = vertex_rows[index]
+            owner = coordinate_owner.setdefault(coordinate, index)
+            union(owner, index)
+
         for first_index, second_index, third_index in face_rows:
             union(first_index, second_index)
             union(second_index, third_index)

@@ -334,7 +334,9 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_REF, environment)
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE, environment)
         self.assertIn('"nvdiffrast.torch"', environment)
-        self.assertTrue(remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-v3"))
+        self.assertTrue(
+            remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-meshflow-v4")
+        )
         self.assertIn(
             remote_bootstrap.PIXAL3D_VGGT_OMEGA_SOURCE_REF,
             environment,

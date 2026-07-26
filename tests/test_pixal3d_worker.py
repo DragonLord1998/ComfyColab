@@ -134,6 +134,41 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
         self.assertIn("naf_checkpoint", request["revisions"])
         self.assertNotIn("views", request)
         self.assertNotIn("fusion_temperature", request)
+        self.assertEqual(request["background_removal"], "none")
+
+    def test_worker_request_serializes_ben2_background_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            command = self._command(Path(directory))
+            command = self.worker.Pixal3DWorkerCommand(
+                **{
+                    **command.__dict__,
+                    "background_removal": "ben2",
+                }
+            )
+
+        request = self.worker.build_pixal3d_request(command)
+
+        self.assertEqual(request["background_removal"], "ben2")
+
+    def test_worker_request_serializes_pre_glb_surface_point_cloud(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root)
+            command = self.worker.Pixal3DWorkerCommand(
+                **{
+                    **command.__dict__,
+                    "surface_point_cloud": str(root / "surface.ply"),
+                    "surface_point_count": 65_536,
+                }
+            )
+
+        request = self.worker.build_pixal3d_request(command)
+        argv = command.argv()
+
+        self.assertEqual(request["surface_point_cloud"], str(root / "surface.ply"))
+        self.assertEqual(request["surface_point_count"], 65_536)
+        self.assertIn("--surface-point-cloud", argv)
+        self.assertIn("--surface-point-count", argv)
 
     def test_multiview_request_serializes_ordered_views_without_batch_masquerade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -524,6 +559,10 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             }
 
             worker_main._validate_request(request)
+            request["background_removal"] = "untrusted-backend"
+            with self.assertRaisesRegex(ValueError, "background_removal"):
+                worker_main._validate_request(request)
+            request["background_removal"] = "ben2"
             request["camera_fov_radians"] = math.pi
             with self.assertRaisesRegex(ValueError, "FOV"):
                 worker_main._validate_request(request)
@@ -548,6 +587,72 @@ class Pixal3DWorkerProtocolTests(unittest.TestCase):
             for actual, expected in zip(actual_row, expected_row):
                 self.assertAlmostEqual(actual, expected, places=6)
         self.assertEqual([row[3] for row in right[:3]], [2.0, 0.0, 0.0])
+
+    def test_multiview_sparse_structure_uses_native_front_anchor(self) -> None:
+        multiview = load_multiview()
+
+        images, labels, qualities = multiview.sparse_structure_anchor(
+            ["front-image", "back-image", "left-image", "right-image"],
+            ["front", "back", "left", "right"],
+            [1.0, 0.8, 0.7, 0.9],
+        )
+
+        self.assertEqual(multiview.SPARSE_STRUCTURE_POLICY, "native-front-anchor-v1")
+        self.assertEqual(
+            multiview.GEOMETRY_CONDITIONING_POLICY,
+            "native-front-shape-anchor-v1",
+        )
+        self.assertEqual(images, ["front-image"])
+        self.assertEqual(labels, ["front"])
+        self.assertEqual(qualities, [1.0])
+
+    def test_multiview_sparse_structure_rejects_non_front_anchor(self) -> None:
+        multiview = load_multiview()
+
+        with self.assertRaisesRegex(ValueError, "front first"):
+            multiview.sparse_structure_anchor(
+                ["back-image", "front-image"],
+                ["back", "front"],
+                [1.0, 1.0],
+            )
+
+    def test_worker_rejects_excessively_fragmented_pixal_mesh(self) -> None:
+        worker_main = load_worker_main()
+
+        worker_main._reject_excessive_fragmentation(
+            {
+                "connected_component_count": 4,
+                "connected_components_exact": True,
+            }
+        )
+        with self.assertRaisesRegex(RuntimeError, "4638 connected components"):
+            worker_main._reject_excessive_fragmentation(
+                {
+                    "connected_component_count": 4638,
+                    "connected_components_exact": True,
+                }
+            )
+
+    def test_worker_fragmentation_limit_rejects_current_bad_cat_topology(self) -> None:
+        worker_main = load_worker_main()
+
+        self.assertEqual(worker_main.MAX_PIXAL3D_CONNECTED_COMPONENTS, 64)
+        with self.assertRaisesRegex(RuntimeError, "65 connected components"):
+            worker_main._reject_excessive_fragmentation(
+                {
+                    "connected_component_count": 65,
+                    "connected_components_exact": True,
+                }
+            )
+
+    def test_worker_exports_core_texture_compatible_glb(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "worker/pixal3d/worker_main.py"
+        ).read_text()
+
+        self.assertIn("extension_webp=False", source)
+        self.assertNotIn("extension_webp=True", source)
 
     def test_directional_fusion_weights_are_deterministic_normalized_and_temperature_sharpens(self) -> None:
         multiview = load_multiview()

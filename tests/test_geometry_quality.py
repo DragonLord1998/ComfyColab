@@ -182,6 +182,24 @@ class GeometryQualityTests(unittest.TestCase):
         self.assertTrue(metrics.connected_components_exact)
         self.assertEqual(metrics.to_dict()["connected_component_count"], 2)
 
+    def test_uv_seam_position_duplicates_do_not_create_false_components(self):
+        vertices = [
+            (0, 0, 0),
+            (1, 0, 0),
+            (0, 1, 0),
+            (1, 0, 0),
+            (1, 1, 1),
+            (0, 1, 0),
+        ]
+        metrics = self.quality.analyze_geometry(
+            vertices,
+            [(0, 1, 2), (3, 4, 5)],
+            stage="uv-seam-duplicates",
+        )
+
+        self.assertEqual(metrics.connected_component_count, 1)
+        self.assertTrue(metrics.connected_components_exact)
+
     def test_raw_array_path_is_chunked_and_never_iterates_or_materializes_rows(self):
         try:
             numpy = importlib.import_module("numpy")

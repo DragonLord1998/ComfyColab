@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .colab import ColabClient, parse_ready_payload
+from .artifacts import sync_glb_artifacts, watch_glb_artifacts
 from .notebook import RuntimeResolvedMainNotebookConfig, write_notebook
 from .notebook import write_runtime_resolved_main_notebook
 from .packs.io import load_registry
@@ -342,6 +343,34 @@ def _url(args: argparse.Namespace) -> int:
     return 0
 
 
+def _artifacts(args: argparse.Namespace) -> int:
+    state = _read_state(_state_path(args.state))
+    if not state or state.get("session") != args.session or not state.get("comfyUrl"):
+        print(f"No saved ComfyUI URL for session '{args.session}'.", file=sys.stderr)
+        return 1
+    output = Path(args.output_dir).expanduser().resolve()
+    if args.watch:
+        print(f"[comfycolab] Watching GLB stages -> {output}", flush=True)
+        watch_glb_artifacts(
+            str(state["comfyUrl"]),
+            output,
+            interval=args.interval,
+            on_saved=lambda path: print(f"[comfycolab] Saved: {path}", flush=True),
+            on_error=lambda error: print(
+                f"[comfycolab] Artifact sync retry: {error}",
+                file=sys.stderr,
+                flush=True,
+            ),
+        )
+        return 0
+    saved = sync_glb_artifacts(str(state["comfyUrl"]), output)
+    for path in saved:
+        print(f"Saved: {path}")
+    if not saved:
+        print("No new GLB artifacts.")
+    return 0
+
+
 def _add_connection_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--auth",
@@ -445,6 +474,25 @@ def build_parser() -> argparse.ArgumentParser:
     url.add_argument("--session", default=os.environ.get("COMFYCOLAB_SESSION", "comfycolab"))
     url.add_argument("--state", default=_default_state_path())
     url.set_defaults(handler=_url)
+
+    artifacts = subparsers.add_parser(
+        "artifacts",
+        help="Download generated GLB stage artifacts from Colab to this Mac.",
+    )
+    artifacts.add_argument(
+        "--session", default=os.environ.get("COMFYCOLAB_SESSION", "comfycolab")
+    )
+    artifacts.add_argument("--state", default=_default_state_path())
+    artifacts.add_argument(
+        "--output-dir",
+        default=os.environ.get(
+            "COMFYCOLAB_ARTIFACT_DIR",
+            str(Path("~/Documents/ComfyColab-Meshes").expanduser()),
+        ),
+    )
+    artifacts.add_argument("--watch", action="store_true")
+    artifacts.add_argument("--interval", type=float, default=3.0)
+    artifacts.set_defaults(handler=_artifacts)
 
     pack = subparsers.add_parser("pack", help="Inspect and resolve daughter packs.")
     pack_subparsers = pack.add_subparsers(dest="pack_command", required=True)

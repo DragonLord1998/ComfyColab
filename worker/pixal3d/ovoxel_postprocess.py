@@ -11,6 +11,7 @@ import trimesh.visual
 from flex_gemm.ops.grid_sample import grid_sample_3d
 import nvdiffrast.torch as dr
 import cumesh
+from mesh_cleanup import large_planar_component_face_mask
 
 
 def to_glb(
@@ -193,7 +194,6 @@ def to_glb(
     if verbose:
         print("Done")
 
-
     # --- UV Parameterization ---
     if use_tqdm:
         pbar.set_description("Parameterizing new mesh")
@@ -315,6 +315,29 @@ def to_glb(
     vertices_np[:, 1], vertices_np[:, 2] = vertices_np[:, 2], -vertices_np[:, 1]
     normals_np[:, 1], normals_np[:, 2] = normals_np[:, 2], -normals_np[:, 1]
     uvs_np[:, 1] = 1 - uvs_np[:, 1] # Flip UV V-coordinate
+
+    # Pixal3D can emit a disconnected, nearly planar reconstruction of the
+    # input backdrop. Remove it only after texture baking: the BVH used above
+    # refers to the original high-resolution vertex and face arrays, so
+    # changing those indices earlier would invalidate attribute sampling.
+    # The conservative gate keeps ordinary thin details such as ears,
+    # whiskers, and tails because they do not span most of the scene.
+    final_face_mask, final_removed_planar_components = (
+        large_planar_component_face_mask(vertices_np, faces_np)
+    )
+    if final_removed_planar_components:
+        faces_np = faces_np[final_face_mask]
+        if faces_np.shape[0] < 1000:
+            raise RuntimeError(
+                "Final planar-background cleanup rejected too much Pixal3D geometry"
+            )
+        referenced = np.unique(faces_np.reshape(-1))
+        remap = np.full(vertices_np.shape[0], -1, dtype=faces_np.dtype)
+        remap[referenced] = np.arange(referenced.shape[0], dtype=faces_np.dtype)
+        vertices_np = vertices_np[referenced]
+        normals_np = normals_np[referenced]
+        uvs_np = uvs_np[referenced]
+        faces_np = remap[faces_np]
 
     textured_mesh = trimesh.Trimesh(
         vertices=vertices_np,

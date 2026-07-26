@@ -339,6 +339,9 @@ class ThreeDNodePackTests(unittest.TestCase):
                 "right_image",
                 "top_image",
                 "bottom_image",
+                "view_mode",
+                "multiview_lora_name",
+                "flux_quantization",
                 "quality",
                 "seed",
                 "front_quality",
@@ -364,6 +367,13 @@ class ThreeDNodePackTests(unittest.TestCase):
                 "texture_size",
                 "max_tokens",
                 "keep_worker_loaded",
+                "run_meshflow",
+                "meshflow_steps",
+                "meshflow_num_verts",
+                "meshflow_guidance_scale",
+                "meshflow_dtype",
+                "meshflow_compile",
+                "accept_meshflow_research_license",
                 "cache_mode",
             ],
         )
@@ -374,6 +384,18 @@ class ThreeDNodePackTests(unittest.TestCase):
         )
         self.assertTrue(pixal_mv_advanced_inputs["top_quality"]["optional"])
         self.assertTrue(pixal_mv_advanced_inputs["bottom_quality"]["optional"])
+        self.assertTrue(pixal_mv_advanced_inputs["back_image"]["optional"])
+        self.assertEqual(
+            pixal_mv_advanced_inputs["view_mode"]["default"],
+            "Supplied canonical views",
+        )
+        self.assertFalse(
+            pixal_mv_advanced_inputs["accept_meshflow_research_license"]["default"]
+        )
+        self.assertEqual(
+            [item["name"] for item in pixal_mv_advanced.outputs],
+            ["model_3d", "pixal_stage_model_3d"],
+        )
         encoded_schema = next(schema for schema in schemas if schema.node_id == "ComfyColab3DEncodedMeshToTrimesh")
         self.assertEqual(encoded_schema.inputs[0]["io_type"], "TRELLIS2_SHAPE_LATENT")
 
@@ -453,6 +475,39 @@ class ThreeDNodePackTests(unittest.TestCase):
         )
         self.assertNotIn("top_image", trellis_shape["inputs"])
 
+        trellis_masked_result = graph.build_trellis_multiview_graph(
+            "front",
+            presets.resolve_trellis_settings("1024 — Quality"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            seed=1,
+            remove_background="Auto",
+            front_axis="z",
+            blend_temperature=2.0,
+            cache_mode="Disable cache",
+            cache_key="f" * 64,
+        )
+        trellis_background_nodes = [
+            item
+            for item in trellis_masked_result.expand
+            if item["class_type"] == "Trellis2RemoveBackground"
+        ]
+        self.assertEqual(len(trellis_background_nodes), 4)
+        masked_shape = next(
+            item for item in trellis_masked_result.expand
+            if item["class_type"] == "Trellis2MultiViewImageToShape"
+        )
+        for name in ("front", "back", "left", "right"):
+            self.assertEqual(
+                masked_shape["inputs"][f"{name}_image"].index,
+                0,
+            )
+            self.assertEqual(
+                masked_shape["inputs"][f"{name}_mask"].index,
+                1,
+            )
+
         pixal_result = graph.build_pixal3d_multiview_graph(
             "front",
             presets.resolve_pixal3d_settings("1024 — Stable"),
@@ -478,8 +533,39 @@ class ThreeDNodePackTests(unittest.TestCase):
             ["front_image", "back_image", "left_image", "right_image"],
         )
         self.assertEqual(pixal_worker["inputs"]["front_quality"], 1.0)
+        self.assertEqual(pixal_worker["inputs"]["background_removal"], "none")
         self.assertNotIn("top_quality", pixal_worker["inputs"])
         self.assertNotIn("geometry_guidance", pixal_worker["inputs"])
+
+        pixal_ben2_result = graph.build_pixal3d_multiview_graph(
+            "front",
+            presets.resolve_pixal3d_settings("1024 — Stable"),
+            back_image="back",
+            left_image="left",
+            right_image="right",
+            seed=2,
+            remove_background="Auto",
+            camera_fov_degrees=0.0,
+            fusion_strategy="directional_softmax",
+            fusion_temperature=2.0,
+            keep_worker_loaded=True,
+            cache_mode="Disable cache",
+            cache_key="e" * 64,
+        )
+        pixal_ben2_worker = next(
+            item for item in pixal_ben2_result.expand
+            if item["class_type"] == "ComfyColab3DPixal3DMultiViewWorker"
+        )
+        self.assertEqual(
+            pixal_ben2_worker["inputs"]["background_removal"],
+            "ben2",
+        )
+        self.assertFalse(
+            any(
+                item["class_type"] == "Trellis2RemoveBackground"
+                for item in pixal_ben2_result.expand
+            )
+        )
 
         advanced_result = graph.build_pixal3d_multiview_graph(
             "front",
@@ -531,6 +617,82 @@ class ThreeDNodePackTests(unittest.TestCase):
             advanced_worker["inputs"]["max_normalized_alignment_error"],
             0.3,
         )
+
+        generated_result = graph.build_pixal3d_multiview_graph(
+            "source",
+            presets.resolve_pixal3d_settings("1024 — Stable"),
+            seed=(2**31) - 1,
+            remove_background="Off",
+            camera_fov_degrees=0.0,
+            fusion_strategy="directional_softmax",
+            fusion_temperature=2.0,
+            keep_worker_loaded=False,
+            cache_mode="Disable cache",
+            cache_key="d" * 64,
+            generated_view_source="source",
+            generated_view_lora="canonical.safetensors",
+            generated_view_prompts={
+                "front": "front prompt",
+                "back": "back prompt",
+                "left": "left prompt",
+                "right": "right prompt",
+            },
+            meshflow_config={
+                "steps": 28,
+                "num_verts": 4096,
+                "guidance_scale": 2.75,
+                "seed": 7,
+                "dtype": "fp16",
+                "compile_models": False,
+                "accept_research_license": True,
+                "cache_key": "e" * 64,
+            },
+            return_stage_outputs=True,
+        )
+        generated_types = [item["class_type"] for item in generated_result.expand]
+        self.assertEqual(generated_types.count("CLIPTextEncode"), 5)
+        self.assertEqual(generated_types.count("ReferenceLatent"), 8)
+        self.assertEqual(generated_types.count("EmptyFlux2LatentImage"), 4)
+        self.assertEqual(generated_types.count("SamplerCustomAdvanced"), 4)
+        self.assertEqual(generated_types.count("VAEDecode"), 4)
+        self.assertEqual(generated_types.count("SaveImage"), 4)
+        self.assertEqual(generated_types.count("SaveGLB"), 2)
+        self.assertIn("ComfyColab3DMeshFlowWorker", generated_types)
+        meshflow_node = next(
+            item
+            for item in generated_result.expand
+            if item["class_type"] == "ComfyColab3DMeshFlowWorker"
+        )
+        for name in (
+            "front_reference_image",
+            "back_reference_image",
+            "left_reference_image",
+            "right_reference_image",
+        ):
+            self.assertIn(name, meshflow_node["inputs"])
+        self.assertIn("surface_point_cloud_path", meshflow_node["inputs"])
+        pixal_finalizer_index, pixal_finalizer = next(
+            (index, item)
+            for index, item in enumerate(generated_result.expand)
+            if item["class_type"] == "ComfyColab3DPixal3DPathToFile3D"
+        )
+        self.assertIn("surface_point_cloud_path", pixal_finalizer["inputs"])
+        self.assertEqual(
+            meshflow_node["inputs"]["surface_point_cloud_path"].node_id,
+            pixal_finalizer_index,
+        )
+        self.assertEqual(
+            meshflow_node["inputs"]["surface_point_cloud_path"].index,
+            1,
+        )
+        self.assertEqual(meshflow_node["inputs"]["guidance_scale"], 2.75)
+        self.assertEqual(len(generated_result.values), 2)
+        sampler_seeds = [
+            item["inputs"]["noise_seed"]
+            for item in generated_result.expand
+            if item["class_type"] == "RandomNoise"
+        ]
+        self.assertEqual(sampler_seeds, [(2**31) - 1, 0, 1, 2])
 
     def test_cubepart_public_node_blocks_before_provisioning_without_license_acceptance(self):
         load_package()
@@ -944,6 +1106,41 @@ class ThreeDNodePackTests(unittest.TestCase):
                     str(source), "../escape", cache_mode="Disable cache"
                 )
             self.assertFalse((Path(directory) / "escape.glb").exists())
+
+    def test_pixal3d_finalizer_stabilizes_surface_point_cloud_before_cleanup(self):
+        load_package()
+        nodes = importlib.import_module("comfycolab_3d_test.nodes")
+        key = "e" * 64
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            "os.environ",
+            {
+                "COMFYCOLAB_3D_CACHE": str(Path(directory) / "cache"),
+                "COMFYCOLAB_3D_OUTPUT": str(Path(directory) / "output"),
+            },
+        ):
+            owned = Path(tempfile.mkdtemp(prefix="comfycolab-pixal3d-"))
+            source = owned / "model.glb"
+            point_cloud = owned / "surface_point_cloud.ply"
+            write_glb(source, textured=True, volumetric=True)
+            point_cloud.write_text(
+                "ply\nformat ascii 1.0\nelement vertex 1\n"
+                "property float x\nproperty float y\nproperty float z\n"
+                "end_header\n0 0 0\n",
+                encoding="utf-8",
+            )
+            result = nodes.ComfyColab3DPixal3DPathToFile3D.execute(
+                str(source),
+                key,
+                cache_mode="Disable cache",
+                surface_point_cloud_path=str(point_cloud),
+            )
+
+            stable_point_cloud = Path(result.values[1])
+            self.assertFalse(owned.exists())
+            self.assertTrue(stable_point_cloud.is_file())
+            self.assertNotEqual(stable_point_cloud.parent, owned)
+            nodes._remove_owned_pixal3d_surface_temp(stable_point_cloud)
+            self.assertFalse(stable_point_cloud.parent.exists())
 
     def test_trellis_facade_expands_to_exact_modular_nodes(self):
         package = load_package()

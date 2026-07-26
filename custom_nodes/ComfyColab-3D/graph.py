@@ -33,6 +33,11 @@ def _finish(graph, link):
     return io.NodeOutput(link, expand=graph.finalize())
 
 
+def _finish_multiple(graph, *links):
+    io = importlib.import_module("comfy_api.latest").io
+    return io.NodeOutput(*links, expand=graph.finalize())
+
+
 def _progress_checkpoint(
     graph,
     value,
@@ -563,12 +568,8 @@ def build_pixal3d_graph(
     progress_node_id: str | None = None,
 ):
     graph = _builder()
-    if remove_background == "Off":
-        mask = graph.node("ComfyColab3DImageOpaqueMask", image=image)
-        prepared_image, prepared_mask = image, mask.out(0)
-    else:
-        background = graph.node("Trellis2RemoveBackground", image=image, low_vram=True)
-        prepared_image, prepared_mask = background.out(0), background.out(1)
+    mask = graph.node("ComfyColab3DImageOpaqueMask", image=image)
+    prepared_image, prepared_mask = image, mask.out(0)
     worker = graph.node(
         "ComfyColab3DPixal3DWorker",
         image=prepared_image,
@@ -583,6 +584,7 @@ def build_pixal3d_graph(
         keep_worker_loaded=keep_worker_loaded,
         cache_mode=cache_mode,
         cache_key=cache_key,
+        background_removal="none" if remove_background == "Off" else "ben2",
     )
     glb_path = _progress_checkpoint(
         graph,
@@ -638,7 +640,118 @@ def build_pixal3d_multiview_graph(
     cache_mode: str,
     cache_key: str,
     progress_node_id: str | None = None,
+    generated_view_source: Any = None,
+    generated_view_lora: str = "",
+    generated_view_prompts: dict[str, str] | None = None,
+    flux_quantization: str = "Q4_K_M",
+    meshflow_config: dict[str, Any] | None = None,
+    return_stage_outputs: bool = False,
 ):
+    graph = _builder()
+    if generated_view_source is not None:
+        if not generated_view_lora:
+            raise ValueError("Generated-view mode requires a FLUX Klein multiview LoRA")
+        prompts = generated_view_prompts or {}
+        missing_prompts = [
+            name for name in ("front", "back", "left", "right") if not prompts.get(name)
+        ]
+        if missing_prompts:
+            raise ValueError(
+                "Generated-view prompts are missing: " + ", ".join(missing_prompts)
+            )
+        loader = graph.node(
+            "ComfyColabFlux2Klein9BBundleLoader",
+            quantization=flux_quantization,
+            force_redownload=False,
+        )
+        lora = graph.node(
+            "LoraLoaderModelOnly",
+            model=loader.out(0),
+            lora_name=generated_view_lora,
+            strength_model=1.0,
+        )
+        scaled_reference = graph.node(
+            "ImageScaleToTotalPixels",
+            image=generated_view_source,
+            upscale_method="lanczos",
+            megapixels=1.0,
+            resolution_steps=16,
+        )
+        reference_latent = graph.node(
+            "VAEEncode",
+            pixels=scaled_reference.out(0),
+            vae=loader.out(2),
+        )
+        negative_text = graph.node(
+            "CLIPTextEncode",
+            clip=loader.out(1),
+            text="",
+        )
+        sampler = graph.node("KSamplerSelect", sampler_name="euler")
+        sigmas = graph.node(
+            "Flux2Scheduler",
+            steps=4,
+            width=1024,
+            height=1024,
+        )
+        generated: dict[str, Any] = {}
+        for offset, name in enumerate(("front", "back", "left", "right")):
+            positive_text = graph.node(
+                "CLIPTextEncode",
+                clip=loader.out(1),
+                text=prompts[name],
+            )
+            positive = graph.node(
+                "ReferenceLatent",
+                conditioning=positive_text.out(0),
+                latent=reference_latent.out(0),
+            )
+            negative = graph.node(
+                "ReferenceLatent",
+                conditioning=negative_text.out(0),
+                latent=reference_latent.out(0),
+            )
+            latent = graph.node(
+                "EmptyFlux2LatentImage",
+                width=1024,
+                height=1024,
+                batch_size=1,
+            )
+            noise = graph.node(
+                "RandomNoise",
+                noise_seed=(int(seed) + offset) % (2**31),
+            )
+            guider = graph.node(
+                "CFGGuider",
+                model=lora.out(0),
+                positive=positive.out(0),
+                negative=negative.out(0),
+                cfg=1.0,
+            )
+            sample = graph.node(
+                "SamplerCustomAdvanced",
+                noise=noise.out(0),
+                guider=guider.out(0),
+                sampler=sampler.out(0),
+                sigmas=sigmas.out(0),
+                latent_image=latent.out(0),
+            )
+            decoded = graph.node(
+                "VAEDecode",
+                samples=sample.out(0),
+                vae=loader.out(2),
+            )
+            generated[name] = decoded.out(0)
+            graph.node(
+                "SaveImage",
+                images=decoded.out(0),
+                filename_prefix=f"3d/Pixal3DMV_Advanced/views/{name}",
+            )
+        front_image = generated["front"]
+        back_image = generated["back"]
+        left_image = generated["left"]
+        right_image = generated["right"]
+
     views = {
         name: image
         for name, image in (
@@ -653,9 +766,11 @@ def build_pixal3d_multiview_graph(
     }
     if len(views) < 2:
         raise ValueError("Pixal3DMV requires front_image plus at least one additional view")
-    graph = _builder()
     prepared = {
-        name: _prepare_view(graph, image, remove_background)
+        name: (
+            image,
+            graph.node("ComfyColab3DImageOpaqueMask", image=image).out(0),
+        )
         for name, image in views.items()
     }
     worker_inputs: dict[str, Any] = {
@@ -671,6 +786,7 @@ def build_pixal3d_multiview_graph(
         "keep_worker_loaded": keep_worker_loaded,
         "cache_mode": cache_mode,
         "cache_key": cache_key,
+        "background_removal": "none" if remove_background == "Off" else "ben2",
     }
     for name, (image, mask) in prepared.items():
         worker_inputs[f"{name}_image"] = image
@@ -700,11 +816,16 @@ def build_pixal3d_multiview_graph(
         total=3,
         status="Stage 2/3 - Experimental Pixal3D view fusion finished; validating GLB...",
     )
+    final_inputs = {
+        "glb_path": glb_path,
+        "cache_key": cache_key,
+        "cache_mode": cache_mode,
+    }
+    if meshflow_config:
+        final_inputs["surface_point_cloud_path"] = worker.out(1)
     final = graph.node(
         "ComfyColab3DPixal3DPathToFile3D",
-        glb_path=glb_path,
-        cache_key=cache_key,
-        cache_mode=cache_mode,
+        **final_inputs,
     )
     final_file = _progress_checkpoint(
         graph,
@@ -712,6 +833,60 @@ def build_pixal3d_multiview_graph(
         progress_node_id=progress_node_id,
         completed=3,
         total=3,
-        status="Complete - experimental Pixal3DMV model ready",
+        status=(
+            "Stage 2/3 - Pixal3DMV model ready; starting MeshFlow..."
+            if meshflow_config
+            else "Complete - experimental Pixal3DMV model ready"
+        ),
     )
-    return _finish(graph, final_file)
+    if return_stage_outputs:
+        graph.node(
+            "SaveGLB",
+            mesh=final_file,
+            filename_prefix="3d/Pixal3DMV_Advanced/stage_pixal3d",
+        )
+    if not meshflow_config:
+        if return_stage_outputs:
+            return _finish_multiple(graph, final_file, final_file)
+        return _finish(graph, final_file)
+
+    meshflow_worker = graph.node(
+        "ComfyColab3DMeshFlowWorker",
+        model_3d=final_file,
+        surface_point_cloud_path=final.out(1),
+        front_reference_image=front_image,
+        back_reference_image=back_image,
+        left_reference_image=left_image,
+        right_reference_image=right_image,
+        top_reference_image=top_image,
+        bottom_reference_image=bottom_image,
+        steps=int(meshflow_config["steps"]),
+        num_verts=int(meshflow_config["num_verts"]),
+        guidance_scale=float(meshflow_config["guidance_scale"]),
+        seed=int(meshflow_config["seed"]),
+        dtype=str(meshflow_config["dtype"]),
+        compile_models=bool(meshflow_config["compile_models"]),
+        accept_research_license=bool(meshflow_config["accept_research_license"]),
+    )
+    meshflow_file = graph.node(
+        "ComfyColab3DMeshFlowPathToFile3D",
+        glb_path=meshflow_worker.out(0),
+        cache_key=str(meshflow_config["cache_key"]),
+        cache_mode=cache_mode,
+    )
+    completed_file = _progress_checkpoint(
+        graph,
+        meshflow_file.out(0),
+        progress_node_id=progress_node_id,
+        completed=3,
+        total=3,
+        status="Complete - MeshFlow geometry ready",
+    )
+    graph.node(
+        "SaveGLB",
+        mesh=completed_file,
+        filename_prefix="3d/Pixal3DMV_Advanced/stage_meshflow",
+    )
+    if return_stage_outputs:
+        return _finish_multiple(graph, completed_file, final_file)
+    return _finish(graph, completed_file)

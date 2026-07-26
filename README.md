@@ -363,6 +363,7 @@ or search for:
 - **ComfyColab TripoSplat — Image to Gaussian Splat**
 - **ComfyColab Pixal3D — Image to 3D**
 - **ComfyColab Pixal3DMV (Experimental) — Multi-View to 3D**
+- **ComfyColab Pixal3DMV Advanced — Single Image / Multi-View / MeshFlow**
 - **ComfyColab SkinTokens — Auto Rig 3D**
 - **ComfyColab CubePart — Segment 3D Parts**
 
@@ -486,8 +487,15 @@ coverage remain pending.
 
 ### Pixal3DMV Advanced — VGGT-Ω Guided Multi-View to 3D
 
-The Advanced facade keeps the existing four required labeled views, optional
-top/bottom pair, and per-view quality controls, then adds a frozen
+The Advanced facade supports two input paths. `Supplied canonical views` keeps
+the existing front/back/left/right inputs, optional top/bottom pair, and
+per-view quality controls. `Generate separate views — FLUX.2 Klein 9B LoRA`
+uses `front_image` as one source image and generates four independent 1024px
+front/back/left/right images. Each angle is a separate FLUX image-edit
+inference and a separate saved image; no contact sheet is created or fed to
+Pixal3D. The LoRA filename must exist under `ComfyUI/models/loras`.
+
+Both paths then add a frozen
 VGGT-Ω-1B-512 geometry prepass. VGGT-Ω predicts depth, confidence, and cameras
 jointly. One sequence-level Sim(3) aligns its inferred camera/depth space to
 Pixal3D's canonical labeled cameras; the exact Pixal cameras remain
@@ -513,6 +521,25 @@ retrieve the byte-identical checkpoint from the revision-pinned
 If the optional Hugging Face Xet client cannot obtain a public read token,
 ComfyColab retries that same immutable mirror revision through its direct
 `resolve` URL and applies the same byte-count and SHA-256 gate.
+
+When `run_meshflow` is enabled, the validated Pixal GLB becomes MeshFlow's
+geometry condition. MeshFlow runs geometry-only, so it does not load DINOv3
+for image conditioning. The node saves the Pixal-stage GLB and MeshFlow-stage
+GLB independently in the remote ComfyUI output history and returns both: the
+final model first and the Pixal checkpoint second. MeshFlow is gated and
+noncommercial research software; the node requires explicit license
+acceptance.
+
+To continuously copy every completed GLB stage from the active Colab runtime
+to this Mac, run:
+
+```bash
+comfycolab artifacts --watch
+```
+
+The default local directory is `~/Documents/ComfyColab-Meshes`. Override it
+with `--output-dir` or `COMFYCOLAB_ARTIFACT_DIR`. The watcher stores its own
+download ledger and does not redownload an already saved remote artifact.
 The mirror has no independent license metadata: its availability is not a
 grant of rights or official access approval, and users remain responsible for
 the applicable upstream checkpoint terms and access conditions. The strict

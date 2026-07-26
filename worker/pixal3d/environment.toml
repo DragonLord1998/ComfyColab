@@ -1,6 +1,6 @@
 schema = 1
 name = "pixal3d-worker"
-profile = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
+profile = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-meshflow-v4"
 python = "3.12.13"
 platform = "linux-64"
 cuda = "12.8"
@@ -26,6 +26,12 @@ vggt_omega_fallback_model_repo = "1kaiser/vggt-omega-jax"
 vggt_omega_fallback_model = "a8c3a718e0cf78e9e4c6847229efea793d37f060"
 vggt_omega_fallback_checkpoint_url = "https://huggingface.co/1kaiser/vggt-omega-jax/resolve/a8c3a718e0cf78e9e4c6847229efea793d37f060/vggt_omega_1b_512.pt?download=true"
 vggt_omega_checkpoint_sha256 = "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"
+ben2 = "2c99a5da477b5523585bfa5c893888a6e818a8f6"
+ben2_model_repo = "PramaLLC/BEN2"
+ben2_model = "e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f"
+meshflow = "55f56f60e1bbf98d1c1991670ac998094d5f59ae"
+meshflow_model_repo = "facebook/meshflow"
+meshflow_model = "9249a90e4997e105e533d6f502453fa3b344676f"
 utils3d = "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl"
 natten = "natten==0.21.6+torch2110cu128"
 comfy_env = "0.3.89"
@@ -33,6 +39,7 @@ comfy_env = "0.3.89"
 [pip]
 requirements = [
   "git+https://github.com/microsoft/MoGe.git@07444410f1e33f402353b99d6ccd26bd31e469e8",
+  "git+https://github.com/PramaLLC/BEN2.git@2c99a5da477b5523585bfa5c893888a6e818a8f6",
   "pillow==12.0.0",
   "imageio==2.37.2",
   "imageio-ffmpeg==0.6.0",
@@ -50,6 +57,7 @@ requirements = [
   "huggingface_hub[hf_xet]>=0.36.0,<2",
   "einops==0.8.1",
   "safetensors==0.7.0",
+  "omegaconf==2.3.0",
 ]
 extra_wheels = [
   "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl",
@@ -79,6 +87,9 @@ imports = [
   "einops",
   "safetensors",
   "pixal3d.pipelines.Pixal3DImageTo3DPipeline",
+  "omegaconf",
+  "torchvision",
+  "ben2",
 ]
 requires_cuda = true
 requires_natten_lib = true

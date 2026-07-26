@@ -17,6 +17,8 @@ from typing import Any
 
 
 ADAPTER_NAME = "reconviagen-inspired-projection-fusion-v1"
+SPARSE_STRUCTURE_POLICY = "native-front-anchor-v1"
+GEOMETRY_CONDITIONING_POLICY = "native-front-shape-anchor-v1"
 VIEW_ORDER = ("front", "back", "left", "right", "top", "bottom")
 CAMERA_DIRS_BLENDER = {
     "front": (0.0, -1.0, 0.0),
@@ -255,21 +257,46 @@ def patch_pipeline_projection_grids(pipeline) -> None:
             _patch_projection_grid(grid)
 
 
-def _view_tensors(pipeline, labels: list[str], camera_params: dict[str, float]):
+def sparse_structure_anchor(
+    images,
+    labels: list[str],
+    qualities: list[float],
+):
+    """Keep occupancy generation on Pixal3D's native, trained front-view path."""
+
+    if not labels or labels[0] != "front":
+        raise ValueError("Pixal3D sparse structure anchoring requires front first")
+    if len(images) != len(labels) or len(qualities) != len(labels):
+        raise ValueError("Pixal3D multiview images, labels, and qualities must align")
+    return images[:1], labels[:1], qualities[:1]
+
+
+def _view_tensors(
+    pipeline,
+    labels: list[str],
+    camera_params: dict[str, float],
+    *,
+    native_front_projection: bool = False,
+):
     import torch
 
     device = pipeline.device
     camera_angle_x = float(camera_params["camera_angle_x"])
     distance = float(camera_params["distance"])
     mesh_scale = float(camera_params.get("mesh_scale", 1.0))
-    return {
+    camera = {
         "camera_angle_x": torch.full((len(labels),), camera_angle_x, device=device),
         "distance": torch.full((len(labels),), distance, device=device),
         "mesh_scale": torch.full((len(labels),), mesh_scale, device=device),
-        "transform_matrix": torch.stack(
-            [camera_transform_for_view(label, distance) for label in labels]
-        ).to(device),
     }
+    if native_front_projection:
+        if labels != ["front"]:
+            raise ValueError("Native front projection accepts exactly one front view")
+    else:
+        camera["transform_matrix"] = torch.stack(
+            [camera_transform_for_view(label, distance) for label in labels]
+        ).to(device)
+    return camera
 
 
 def _fuse_dense_projection(
@@ -441,6 +468,7 @@ def _encode_fused_cond(
     coords=None,
     grid_resolution_override: int | None = None,
     sparse_resolution: int | None = None,
+    native_front_projection: bool = False,
 ) -> dict[str, Any]:
     import torch
     from pixal3d.modules.sparse import SparseTensor
@@ -458,7 +486,12 @@ def _encode_fused_cond(
         ).to(device)
         _patch_projection_grid(image_cond_model.proj_grid)
     try:
-        camera = _view_tensors(pipeline, labels, camera_params)
+        camera = _view_tensors(
+            pipeline,
+            labels,
+            camera_params,
+            native_front_projection=native_front_projection,
+        )
         outputs = image_cond_model(images, **camera)
         if len(outputs) == 3:
             cond = {
@@ -559,16 +592,22 @@ def run_multiview_projection_fusion(
     torch.manual_seed(seed)
     patch_pipeline_projection_grids(pipeline)
 
+    structure_images, structure_labels, structure_qualities = sparse_structure_anchor(
+        images,
+        labels,
+        qualities,
+    )
     cond_ss = _encode_fused_cond(
         pipeline,
         pipeline.image_cond_model_ss,
-        images,
-        labels,
+        structure_images,
+        structure_labels,
         camera_params,
         fusion_strategy,
         fusion_temperature,
-        qualities=qualities,
-        geometry_context=geometry_context,
+        qualities=structure_qualities,
+        geometry_context=None,
+        native_front_projection=True,
     )
     ss_res = 32
     coords = pipeline.sample_sparse_structure(
@@ -580,15 +619,16 @@ def run_multiview_projection_fusion(
     cond_shape_lr = _encode_fused_cond(
         pipeline,
         pipeline.image_cond_model_shape_512,
-        images,
-        labels,
+        structure_images,
+        structure_labels,
         camera_params,
         fusion_strategy,
         fusion_temperature,
-        qualities=qualities,
-        geometry_context=geometry_context,
+        qualities=structure_qualities,
+        geometry_context=None,
         coords=coords,
         sparse_resolution=32,
+        native_front_projection=True,
     )
     lr_slat = pipeline.sample_shape_slat(
         cond_shape_lr,
@@ -630,16 +670,17 @@ def run_multiview_projection_fusion(
     cond_shape_hr = _encode_fused_cond(
         pipeline,
         pipeline.image_cond_model_shape_1024,
-        images,
-        labels,
+        structure_images,
+        structure_labels,
         camera_params,
         fusion_strategy,
         fusion_temperature,
-        qualities=qualities,
-        geometry_context=geometry_context,
+        qualities=structure_qualities,
+        geometry_context=None,
         coords=hr_coords_unique,
         grid_resolution_override=actual_grid_res,
         sparse_resolution=actual_grid_res,
+        native_front_projection=True,
     )
     noise_hr = SparseTensor(
         feats=torch.randn(

@@ -47,6 +47,7 @@ COMFY_DIR = CONTENT / "ComfyUI"
 REPO_DIR = CONTENT / "ComfyColab"
 ULTRASHAPE_DIR = CONTENT / "UltraShape-1.0"
 PIXAL3D_DIR = CONTENT / "Pixal3D"
+MESHFLOW_DIR = CONTENT / "meshflow"
 SKINTOKENS_DIR = CONTENT / "SkinTokens"
 CUBE_DIR = CONTENT / "cube"
 STATE_DIR = CONTENT / ".comfycolab"
@@ -82,6 +83,8 @@ PIXAL3D_CACHE_MANIFEST = "pixal3d-g4-v1.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 PIXAL3D_REF = "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af"
+MESHFLOW_REF = "55f56f60e1bbf98d1c1991670ac998094d5f59ae"
+MESHFLOW_MODEL_REF = "9249a90e4997e105e533d6f502453fa3b344676f"
 SKINTOKENS_REF = "273b691d35989d71cd17ff2895fdc735097b92d1"
 CUBEPART_REF = "3c6d06ddbef3160a1e1950cb13ab63dd12a61e50"
 SKINTOKENS_MODEL_REPO = "VAST-AI/SkinTokens"
@@ -97,6 +100,9 @@ PIXAL3D_DINOV3_MODEL_REF = "3c276edd87d6f6e569ff0c4400e086807d0f3881"
 PIXAL3D_MOGE_MODEL_REPO = "Ruicheng/moge-2-vitl"
 PIXAL3D_MOGE_MODEL_REF = "39c4d5e957afe587e04eec59dc2bcc3be5ecd968"
 PIXAL3D_MOGE_SOURCE_REF = "07444410f1e33f402353b99d6ccd26bd31e469e8"
+PIXAL3D_BEN2_SOURCE_REF = "2c99a5da477b5523585bfa5c893888a6e818a8f6"
+PIXAL3D_BEN2_MODEL_REPO = "PramaLLC/BEN2"
+PIXAL3D_BEN2_MODEL_REF = "e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f"
 PIXAL3D_NAF_REF = "37f2dfc180f2de53d98bd601109c0da0dd6b0f43"
 PIXAL3D_NAF_REPO = "valeoai/NAF"
 PIXAL3D_NAF_CHECKPOINT_SHA256 = (
@@ -119,7 +125,7 @@ PIXAL3D_UTILS3D_WHEEL = (
     "20260430/utils3d-0.0.2-py3-none-any.whl"
 )
 PIXAL3D_WORKER_ENVIRONMENT = "pixal3d-worker"
-PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
+PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-meshflow-v4"
 PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
 PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
 PIXAL3D_NVDIFFRAST_PACKAGE = (
@@ -130,6 +136,7 @@ PIXAL3D_NATTEN_PACKAGE = "natten==0.21.6+torch2110cu128"
 PIXAL3D_NATTEN_WHEEL_INDEX = "https://whl.natten.org"
 PIXAL3D_INFERENCE_REQUIREMENTS = (
     f"git+https://github.com/microsoft/MoGe.git@{PIXAL3D_MOGE_SOURCE_REF}",
+    f"git+https://github.com/PramaLLC/BEN2.git@{PIXAL3D_BEN2_SOURCE_REF}",
     "pillow==12.0.0",
     "imageio==2.37.2",
     "imageio-ffmpeg==0.6.0",
@@ -147,6 +154,7 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
     "huggingface_hub[hf_xet]>=0.36.0,<2",
     "einops==0.8.1",
     "safetensors==0.7.0",
+    "omegaconf==2.3.0",
 )
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
@@ -938,6 +946,8 @@ def expected_pixal3d_sources() -> dict[str, str]:
         "dinov3": PIXAL3D_DINOV3_MODEL_REF,
         "mogeModel": PIXAL3D_MOGE_MODEL_REF,
         "mogeSource": PIXAL3D_MOGE_SOURCE_REF,
+        "ben2": PIXAL3D_BEN2_SOURCE_REF,
+        "ben2Model": PIXAL3D_BEN2_MODEL_REF,
         "naf": PIXAL3D_NAF_REF,
         "nafCheckpoint": PIXAL3D_NAF_CHECKPOINT_SHA256,
         "utils3d": PIXAL3D_UTILS3D_WHEEL,
@@ -1129,7 +1139,10 @@ def validate_pixal3d_runtime(python: Path | None = None) -> None:
         "if importlib.util.find_spec(candidate) is not None))) if importlib.util.find_spec(name) is None "
         "else None) for name, candidates in aliases.items()]; "
         "import pixal3d, utils3d, moge, o_voxel, cumesh, flex_gemm, drtk, trimesh; "
+        "import omegaconf, torchvision; "
         "import nvdiffrast.torch; "
+        f"sys.path.insert(0, {str(MESHFLOW_DIR)!r}); "
+        "from meshflow.pipelines import MeshFlowPipeline; "
         "from pixal3d.pipelines import Pixal3DImageTo3DPipeline; "
         "natten = importlib.import_module('natten'); "
         "assert getattr(natten, 'HAS_LIBNATTEN', False); "
@@ -2326,6 +2339,11 @@ def main() -> None:
         PIXAL3D_REF,
     )
     clone_or_update(
+        "https://github.com/facebookresearch/meshflow.git",
+        MESHFLOW_DIR,
+        MESHFLOW_REF,
+    )
+    clone_or_update(
         "https://github.com/VAST-AI-Research/SkinTokens.git",
         SKINTOKENS_DIR,
         SKINTOKENS_REF,
@@ -2383,6 +2401,9 @@ def main() -> None:
     environment["COMFYCOLAB_PIXAL3D_MOGE_MODEL_REF"] = PIXAL3D_MOGE_MODEL_REF
     environment["COMFYCOLAB_PIXAL3D_NAF_REF"] = PIXAL3D_NAF_REF
     environment["COMFYCOLAB_PIXAL3D_ENVIRONMENT_REF"] = PIXAL3D_ENVIRONMENT_REF
+    environment["COMFYCOLAB_MESHFLOW_SOURCE"] = str(MESHFLOW_DIR)
+    environment["COMFYCOLAB_MESHFLOW_SOURCE_REF"] = MESHFLOW_REF
+    environment["COMFYCOLAB_MESHFLOW_MODEL_REF"] = MESHFLOW_MODEL_REF
     environment["COMFYCOLAB_SKINTOKENS_SOURCE"] = str(SKINTOKENS_DIR)
     environment["COMFYCOLAB_SKINTOKENS_SOURCE_REF"] = SKINTOKENS_REF
     environment["COMFYCOLAB_SKINTOKENS_MODEL_REPO"] = SKINTOKENS_MODEL_REPO
@@ -2485,6 +2506,7 @@ def main() -> None:
             "geometryCommit": git_commit(GEOMETRY_DIR),
             "ultrashapeCommit": git_commit(ULTRASHAPE_DIR),
             "pixal3dCommit": git_commit(PIXAL3D_DIR),
+            "meshflowCommit": git_commit(MESHFLOW_DIR),
             "skinTokensCommit": git_commit(SKINTOKENS_DIR),
             "cubePartCommit": git_commit(CUBE_DIR) if cubepart_source_ready else None,
             "cubePartSourceReady": cubepart_source_ready,
@@ -2500,6 +2522,7 @@ def main() -> None:
             "pixal3dMogeModelRef": PIXAL3D_MOGE_MODEL_REF,
             "pixal3dNafRef": PIXAL3D_NAF_REF,
             "pixal3dEnvironmentRef": PIXAL3D_ENVIRONMENT_REF,
+            "meshflowModelRef": MESHFLOW_MODEL_REF,
             "trellisPatch": trellis_patch,
             "trellisCategoryPatch": trellis_category_patch,
             "trellisMultiviewPatch": trellis_multiview_patch,

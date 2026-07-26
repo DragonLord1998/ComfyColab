@@ -76,6 +76,9 @@ class Pixal3DWorkerCommand:
     occlusion_tau: float = 0.03
     geometry_floor: float = 0.05
     max_normalized_alignment_error: float = 0.35
+    background_removal: str = "none"
+    surface_point_cloud: str = ""
+    surface_point_count: int = 65_536
 
     def argv(self) -> list[str]:
         """Return a complete one-request invocation for diagnostics and tests."""
@@ -96,6 +99,15 @@ class Pixal3DWorkerCommand:
             ("--max-tokens", request["max_tokens"]),
         ):
             values.extend((name, str(value)))
+        if self.surface_point_cloud:
+            values.extend(
+                (
+                    "--surface-point-cloud",
+                    self.surface_point_cloud,
+                    "--surface-point-count",
+                    str(int(self.surface_point_count)),
+                )
+            )
         return values
 
     def server_argv(self) -> list[str]:
@@ -142,6 +154,7 @@ def build_pixal3d_request(command: Pixal3DWorkerCommand) -> dict:
         "target_face_count": int(command.target_face_count),
         "texture_size": int(command.texture_size),
         "max_tokens": int(command.max_tokens),
+        "background_removal": str(command.background_removal),
         "revisions": {
             "source": command.source_ref,
             "model": command.model_ref,
@@ -152,6 +165,11 @@ def build_pixal3d_request(command: Pixal3DWorkerCommand) -> dict:
             "environment": command.environment_ref,
         },
     }
+    if command.surface_point_cloud:
+        if int(command.surface_point_count) < 4096:
+            raise ValueError("surface_point_count must be at least 4096")
+        request["surface_point_cloud"] = str(command.surface_point_cloud)
+        request["surface_point_count"] = int(command.surface_point_count)
     if command.views is not None:
         request["views"] = _validate_pixal3d_views(command.views)
         request["fusion_temperature"] = _validate_fusion_temperature(
@@ -362,7 +380,7 @@ def _terminate_process(process, timeout: float = 5.0) -> None:
 def _owned_artifacts(command: Pixal3DWorkerCommand) -> tuple[Path, ...]:
     output = Path(command.output_mesh)
     metadata = Path(command.metadata_output)
-    return (
+    artifacts = [
         output,
         metadata,
         output.with_suffix(output.suffix + ".partial"),
@@ -371,7 +389,19 @@ def _owned_artifacts(command: Pixal3DWorkerCommand) -> tuple[Path, ...]:
         metadata.with_suffix(metadata.suffix + ".partial"),
         metadata.with_name(metadata.stem + ".partial" + metadata.suffix),
         metadata.with_name("." + metadata.stem + ".partial" + metadata.suffix),
-    )
+    ]
+    if command.surface_point_cloud:
+        point_cloud = Path(command.surface_point_cloud)
+        artifacts.extend(
+            [
+                point_cloud,
+                point_cloud.with_suffix(point_cloud.suffix + ".partial"),
+                point_cloud.with_name(
+                    "." + point_cloud.stem + ".partial" + point_cloud.suffix
+                ),
+            ]
+        )
+    return tuple(artifacts)
 
 
 def _cleanup(command: Pixal3DWorkerCommand, *, include_final: bool = True) -> None:
@@ -526,6 +556,20 @@ class Pixal3DWorkerPool:
                         raise RuntimeError("Pixal3D worker reported an unexpected output path")
                     if metadata.resolve() != Path(command.metadata_output).resolve():
                         raise RuntimeError("Pixal3D worker reported an unexpected metadata path")
+                    if command.surface_point_cloud:
+                        point_cloud = Path(
+                            str(result.get("surface_point_cloud", ""))
+                        )
+                        if point_cloud.resolve() != Path(
+                            command.surface_point_cloud
+                        ).resolve():
+                            raise RuntimeError(
+                                "Pixal3D worker reported an unexpected surface point-cloud path"
+                            )
+                        if not point_cloud.is_file() or point_cloud.stat().st_size <= 0:
+                            raise RuntimeError(
+                                "Pixal3D worker surface point cloud is missing"
+                            )
                     validate_volumetric_glb(
                         output,
                         stage="Pixal3D worker output",
