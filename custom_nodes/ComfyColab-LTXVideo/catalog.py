@@ -7,6 +7,7 @@ from typing import Any
 
 
 CATALOG_PATH = Path(__file__).with_name("catalog") / "ltx_2_3.json"
+H3_CATALOG_PATH = Path(__file__).with_name("catalog") / "minimax_h3.json"
 
 
 class CatalogError(RuntimeError):
@@ -100,3 +101,52 @@ def selected_assets(
     if fps_value != 48:
         assets.pop("temporal_2x")
     return assets
+
+
+@lru_cache(maxsize=1)
+def load_h3_catalog() -> dict[str, Any]:
+    try:
+        catalog = json.loads(H3_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CatalogError(f"Unable to read the MiniMax H3 catalog: {error}") from error
+    if catalog.get("schema_version") != 1:
+        raise CatalogError("Unsupported MiniMax H3 catalog schema version.")
+    if catalog.get("repo_id") != "Comfy-Org/MiniMax-H3":
+        raise CatalogError("The MiniMax H3 catalog must use the official Comfy-Org repo.")
+    revision = str(catalog.get("revision", ""))
+    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise CatalogError("The MiniMax H3 catalog must pin a 40-character revision.")
+    variants = catalog.get("variants")
+    shared = catalog.get("shared")
+    if not isinstance(variants, dict) or set(variants) != {"FL2VA", "Ref2VA"}:
+        raise CatalogError("The MiniMax H3 catalog must contain FL2VA and Ref2VA.")
+    if not isinstance(shared, dict) or set(shared) != {
+        "text_encoder",
+        "video_vae",
+        "audio_vae",
+    }:
+        raise CatalogError("The MiniMax H3 catalog has invalid shared assets.")
+    for name, value in variants.items():
+        _validate_file(f"h3.variants.{name}", value)
+    for name, value in shared.items():
+        _validate_file(f"h3.shared.{name}", value)
+    return catalog
+
+
+def h3_variant_names() -> list[str]:
+    return list(load_h3_catalog()["variants"])
+
+
+def h3_assets_for(model_variant: str) -> dict[str, dict[str, Any]]:
+    catalog = load_h3_catalog()
+    variant_key = normalize_h3_variant(model_variant)
+    return {"model": catalog["variants"][variant_key], **catalog["shared"]}
+
+
+def normalize_h3_variant(model_variant: str) -> str:
+    value = str(model_variant)
+    if value.startswith("FL2VA"):
+        return "FL2VA"
+    if value.startswith("Ref2VA"):
+        return "Ref2VA"
+    raise CatalogError(f"Unknown MiniMax H3 variant: {model_variant}")

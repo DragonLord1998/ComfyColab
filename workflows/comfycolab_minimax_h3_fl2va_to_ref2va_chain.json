@@ -1,0 +1,153 @@
+{
+  "id": "9fc01b56-7be5-46c6-8987-71a0c9d5f3bd",
+  "revision": 0,
+  "last_node_id": 5,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "ComfyColabMiniMaxH3BundleLoader",
+      "pos": [-980, -260],
+      "size": [430, 190],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "model_variant", "type": "COMBO", "widget": {"name": "model_variant"}, "link": null},
+        {"name": "accept_h3_license_and_territory", "type": "BOOLEAN", "widget": {"name": "accept_h3_license_and_territory"}, "link": null},
+        {"name": "force_redownload", "type": "BOOLEAN", "widget": {"name": "force_redownload"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "bundle", "type": "MINIMAX_H3_BUNDLE", "links": [1]},
+        {"name": "model", "type": "MODEL", "links": null},
+        {"name": "text_encoder", "type": "CLIP", "links": null},
+        {"name": "video_vae", "type": "VAE", "links": null},
+        {"name": "audio_vae", "type": "VAE", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabMiniMaxH3BundleLoader"},
+      "widgets_values": ["FL2VA — Text / First / Last Frame", false, false]
+    },
+    {
+      "id": 2,
+      "type": "ComfyColabMiniMaxH3Video",
+      "pos": [-480, -290],
+      "size": [520, 410],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "bundle", "type": "MINIMAX_H3_BUNDLE", "link": 1},
+        {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}, "link": null},
+        {"name": "first_frame", "type": "IMAGE", "link": null},
+        {"name": "last_frame", "type": "IMAGE", "link": null},
+        {"name": "duration_seconds", "type": "FLOAT", "widget": {"name": "duration_seconds"}, "link": null},
+        {"name": "width", "type": "INT", "widget": {"name": "width"}, "link": null},
+        {"name": "height", "type": "INT", "widget": {"name": "height"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "video", "type": "VIDEO", "links": null},
+        {"name": "frames", "type": "IMAGE", "links": [2]},
+        {"name": "audio", "type": "AUDIO", "links": [3]}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabMiniMaxH3Video"},
+      "widgets_values": [
+        "A handheld close-up of a glassblower shaping a glowing vase. The furnace hums, tools scrape softly, and the room has a warm workshop ambience.",
+        5.0,
+        864,
+        480,
+        11
+      ]
+    },
+    {
+      "id": 3,
+      "type": "ComfyColabMiniMaxH3BundleLoader",
+      "pos": [-980, 240],
+      "size": [430, 190],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "model_variant", "type": "COMBO", "widget": {"name": "model_variant"}, "link": null},
+        {"name": "accept_h3_license_and_territory", "type": "BOOLEAN", "widget": {"name": "accept_h3_license_and_territory"}, "link": null},
+        {"name": "force_redownload", "type": "BOOLEAN", "widget": {"name": "force_redownload"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "bundle", "type": "MINIMAX_H3_BUNDLE", "links": [4]},
+        {"name": "model", "type": "MODEL", "links": null},
+        {"name": "text_encoder", "type": "CLIP", "links": null},
+        {"name": "video_vae", "type": "VAE", "links": null},
+        {"name": "audio_vae", "type": "VAE", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabMiniMaxH3BundleLoader"},
+      "widgets_values": ["Ref2VA — Reference Images / Video / Audio", false, false]
+    },
+    {
+      "id": 4,
+      "type": "ComfyColabMiniMaxH3ReferenceVideo",
+      "pos": [-360, 170],
+      "size": [560, 520],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "bundle", "type": "MINIMAX_H3_BUNDLE", "link": 4},
+        {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}, "link": null},
+        {"name": "duration_seconds", "type": "FLOAT", "widget": {"name": "duration_seconds"}, "link": null},
+        {"name": "width", "type": "INT", "widget": {"name": "width"}, "link": null},
+        {"name": "height", "type": "INT", "widget": {"name": "height"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "ref_image_size", "type": "COMBO", "widget": {"name": "ref_image_size"}, "link": null},
+        {"name": "scheduler", "type": "COMBO", "widget": {"name": "scheduler"}, "link": null},
+        {"name": "ref_images.ref_image_0", "type": "IMAGE", "link": null},
+        {"name": "ref_videos.ref_video_0", "type": "IMAGE", "link": 2},
+        {"name": "ref_video_audios.ref_video_audio_0", "type": "AUDIO", "link": 3},
+        {"name": "ref_audios.ref_audio_0", "type": "AUDIO", "link": null}
+      ],
+      "outputs": [
+        {"name": "video", "type": "VIDEO", "links": [5]},
+        {"name": "frames", "type": "IMAGE", "links": null},
+        {"name": "audio", "type": "AUDIO", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabMiniMaxH3ReferenceVideo"},
+      "widgets_values": [
+        "Use <Video 1> for the workshop motion and <Audio 1> for the furnace ambience while creating a new tracking shot around a finished glass sculpture.",
+        5.0,
+        864,
+        480,
+        12,
+        "match",
+        "beta"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "SaveVideo",
+      "pos": [360, 240],
+      "size": [330, 110],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "video", "type": "VIDEO", "link": 5},
+        {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null},
+        {"name": "format", "type": "COMBO", "widget": {"name": "format"}, "link": null},
+        {"name": "codec", "type": "COMBO", "widget": {"name": "codec"}, "link": null}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "SaveVideo"},
+      "widgets_values": ["video/ComfyColab_MiniMax_H3_FL2VA_to_Ref2VA", "auto", "auto"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "MINIMAX_H3_BUNDLE"],
+    [2, 2, 1, 4, 9, "IMAGE"],
+    [3, 2, 2, 4, 10, "AUDIO"],
+    [4, 3, 0, 4, 0, "MINIMAX_H3_BUNDLE"],
+    [5, 4, 0, 5, 0, "VIDEO"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {"workflowRendererVersion": "LG"},
+  "version": 0.4
+}

@@ -263,6 +263,10 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap, "install_node_pack", side_effect=lambda: calls.append("install_node_pack")
             ), mock.patch.object(
                 remote_bootstrap,
+                "validate_minimax_h3_core_support",
+                side_effect=lambda: calls.append("validate_minimax_h3_core_support"),
+            ), mock.patch.object(
+                remote_bootstrap,
                 "validate_triposplat_core_support",
                 side_effect=lambda: calls.append("validate_triposplat_core_support"),
             ), mock.patch.object(
@@ -307,6 +311,10 @@ class BootstrapRenderingTests(unittest.TestCase):
                 remote_bootstrap.main()
 
             self.assertLess(calls.index("install_dependencies"), calls.index("install_pixal3d"))
+            self.assertLess(
+                calls.index("validate_minimax_h3_core_support"),
+                calls.index("install_dependencies"),
+            )
             self.assertLess(calls.index("validate_triposplat_core_support"), calls.index("install_pixal3d"))
             self.assertLess(calls.index("install_pixal3d"), calls.index("validate_pixal3d_runtime"))
             payload = json.loads((state_dir / "runtime.json").read_text(encoding="utf-8"))
@@ -1013,6 +1021,23 @@ class BootstrapRenderingTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "native TripoSplat"):
                     remote_bootstrap.validate_triposplat_core_support()
 
+    def test_minimax_h3_core_support_requires_native_nodes_and_clip_type(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            comfy = Path(directory)
+            for (
+                relative_path,
+                symbols,
+            ) in remote_bootstrap.MINIMAX_H3_CORE_REQUIREMENTS.items():
+                path = comfy / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(symbols), encoding="utf-8")
+            with mock.patch.object(remote_bootstrap, "COMFY_DIR", comfy):
+                remote_bootstrap.validate_minimax_h3_core_support()
+                missing_path = comfy / "comfy_extras" / "nodes_minimax_h3.py"
+                missing_path.write_text("MiniMaxH3ImageToVideo\n", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "native MiniMax H3"):
+                    remote_bootstrap.validate_minimax_h3_core_support()
+
     def test_awaiting_combined_cache_falls_back_to_trellis_profile(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with mock.patch.object(remote_bootstrap, "REPO_DIR", root):
@@ -1061,6 +1086,8 @@ class BootstrapRenderingTests(unittest.TestCase):
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
+                remote_bootstrap, "validate_minimax_h3_core_support"
+            ), mock.patch.object(
                 remote_bootstrap, "validate_triposplat_core_support"
             ), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
@@ -1172,6 +1199,8 @@ class BootstrapRenderingTests(unittest.TestCase):
             ), mock.patch.object(remote_bootstrap, "load_state", return_value={}), mock.patch.object(
                 remote_bootstrap, "http_ready", return_value=False
             ), mock.patch.object(remote_bootstrap, "clone_or_update"), mock.patch.object(
+                remote_bootstrap, "validate_minimax_h3_core_support"
+            ), mock.patch.object(
                 remote_bootstrap, "validate_triposplat_core_support"
             ), mock.patch.object(
                 remote_bootstrap, "install_node_pack"
@@ -1245,7 +1274,7 @@ class BootstrapRenderingTests(unittest.TestCase):
                 "colab_proxy": True,
             },
         )
-        self.assertIn("8b099de36acd81acd1afa3b5442951dc847e0a52", source)
+        self.assertIn("57500fc5bc92566a63f2046824f522cd55c335ca", source)
         self.assertIn("6ea2651e7df66d7585f6ffee804b20e92fb38b8a", source)
         self.assertIn("aceeae9635f6d493f2893ba3c411a1c36031788a", source)
         self.assertIn("9b878516f2dc2fd873f4f6cceadba403dd12d83e", source)

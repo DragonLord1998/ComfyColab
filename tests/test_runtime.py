@@ -370,6 +370,9 @@ class RuntimeContractTests(unittest.TestCase):
                     mock.patch.object(runtime, "validate_manifest_compatibility")
                 )
                 stack.enter_context(
+                    mock.patch.object(runtime, "validate_minimax_h3_core_support")
+                )
+                stack.enter_context(
                     mock.patch.object(runtime, "apply_patches", return_value=[])
                 )
                 stack.enter_context(
@@ -1107,6 +1110,26 @@ class RuntimeContractTests(unittest.TestCase):
                     pack_roots={"example": root / "pack"},
                     resolved_paths={},
                 )
+
+    def test_minimax_h3_core_support_requires_native_nodes_and_clip_type(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            comfy = Path(directory)
+            for (
+                relative_path,
+                symbols,
+            ) in runtime.MINIMAX_H3_CORE_REQUIREMENTS.items():
+                path = comfy / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(symbols), encoding="utf-8")
+            with mock.patch.object(runtime, "COMFY_DIR", comfy):
+                runtime.validate_minimax_h3_core_support()
+                missing_path = comfy / "comfy_extras" / "nodes_minimax_h3.py"
+                missing_path.write_text("MiniMaxH3ImageToVideo\n", encoding="utf-8")
+                with self.assertRaisesRegex(
+                    runtime.RuntimeContractError,
+                    "native MiniMax H3",
+                ):
+                    runtime.validate_minimax_h3_core_support()
 
     def test_post_start_probe_and_health_command_are_enforced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -66,7 +66,7 @@ NODE_LTX_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-LTXVideo"
 NODE_MAGE_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-MageFlow"
 NODE_PID_TARGET = COMFY_DIR / "custom_nodes" / "ComfyColab-PiD"
 READY_PREFIX = "COMFYCOLAB_READY="
-COMFY_REF = "8b099de36acd81acd1afa3b5442951dc847e0a52"
+COMFY_REF = "57500fc5bc92566a63f2046824f522cd55c335ca"
 GGUF_REF = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
 LTX_VIDEO_REF = "aceeae9635f6d493f2893ba3c411a1c36031788a"
 LTX_VIDEO_KORNIA_REQUIREMENT = "kornia==0.8.1"
@@ -181,6 +181,14 @@ TRIPOSPLAT_CORE_REQUIREMENTS = {
         "SplatToFile3D",
         "RenderSplat",
     ),
+}
+MINIMAX_H3_CORE_REQUIREMENTS = {
+    "comfy_extras/nodes_minimax_h3.py": (
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+    ),
+    "nodes.py": ("VAEDecodeAudio",),
+    "comfy/sd.py": ("minimax",),
 }
 ULTRASHAPE_INFERENCE_REQUIREMENTS = (
     "accelerate==1.1.1",
@@ -1865,6 +1873,27 @@ def validate_triposplat_core_support() -> None:
         )
 
 
+def validate_minimax_h3_core_support() -> None:
+    """Fail before model provisioning if the pinned ComfyUI checkout lacks native H3."""
+    missing: list[str] = []
+    for relative_path, required_symbols in MINIMAX_H3_CORE_REQUIREMENTS.items():
+        path = COMFY_DIR / relative_path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            missing.append(relative_path)
+            continue
+        for symbol in required_symbols:
+            if symbol not in source:
+                missing.append(f"{relative_path}:{symbol}")
+    if missing:
+        raise RuntimeError(
+            "The pinned ComfyUI checkout does not provide the native MiniMax H3 "
+            "runtime required by ComfyColab. Missing: "
+            + ", ".join(missing)
+        )
+
+
 def cloudflared_path() -> Path:
     machine = platform.machine().lower()
     if machine in {"aarch64", "arm64"}:
@@ -2375,6 +2404,7 @@ def main() -> None:
         ULTRASHAPE_DIR,
         REPO_DIR / "patches" / "ultrashape-inference-only-imports.json",
     )
+    validate_minimax_h3_core_support()
     validate_triposplat_core_support()
     if configured_node_packs:
         install_node_pack(configured_node_packs)

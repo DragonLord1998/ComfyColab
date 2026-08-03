@@ -89,6 +89,25 @@ class FakeIO:
     Vae = PortFactory("VAE")
     AnyType = PortFactory("ANY")
 
+    class Autogrow:
+        Type = dict
+
+        class TemplatePrefix:
+            def __init__(self, input, prefix, min=0, max=100):
+                self.input = input
+                self.prefix = prefix
+                self.min = min
+                self.max = max
+
+        @staticmethod
+        def Input(name, template):
+            return {
+                "direction": "input",
+                "name": name,
+                "io_type": "COMFY_AUTOGROW_V3",
+                "template": template,
+            }
+
     class Hidden:
         unique_id = "UNIQUE_ID"
         prompt = "PROMPT"
@@ -335,7 +354,15 @@ class LTXNodePackTests(unittest.TestCase):
             for schema in schemas
             if not getattr(schema, "is_dev_only", False)
         ]
-        self.assertEqual(public, [PUBLIC_NODE_ID])
+        self.assertIn(PUBLIC_NODE_ID, public)
+        self.assertTrue(
+            {
+                "ComfyColabMiniMaxH3BundleLoader",
+                "ComfyColabMiniMaxH3Video",
+                "ComfyColabMiniMaxH3ReferenceVideo",
+            }
+            <= set(public)
+        )
 
         schema = next(item for item in schemas if item.node_id == PUBLIC_NODE_ID)
         inputs = {item["name"]: item for item in schema.inputs}

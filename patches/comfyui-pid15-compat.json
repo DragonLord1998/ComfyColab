@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "patch_id": "comfyui-pid15-compat-917faef-v1",
-  "revision": "8b099de36acd81acd1afa3b5442951dc847e0a52",
+  "revision": "57500fc5bc92566a63f2046824f522cd55c335ca",
   "upstream_commit": "917faef771a2fd2f14f44af94f17da3d0b2803a3",
   "files": [
     {

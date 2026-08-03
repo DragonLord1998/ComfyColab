@@ -60,6 +60,16 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual(lock.to_dict()["packs"], [])
         self.assertEqual(lock.to_dict()["comfyui"]["commit"], "b" * 40)
 
+    def test_core_registry_pins_h3_capable_comfyui_commit(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        engine = json.loads(
+            (root / "registry" / "engine.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            engine["comfyui"]["commit"],
+            "57500fc5bc92566a63f2046824f522cd55c335ca",
+        )
+
     def test_unknown_pack_alias_fails_before_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.make_core(Path(directory) / "core")

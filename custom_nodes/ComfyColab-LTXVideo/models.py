@@ -4,7 +4,7 @@ import importlib
 from pathlib import Path
 from typing import Any
 
-from .catalog import selected_assets
+from .catalog import h3_assets_for, normalize_h3_variant, selected_assets
 from .download import download_file
 
 
@@ -72,4 +72,36 @@ def filenames_by_role(
         for role, specification in selected_assets(
             gguf_model, spatial_upscaler, fps
         ).items()
+    }
+
+
+def ensure_h3_model_assets(
+    model_variant: str,
+    force_redownload: bool = False,
+) -> dict[str, str]:
+    folder_paths = importlib.import_module("folder_paths")
+    assets = h3_assets_for(model_variant)
+    progress = _ComfyProgress()
+    filenames: dict[str, str] = {"variant": normalize_h3_variant(model_variant)}
+    for role, specification in assets.items():
+        destination = (
+            _first_model_path(folder_paths, specification["folder_key"])
+            / specification["filename"]
+        )
+        download_file(
+            url=specification["url"],
+            destination=destination,
+            expected_sha256=specification["sha256"],
+            expected_size=specification["size_bytes"],
+            force=force_redownload,
+            progress=progress,
+        )
+        filenames[role] = specification["filename"]
+    return filenames
+
+
+def h3_filenames_by_role(model_variant: str) -> dict[str, str]:
+    return {
+        role: specification["filename"]
+        for role, specification in h3_assets_for(model_variant).items()
     }

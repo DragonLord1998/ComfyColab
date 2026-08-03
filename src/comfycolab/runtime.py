@@ -54,6 +54,14 @@ CLOUDFLARED_ASSETS = {
         "405df476437e027fc6d18729a5a77155c0a33a6082aeee60a799a688f3052e66",
     ),
 }
+MINIMAX_H3_CORE_REQUIREMENTS = {
+    "comfy_extras/nodes_minimax_h3.py": (
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+    ),
+    "nodes.py": ("VAEDecodeAudio",),
+    "comfy/sd.py": ("minimax",),
+}
 
 
 class RuntimeContractError(RuntimeError):
@@ -1197,6 +1205,26 @@ def run_post_clone_probes(
                 )
 
 
+def validate_minimax_h3_core_support() -> None:
+    missing: list[str] = []
+    for relative_path, required_symbols in MINIMAX_H3_CORE_REQUIREMENTS.items():
+        path = COMFY_DIR / relative_path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            missing.append(relative_path)
+            continue
+        for symbol in required_symbols:
+            if symbol not in source:
+                missing.append(f"{relative_path}:{symbol}")
+    if missing:
+        raise RuntimeContractError(
+            "The pinned ComfyUI checkout does not provide the native MiniMax H3 "
+            "runtime required by ComfyColab. Missing: "
+            + ", ".join(missing)
+        )
+
+
 def run_hook(
     pack_id: str,
     pack_root: Path,
@@ -2096,6 +2124,7 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
             COMFY_DIR,
             str(comfyui["commit"]),
         )
+        validate_minimax_h3_core_support()
         install_core_requirements()
         resolved_paths = install_dependencies(
             lock,
@@ -2118,6 +2147,7 @@ def execute(config: Mapping[str, Any], lock: Mapping[str, Any]) -> None:
             manifests,
             comfyui_commit=str(comfyui["commit"]),
         )
+        validate_minimax_h3_core_support()
 
     applied_patches = apply_patches(
         lock,

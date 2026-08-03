@@ -3,25 +3,42 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from .catalog import gguf_names, spatial_upscaler_names
+from .catalog import gguf_names, normalize_h3_variant, spatial_upscaler_names
 from .graph import build_ltx23_graph, required_nodes
-from .models import ensure_model_assets
+from .graph_h3 import (
+    build_h3_fl2va_graph,
+    build_h3_ref2va_graph,
+    required_h3_nodes,
+    validate_reference_inputs,
+)
+from .models import ensure_h3_model_assets, ensure_model_assets
 
 
 MAX_SEED = (2**63) - 1
 FPS_OPTIONS = ["24", "48"]
+H3_VARIANT_LABELS = [
+    "FL2VA — Text / First / Last Frame",
+    "Ref2VA — Reference Images / Video / Audio",
+]
+H3_REF_IMAGE_SIZE_OPTIONS = ["match", "max"]
+H3_REF_SCHEDULER_OPTIONS = ["beta", "normal", "simple"]
+H3_LOADER_NODES = {"UNETLoader", "CLIPLoader", "VAELoader"}
 
 
 def _io():
     return importlib.import_module("comfy_api.latest").io
 
 
-def _require_upstream_nodes(node_ids: set[str]) -> None:
+def _missing_upstream_nodes(node_ids: set[str]) -> list[str]:
     try:
         registry = importlib.import_module("nodes").NODE_CLASS_MAPPINGS
     except (ModuleNotFoundError, AttributeError):
-        return
-    missing = sorted(node_ids - set(registry))
+        return []
+    return sorted(node_ids - set(registry))
+
+
+def _require_upstream_nodes(node_ids: set[str]) -> None:
+    missing = _missing_upstream_nodes(node_ids)
     if missing:
         raise RuntimeError(
             "ComfyColab LTX-2.3 requires the pinned ComfyUI, ComfyUI-GGUF, and "
@@ -30,8 +47,364 @@ def _require_upstream_nodes(node_ids: set[str]) -> None:
         )
 
 
+def _require_h3_upstream_nodes(node_ids: set[str]) -> None:
+    missing = _missing_upstream_nodes(node_ids)
+    if missing:
+        raise RuntimeError(
+            "MiniMax H3 requires the pinned H3-capable ComfyUI engine. "
+            "Missing node IDs: "
+            f"{', '.join(missing)}. Restart with `comfycolab start --refresh`."
+        )
+
+
+def _loader(comfy_nodes: Any, name: str) -> Any:
+    loader_class = comfy_nodes.NODE_CLASS_MAPPINGS.get(name)
+    if loader_class is None:
+        raise RuntimeError(
+            f"Required loader '{name}' is unavailable. Restart with "
+            "`comfycolab start --refresh`."
+        )
+    return loader_class()
+
+
 def _video_output(io: Any):
     return io.Video.Output("video")
+
+
+def _h3_bundle_output(io: Any):
+    return io.Custom("MINIMAX_H3_BUNDLE").Output("bundle")
+
+
+def _collect_autogrow(values: Any) -> dict[str, Any]:
+    if values is None:
+        return {}
+    if isinstance(values, dict):
+        return {str(key): value for key, value in values.items() if value is not None}
+    if isinstance(values, (list, tuple)):
+        return {
+            str(index): value
+            for index, value in enumerate(values, start=1)
+            if value is not None
+        }
+    raise ValueError("MiniMax H3 reference inputs must be expandable input groups.")
+
+
+def _h3_bundle(
+    *,
+    variant: str,
+    model: Any,
+    text_encoder: Any,
+    video_vae: Any,
+    audio_vae: Any,
+    filenames: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "family": "minimax_h3",
+        "variant": variant,
+        "model": model,
+        "text_encoder": text_encoder,
+        "video_vae": video_vae,
+        "audio_vae": audio_vae,
+        "filenames": dict(filenames),
+    }
+
+
+class ComfyColabMiniMaxH3BundleLoader:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id="ComfyColabMiniMaxH3BundleLoader",
+            display_name="MiniMax H3 Bundle Loader",
+            category="ComfyColab/loaders",
+            description=(
+                "Downloads and loads one official optimized MiniMax H3 Base "
+                "variant plus the shared Qwen3-VL text encoder, video VAE, and "
+                "audio VAE. Requires explicit H3 license and territory acknowledgement."
+            ),
+            inputs=[
+                io.Combo.Input(
+                    "model_variant",
+                    options=H3_VARIANT_LABELS,
+                    default=H3_VARIANT_LABELS[0],
+                    tooltip="FL2VA is for text, first frame, last frame, or both. Ref2VA is for reference media.",
+                ),
+                io.Boolean.Input(
+                    "accept_h3_license_and_territory",
+                    default=False,
+                    tooltip=(
+                        "Confirm that you reviewed the MiniMax H3 Community License "
+                        "and are authorized to use the weights in your location."
+                    ),
+                ),
+                io.Boolean.Input(
+                    "force_redownload",
+                    default=False,
+                    advanced=True,
+                    tooltip="Discard resumable cached files and download selected H3 assets again.",
+                ),
+            ],
+            outputs=[
+                _h3_bundle_output(io),
+                io.Model.Output("model"),
+                io.Clip.Output("text_encoder"),
+                io.Vae.Output("video_vae"),
+                io.Vae.Output("audio_vae"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        model_variant=H3_VARIANT_LABELS[0],
+        accept_h3_license_and_territory=False,
+        force_redownload=False,
+    ):
+        if not accept_h3_license_and_territory:
+            raise PermissionError(
+                "MiniMax H3 download requires accept_h3_license_and_territory=true "
+                "after reviewing the MiniMax H3 Community License and territory terms."
+            )
+        variant = normalize_h3_variant(str(model_variant).split(" ", 1)[0])
+        _require_h3_upstream_nodes(
+            H3_LOADER_NODES
+            | required_h3_nodes(reference=False)
+            | required_h3_nodes(reference=True)
+        )
+        filenames = ensure_h3_model_assets(
+            variant,
+            force_redownload=bool(force_redownload),
+        )
+        comfy_nodes = importlib.import_module("nodes")
+        model = _loader(comfy_nodes, "UNETLoader").load_unet(
+            filenames["model"],
+            weight_dtype="default",
+        )[0]
+        text_encoder = _loader(comfy_nodes, "CLIPLoader").load_clip(
+            filenames["text_encoder"],
+            type="minimax",
+        )[0]
+        video_vae = _loader(comfy_nodes, "VAELoader").load_vae(
+            filenames["video_vae"]
+        )[0]
+        audio_vae = _loader(comfy_nodes, "VAELoader").load_vae(
+            filenames["audio_vae"]
+        )[0]
+        bundle = _h3_bundle(
+            variant=variant,
+            model=model,
+            text_encoder=text_encoder,
+            video_vae=video_vae,
+            audio_vae=audio_vae,
+            filenames=filenames,
+        )
+        return bundle, model, text_encoder, video_vae, audio_vae
+
+
+class ComfyColabMiniMaxH3Video:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        return io.Schema(
+            node_id="ComfyColabMiniMaxH3Video",
+            display_name="ComfyColab MiniMax H3 — Text/Image to Video",
+            category="ComfyColab/Video",
+            description=(
+                "Generates 24 FPS audio-video with MiniMax H3 FL2VA from text, "
+                "an optional first frame, an optional last frame, or both."
+            ),
+            enable_expand=True,
+            inputs=[
+                io.Custom("MINIMAX_H3_BUNDLE").Input("bundle"),
+                io.String.Input(
+                    "prompt",
+                    multiline=True,
+                    default="",
+                    tooltip="Describe the shot, motion, dialogue, and sounds to generate.",
+                ),
+                io.Image.Input("first_frame", optional=True),
+                io.Image.Input("last_frame", optional=True),
+                io.Float.Input(
+                    "duration_seconds",
+                    default=5.0,
+                    min=4.0,
+                    max=15.0,
+                    step=0.25,
+                    tooltip="H3 runs at 24 FPS and snaps upward to the valid 17k+5 frame grid.",
+                ),
+                io.Int.Input("width", default=864, min=256, max=1344, step=32),
+                io.Int.Input("height", default=480, min=256, max=1344, step=32),
+                io.Int.Input("seed", default=0, min=0, max=MAX_SEED),
+            ],
+            outputs=[
+                _video_output(io),
+                io.Image.Output("frames"),
+                io.Audio.Output("audio"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        bundle,
+        prompt,
+        first_frame=None,
+        last_frame=None,
+        duration_seconds=5.0,
+        width=864,
+        height=480,
+        seed=0,
+    ):
+        _require_h3_upstream_nodes(required_h3_nodes(reference=False))
+        return build_h3_fl2va_graph(
+            bundle=bundle,
+            prompt=str(prompt),
+            first_frame=first_frame,
+            last_frame=last_frame,
+            duration_seconds=float(duration_seconds),
+            width=int(width),
+            height=int(height),
+            seed=int(seed),
+        )
+
+
+class ComfyColabMiniMaxH3ReferenceVideo:
+    @classmethod
+    def define_schema(cls):
+        io = _io()
+        ref_images = io.Autogrow.Input(
+            "ref_images",
+            template=io.Autogrow.TemplatePrefix(
+                input=io.Image.Input("ref_image"),
+                prefix="ref_image_",
+                min=0,
+                max=9,
+            ),
+        )
+        ref_videos = io.Autogrow.Input(
+            "ref_videos",
+            template=io.Autogrow.TemplatePrefix(
+                input=io.Image.Input("ref_video"),
+                prefix="ref_video_",
+                min=0,
+                max=3,
+            ),
+        )
+        ref_video_audios = io.Autogrow.Input(
+            "ref_video_audios",
+            template=io.Autogrow.TemplatePrefix(
+                input=io.Audio.Input("ref_video_audio"),
+                prefix="ref_video_audio_",
+                min=0,
+                max=3,
+            ),
+        )
+        ref_audios = io.Autogrow.Input(
+            "ref_audios",
+            template=io.Autogrow.TemplatePrefix(
+                input=io.Audio.Input("ref_audio"),
+                prefix="ref_audio_",
+                min=0,
+                max=3,
+            ),
+        )
+        return io.Schema(
+            node_id="ComfyColabMiniMaxH3ReferenceVideo",
+            display_name="ComfyColab MiniMax H3 — Reference to Video",
+            category="ComfyColab/Video",
+            description=(
+                "Generates 24 FPS audio-video with MiniMax H3 Ref2VA from ordered "
+                "reference pictures, videos, paired video audio, and standalone audio. "
+                "Prompt tags use <Picture 1>, <Video 1>, and <Audio 1> order."
+            ),
+            enable_expand=True,
+            inputs=[
+                io.Custom("MINIMAX_H3_BUNDLE").Input("bundle"),
+                io.String.Input(
+                    "prompt",
+                    multiline=True,
+                    default="",
+                    tooltip="Use one-based tags such as <Picture 1>, <Video 1>, and <Audio 1>.",
+                ),
+                io.Float.Input(
+                    "duration_seconds",
+                    default=5.0,
+                    min=4.0,
+                    max=15.0,
+                    step=0.25,
+                ),
+                io.Int.Input("width", default=864, min=256, max=1344, step=32),
+                io.Int.Input("height", default=480, min=256, max=1344, step=32),
+                io.Int.Input("seed", default=0, min=0, max=MAX_SEED),
+                io.Combo.Input(
+                    "ref_image_size",
+                    options=H3_REF_IMAGE_SIZE_OPTIONS,
+                    default="match",
+                    advanced=True,
+                ),
+                io.Combo.Input(
+                    "scheduler",
+                    options=H3_REF_SCHEDULER_OPTIONS,
+                    default="beta",
+                    advanced=True,
+                ),
+                ref_images,
+                ref_videos,
+                ref_video_audios,
+                ref_audios,
+            ],
+            outputs=[
+                _video_output(io),
+                io.Image.Output("frames"),
+                io.Audio.Output("audio"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        bundle,
+        prompt,
+        duration_seconds=5.0,
+        width=864,
+        height=480,
+        seed=0,
+        ref_image_size="match",
+        scheduler="beta",
+        ref_images=None,
+        ref_videos=None,
+        ref_video_audios=None,
+        ref_audios=None,
+    ):
+        ref_images = _collect_autogrow(ref_images)
+        ref_videos = _collect_autogrow(ref_videos)
+        ref_video_audios = _collect_autogrow(ref_video_audios)
+        ref_audios = _collect_autogrow(ref_audios)
+        validate_reference_inputs(
+            ref_images=ref_images,
+            ref_videos=ref_videos,
+            ref_video_audios=ref_video_audios,
+            ref_audios=ref_audios,
+        )
+        if ref_image_size not in H3_REF_IMAGE_SIZE_OPTIONS:
+            raise ValueError("MiniMax H3 ref_image_size must be match or max.")
+        if scheduler not in H3_REF_SCHEDULER_OPTIONS:
+            raise ValueError("MiniMax H3 scheduler must be beta, normal, or simple.")
+        _require_h3_upstream_nodes(required_h3_nodes(reference=True))
+        return build_h3_ref2va_graph(
+            bundle=bundle,
+            prompt=str(prompt),
+            ref_images=ref_images,
+            ref_videos=ref_videos,
+            ref_video_audios=ref_video_audios,
+            ref_audios=ref_audios,
+            duration_seconds=float(duration_seconds),
+            width=int(width),
+            height=int(height),
+            seed=int(seed),
+            ref_image_size=str(ref_image_size),
+            scheduler=str(scheduler),
+        )
 
 
 class ComfyColabLTX23Video:
@@ -182,10 +555,16 @@ class ComfyColabLTX23Video:
 
 PUBLIC_NODE_CLASS_MAPPINGS = {
     "ComfyColabLTX23Video": ComfyColabLTX23Video,
+    "ComfyColabMiniMaxH3BundleLoader": ComfyColabMiniMaxH3BundleLoader,
+    "ComfyColabMiniMaxH3Video": ComfyColabMiniMaxH3Video,
+    "ComfyColabMiniMaxH3ReferenceVideo": ComfyColabMiniMaxH3ReferenceVideo,
 }
 
 NODE_CLASS_MAPPINGS = dict(PUBLIC_NODE_CLASS_MAPPINGS)
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyColabLTX23Video": "ComfyColab LTX-2.3 — Text/Image to Video",
+    "ComfyColabMiniMaxH3BundleLoader": "MiniMax H3 Bundle Loader",
+    "ComfyColabMiniMaxH3Video": "ComfyColab MiniMax H3 — Text/Image to Video",
+    "ComfyColabMiniMaxH3ReferenceVideo": "ComfyColab MiniMax H3 — Reference to Video",
 }
