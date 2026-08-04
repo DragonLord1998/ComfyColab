@@ -159,8 +159,6 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
-MINIMAX_H3_CUDA_COMPILER_PACKAGE = "cuda-compiler-13-0=13.0.3-1"
-MINIMAX_H3_CUDA_HOME = Path("/usr/local/cuda-13.0")
 MINIMAX_H3_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu130"
 MINIMAX_H3_TORCH_REQUIREMENTS = (
     "torch==2.11.0+cu130",
@@ -168,16 +166,15 @@ MINIMAX_H3_TORCH_REQUIREMENTS = (
     "torchaudio==2.11.0+cu130",
 )
 SAGE_ATTENTION_VERSION = "2.2.0"
-SAGE_ATTENTION_SOURCE_REF = "eb615cf6cf4d221338033340ee2de1c37fbdba4a"
-SAGE_ATTENTION_REQUIREMENT = (
-    "git+https://github.com/thu-ml/SageAttention.git@"
-    f"{SAGE_ATTENTION_SOURCE_REF}"
+SAGE_ATTENTION_WHEEL_SHA256 = (
+    "a9e6af62b1d91e7d85e1f9a47005648cc022e101a13685abd2469921062a9162"
 )
-SAGE_ATTENTION_BUILD_ENV = {
-    "EXT_PARALLEL": "4",
-    "NVCC_APPEND_FLAGS": "--threads 8",
-    "MAX_JOBS": "32",
-}
+SAGE_ATTENTION_REQUIREMENT = (
+    "https://github.com/DragonLord1998/ComfyColab/releases/download/"
+    "sageattention-2.2.0-cu130-torch211-sm120-v1/"
+    "sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+    f"#sha256={SAGE_ATTENTION_WHEEL_SHA256}"
+)
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_ASSETS = {
     "amd64": (
@@ -1634,20 +1631,10 @@ def install_ultrashape_overlay() -> None:
 
 
 def install_minimax_h3_cuda_runtime() -> None:
-    nvcc = MINIMAX_H3_CUDA_HOME / "bin" / "nvcc"
-    if not nvcc.is_file():
-        run(["apt-get", "update", "-qq"])
-        run(
-            [
-                "apt-get",
-                "install",
-                "-y",
-                "-qq",
-                MINIMAX_H3_CUDA_COMPILER_PACKAGE,
-            ]
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError(
+            "The cached MiniMax H3 SageAttention wheel requires Python 3.12"
         )
-    if not nvcc.is_file():
-        raise RuntimeError(f"MiniMax H3 requires the CUDA 13 compiler at {nvcc}")
     run(
         [
             sys.executable,
@@ -1661,27 +1648,15 @@ def install_minimax_h3_cuda_runtime() -> None:
     )
 
 
-def sage_attention_build_environment() -> dict[str, str]:
-    environment = dict(os.environ)
-    environment.update(SAGE_ATTENTION_BUILD_ENV)
-    environment["CUDA_HOME"] = str(MINIMAX_H3_CUDA_HOME)
-    environment["PATH"] = (
-        f"{MINIMAX_H3_CUDA_HOME / 'bin'}:{environment.get('PATH', '')}"
-    )
-    environment["LD_LIBRARY_PATH"] = (
-        f"{MINIMAX_H3_CUDA_HOME / 'lib64'}:"
-        f"{environment.get('LD_LIBRARY_PATH', '')}"
-    )
-    return environment
-
-
 def validate_minimax_h3_cuda_runtime() -> None:
     run(
         [
             sys.executable,
             "-c",
             (
-                "import torch; from sageattention import sageattn; "
+                "import torch; from importlib.metadata import version; "
+                "from sageattention import sageattn; "
+                f"assert version('sageattention') == {SAGE_ATTENTION_VERSION!r}; "
                 "assert torch.__version__ == '2.11.0+cu130'; "
                 "assert torch.version.cuda == '13.0'; "
                 "assert torch.cuda.get_device_capability() == (12, 0); "
@@ -1710,10 +1685,9 @@ def install_dependencies() -> str:
             "-m",
             "pip",
             "install",
-            "--no-build-isolation",
+            "--no-deps",
             SAGE_ATTENTION_REQUIREMENT,
-        ],
-        env=sage_attention_build_environment(),
+        ]
     )
     validate_minimax_h3_cuda_runtime()
     gguf_requirements = GGUF_DIR / "requirements.txt"

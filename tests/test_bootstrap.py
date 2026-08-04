@@ -1340,26 +1340,18 @@ class BootstrapRenderingTests(unittest.TestCase):
                     "-m",
                     "pip",
                     "install",
-                    "--no-build-isolation",
+                    "--no-deps",
                     remote_bootstrap.SAGE_ATTENTION_REQUIREMENT,
                 ],
             )
-            sage_environment = commands[2][2]
-            self.assertIsNotNone(sage_environment)
-            self.assertEqual(
-                {
-                    key: sage_environment[key]
-                    for key in remote_bootstrap.SAGE_ATTENTION_BUILD_ENV
-                },
-                remote_bootstrap.SAGE_ATTENTION_BUILD_ENV,
-            )
-            self.assertEqual(
-                sage_environment["CUDA_HOME"],
-                str(remote_bootstrap.MINIMAX_H3_CUDA_HOME),
+            self.assertTrue(
+                remote_bootstrap.SAGE_ATTENTION_REQUIREMENT.startswith(
+                    "https://github.com/"
+                )
             )
             self.assertTrue(
                 remote_bootstrap.SAGE_ATTENTION_REQUIREMENT.endswith(
-                    f"@{remote_bootstrap.SAGE_ATTENTION_SOURCE_REF}"
+                    f"#sha256={remote_bootstrap.SAGE_ATTENTION_WHEEL_SHA256}"
                 )
             )
             self.assertEqual(commands[3][0][-1], str(gguf_dir / "requirements.txt"))

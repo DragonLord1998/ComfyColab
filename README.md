@@ -292,7 +292,8 @@ weights. Its diffusion model is automatically patched to use SageAttention
 2.2.0 for faster sampling on the CUDA 13 / PyTorch 2.11 runtime; the patch is
 model-scoped and does not change the
 attention backend used by unrelated ComfyUI workflows. The Colab bootstrap
-installs the pinned SageAttention package before ComfyUI starts.
+installs a checksum-pinned, precompiled SM120 wheel before ComfyUI starts, so
+later G4 sessions do not rebuild SageAttention.
 
 The loader requires acknowledgement of the MiniMax H3 Community License. It
 does not perform country, IP, geolocation, or regional-availability checks;

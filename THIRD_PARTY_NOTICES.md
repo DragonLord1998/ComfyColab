@@ -27,6 +27,9 @@ those removed features.
   source commit `eb615cf6cf4d221338033340ee2de1c37fbdba4a`
 - CUDA runtime: PyTorch 2.11.0 wheels from the official CUDA 13.0 index, with
   SageAttention compiled by NVIDIA CUDA compiler 13.0.3
+- Cached wheel: the Python 3.12 / SM120 build is published as an immutable
+  ComfyColab release asset and installed only after SHA-256 verification;
+  notebook sessions do not compile it again
 - SageAttention license: Apache-2.0
 
 ComfyColab uses SageAttention only for the loaded MiniMax H3 diffusion model;

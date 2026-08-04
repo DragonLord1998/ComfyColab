@@ -1006,76 +1006,46 @@ class RuntimeContractTests(unittest.TestCase):
                             "-m",
                             "pip",
                             "install",
-                            "--no-build-isolation",
+                            "--no-deps",
                             runtime.SAGE_ATTENTION_REQUIREMENT,
-                        ],
-                        env=mock.ANY,
+                        ]
                     ),
                 ],
             )
-            sage_environment = run.call_args_list[2].kwargs["env"]
-            self.assertEqual(
-                {key: sage_environment[key] for key in runtime.SAGE_ATTENTION_BUILD_ENV},
-                runtime.SAGE_ATTENTION_BUILD_ENV,
-            )
-            self.assertEqual(
-                sage_environment["CUDA_HOME"],
-                str(runtime.MINIMAX_H3_CUDA_HOME),
+            self.assertTrue(
+                runtime.SAGE_ATTENTION_REQUIREMENT.startswith("https://github.com/")
             )
             self.assertTrue(
                 runtime.SAGE_ATTENTION_REQUIREMENT.endswith(
-                    f"@{runtime.SAGE_ATTENTION_SOURCE_REF}"
+                    f"#sha256={runtime.SAGE_ATTENTION_WHEEL_SHA256}"
                 )
             )
             install_cuda.assert_called_once_with()
             validate_cuda.assert_called_once_with()
 
     def test_minimax_h3_cuda_runtime_installs_pinned_cuda13_stack(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            cuda_home = Path(directory) / "cuda-13.0"
-            calls: list[list[str]] = []
-
-            def fake_run(command, **_kwargs):
-                calls.append(command)
-                if command[:3] == ["apt-get", "install", "-y"]:
-                    (cuda_home / "bin").mkdir(parents=True)
-                    (cuda_home / "bin" / "nvcc").touch()
-
-            with (
-                mock.patch.object(runtime, "MINIMAX_H3_CUDA_HOME", cuda_home),
-                mock.patch.object(runtime, "run", side_effect=fake_run),
-            ):
-                runtime.install_minimax_h3_cuda_runtime()
-
-            self.assertEqual(calls[0], ["apt-get", "update", "-qq"])
-            self.assertEqual(
-                calls[1],
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "-qq",
-                    runtime.MINIMAX_H3_CUDA_COMPILER_PACKAGE,
-                ],
+        with (
+            mock.patch.object(runtime.sys, "version_info", (3, 12)),
+            mock.patch.object(runtime, "run") as run,
+        ):
+            runtime.install_minimax_h3_cuda_runtime()
+        run.assert_called_once_with(
+            [
+                runtime.sys.executable,
+                "-m",
+                "pip",
+                "install",
+                *runtime.MINIMAX_H3_TORCH_REQUIREMENTS,
+                "--index-url",
+                runtime.MINIMAX_H3_TORCH_INDEX_URL,
+            ]
+        )
+        self.assertTrue(
+            all(
+                requirement.endswith("+cu130")
+                for requirement in runtime.MINIMAX_H3_TORCH_REQUIREMENTS
             )
-            self.assertEqual(
-                calls[2],
-                [
-                    runtime.sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    *runtime.MINIMAX_H3_TORCH_REQUIREMENTS,
-                    "--index-url",
-                    runtime.MINIMAX_H3_TORCH_INDEX_URL,
-                ],
-            )
-            self.assertTrue(
-                all(
-                    requirement.endswith("+cu130")
-                    for requirement in runtime.MINIMAX_H3_TORCH_REQUIREMENTS
-                )
-            )
+        )
 
     def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
