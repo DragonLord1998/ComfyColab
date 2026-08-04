@@ -994,6 +994,16 @@ class RuntimeContractTests(unittest.TestCase):
                             runtime.HUGGINGFACE_HUB_REQUIREMENT,
                         ]
                     ),
+                    mock.call(
+                        [
+                            runtime.sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "--no-build-isolation",
+                            runtime.SAGE_ATTENTION_REQUIREMENT,
+                        ]
+                    ),
                 ],
             )
 

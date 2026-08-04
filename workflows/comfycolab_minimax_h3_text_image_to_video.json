@@ -14,7 +14,7 @@
       "mode": 0,
       "inputs": [
         {"name": "model_variant", "type": "COMBO", "widget": {"name": "model_variant"}, "link": null},
-        {"name": "accept_h3_license_and_territory", "type": "BOOLEAN", "widget": {"name": "accept_h3_license_and_territory"}, "link": null},
+        {"name": "accept_h3_license", "type": "BOOLEAN", "widget": {"name": "accept_h3_license"}, "link": null},
         {"name": "force_redownload", "type": "BOOLEAN", "widget": {"name": "force_redownload"}, "link": null}
       ],
       "outputs": [

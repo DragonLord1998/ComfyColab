@@ -18,6 +18,21 @@ deliberately bypasses the upstream prompt/image screening and Gaussian-Shading
 watermark, uses ordinary seeded Gaussian noise, and exposes no controls for
 those removed features.
 
+## MiniMax H3 and SageAttention
+
+- Optimized H3 weights: <https://huggingface.co/Comfy-Org/MiniMax-H3>
+- H3 license: MiniMax H3 Community License distributed with the model
+- SageAttention source: <https://github.com/thu-ml/SageAttention>
+- Runtime package: `sageattention==2.2.0`
+- SageAttention license: Apache-2.0
+
+ComfyColab uses SageAttention only for the loaded MiniMax H3 diffusion model;
+it does not globally replace attention for unrelated workflows. The H3 loader
+requires acknowledgement of the model license but performs no country, IP,
+geolocation, or regional-availability check. Users are responsible for
+reviewing the current upstream terms and verifying availability in their own
+location.
+
 ## LTX-2.3 video
 
 - Official model: <https://huggingface.co/Lightricks/LTX-2.3>

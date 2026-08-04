@@ -1320,21 +1320,32 @@ class BootstrapRenderingTests(unittest.TestCase):
                 commands[1][0][-1],
                 "huggingface_hub[hf_xet]>=0.36.0,<2",
             )
-            self.assertEqual(commands[2][0][-1], str(gguf_dir / "requirements.txt"))
             self.assertEqual(
-                commands[3][0][-1],
+                commands[2][0],
+                [
+                    remote_bootstrap.sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-build-isolation",
+                    remote_bootstrap.SAGE_ATTENTION_REQUIREMENT,
+                ],
+            )
+            self.assertEqual(commands[3][0][-1], str(gguf_dir / "requirements.txt"))
+            self.assertEqual(
+                commands[4][0][-1],
                 str(ltx_video_dir / "requirements.txt"),
             )
             self.assertEqual(
-                commands[4][0][-3:],
+                commands[5][0][-3:],
                 ["-r", str(trellis_dir / "requirements.txt"), "--upgrade"],
             )
             self.assertEqual(
-                commands[5],
+                commands[6],
                 ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
             )
             self.assertEqual(
-                commands[6][0][-1],
+                commands[7][0][-1],
                 remote_bootstrap.LTX_VIDEO_KORNIA_REQUIREMENT,
             )
             timeout_patch.assert_called_once_with()

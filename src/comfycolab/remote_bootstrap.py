@@ -159,6 +159,7 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
+SAGE_ATTENTION_REQUIREMENT = "sageattention==2.2.0"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_ASSETS = {
     "amd64": (
@@ -1623,6 +1624,16 @@ def install_dependencies() -> str:
             "pip",
             "install",
             "huggingface_hub[hf_xet]>=0.36.0,<2",
+        ]
+    )
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            SAGE_ATTENTION_REQUIREMENT,
         ]
     )
     gguf_requirements = GGUF_DIR / "requirements.txt"

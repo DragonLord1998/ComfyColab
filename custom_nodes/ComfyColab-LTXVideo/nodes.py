@@ -23,6 +23,7 @@ H3_VARIANT_LABELS = [
 H3_REF_IMAGE_SIZE_OPTIONS = ["match", "max"]
 H3_REF_SCHEDULER_OPTIONS = ["beta", "normal", "simple"]
 H3_LOADER_NODES = {"UNETLoader", "CLIPLoader", "VAELoader"}
+H3_ATTENTION_BACKEND = "sage"
 
 
 def _io():
@@ -67,6 +68,38 @@ def _loader(comfy_nodes: Any, name: str) -> Any:
     return loader_class()
 
 
+def _h3_sage_attention() -> Any:
+    try:
+        attention = importlib.import_module("comfy.ldm.modules.attention")
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "MiniMax H3 requires SageAttention. Restart the Colab runtime with "
+            "`comfycolab start --refresh`."
+        ) from error
+    getter = getattr(attention, "get_attention_function", None)
+    sage = getter(H3_ATTENTION_BACKEND, None) if callable(getter) else None
+    if sage is None:
+        raise RuntimeError(
+            "MiniMax H3 requires SageAttention 2.2.0. Restart the Colab runtime "
+            "with `comfycolab start --refresh`."
+        )
+    return sage
+
+
+def _patch_h3_sage_attention(model: Any, sage_attention: Any) -> Any:
+    if not hasattr(model, "clone") or not hasattr(model, "model_options"):
+        raise RuntimeError("MiniMax H3 received an incompatible ComfyUI model patcher.")
+    patched = model.clone()
+    transformer_options = patched.model_options.setdefault("transformer_options", {})
+    sage_impl = getattr(sage_attention, "__wrapped__", sage_attention)
+
+    def attention_override(_current_attention, *args, **kwargs):
+        return sage_impl(*args, **kwargs)
+
+    transformer_options["optimized_attention_override"] = attention_override
+    return patched
+
+
 def _video_output(io: Any):
     return io.Video.Output("video")
 
@@ -105,6 +138,7 @@ def _h3_bundle(
         "text_encoder": text_encoder,
         "video_vae": video_vae,
         "audio_vae": audio_vae,
+        "attention_backend": H3_ATTENTION_BACKEND,
         "filenames": dict(filenames),
     }
 
@@ -120,7 +154,8 @@ class ComfyColabMiniMaxH3BundleLoader:
             description=(
                 "Downloads and loads one official optimized MiniMax H3 Base "
                 "variant plus the shared Qwen3-VL text encoder, video VAE, and "
-                "audio VAE. Requires explicit H3 license and territory acknowledgement."
+                "audio VAE. The H3 diffusion model uses model-scoped SageAttention "
+                "for faster video sampling. Requires explicit H3 license acknowledgement."
             ),
             inputs=[
                 io.Combo.Input(
@@ -130,12 +165,9 @@ class ComfyColabMiniMaxH3BundleLoader:
                     tooltip="FL2VA is for text, first frame, last frame, or both. Ref2VA is for reference media.",
                 ),
                 io.Boolean.Input(
-                    "accept_h3_license_and_territory",
+                    "accept_h3_license",
                     default=False,
-                    tooltip=(
-                        "Confirm that you reviewed the MiniMax H3 Community License "
-                        "and are authorized to use the weights in your location."
-                    ),
+                    tooltip="Confirm that you reviewed the MiniMax H3 Community License.",
                 ),
                 io.Boolean.Input(
                     "force_redownload",
@@ -157,13 +189,13 @@ class ComfyColabMiniMaxH3BundleLoader:
     def execute(
         cls,
         model_variant=H3_VARIANT_LABELS[0],
-        accept_h3_license_and_territory=False,
+        accept_h3_license=False,
         force_redownload=False,
     ):
-        if not accept_h3_license_and_territory:
+        if not accept_h3_license:
             raise PermissionError(
-                "MiniMax H3 download requires accept_h3_license_and_territory=true "
-                "after reviewing the MiniMax H3 Community License and territory terms."
+                "MiniMax H3 download requires accept_h3_license=true after reviewing "
+                "the MiniMax H3 Community License."
             )
         variant = normalize_h3_variant(str(model_variant).split(" ", 1)[0])
         _require_h3_upstream_nodes(
@@ -171,6 +203,7 @@ class ComfyColabMiniMaxH3BundleLoader:
             | required_h3_nodes(reference=False)
             | required_h3_nodes(reference=True)
         )
+        sage_attention = _h3_sage_attention()
         filenames = ensure_h3_model_assets(
             variant,
             force_redownload=bool(force_redownload),
@@ -180,6 +213,7 @@ class ComfyColabMiniMaxH3BundleLoader:
             filenames["model"],
             weight_dtype="default",
         )[0]
+        model = _patch_h3_sage_attention(model, sage_attention)
         text_encoder = _loader(comfy_nodes, "CLIPLoader").load_clip(
             filenames["text_encoder"],
             type="minimax",

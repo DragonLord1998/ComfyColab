@@ -253,9 +253,11 @@ class H3NodePackTests(unittest.TestCase):
             next(
                 input_
                 for input_ in loader_schema.inputs
-                if input_["name"] == "accept_h3_license_and_territory"
+                if input_["name"] == "accept_h3_license"
             )["default"]
         )
+        self.assertNotIn("territory", loader_schema.description.lower())
+        self.assertNotIn("region", loader_schema.description.lower())
 
         fl2va_schema = nodes.ComfyColabMiniMaxH3Video.define_schema()
         self.assertTrue(fl2va_schema.enable_expand)
@@ -334,12 +336,50 @@ class H3NodePackTests(unittest.TestCase):
     def test_loader_license_gate_blocks_before_provisioning(self):
         _package, nodes, _catalog, _graph_h3 = self._modules()
         with mock.patch.object(nodes, "ensure_h3_model_assets") as ensure:
-            with self.assertRaisesRegex(PermissionError, "accept_h3_license_and_territory"):
+            with self.assertRaisesRegex(PermissionError, "accept_h3_license"):
                 nodes.ComfyColabMiniMaxH3BundleLoader.execute(
                     "FL2VA — Text / First / Last Frame",
-                    accept_h3_license_and_territory=False,
+                    accept_h3_license=False,
                 )
         ensure.assert_not_called()
+
+    def test_loader_requires_sage_attention_before_provisioning(self):
+        _package, nodes, _catalog, _graph_h3 = self._modules()
+        with mock.patch.object(
+            nodes,
+            "_h3_sage_attention",
+            side_effect=RuntimeError("MiniMax H3 requires SageAttention 2.2.0"),
+        ), mock.patch.object(nodes, "ensure_h3_model_assets") as ensure:
+            with self.assertRaisesRegex(RuntimeError, "SageAttention 2.2.0"):
+                nodes.ComfyColabMiniMaxH3BundleLoader.execute(
+                    "FL2VA — Text / First / Last Frame",
+                    accept_h3_license=True,
+                )
+        ensure.assert_not_called()
+
+    def test_h3_resolves_comfyui_registered_sage_attention(self):
+        _package, nodes, _catalog, _graph_h3 = self._modules()
+        sage = object()
+        comfy = types.ModuleType("comfy")
+        comfy.__path__ = []
+        ldm = types.ModuleType("comfy.ldm")
+        ldm.__path__ = []
+        modules = types.ModuleType("comfy.ldm.modules")
+        modules.__path__ = []
+        attention = types.ModuleType("comfy.ldm.modules.attention")
+        attention.get_attention_function = lambda name, default: (
+            sage if name == "sage" else default
+        )
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "comfy": comfy,
+                "comfy.ldm": ldm,
+                "comfy.ldm.modules": modules,
+                "comfy.ldm.modules.attention": attention,
+            },
+        ):
+            self.assertIs(nodes._h3_sage_attention(), sage)
 
     def test_loader_preflights_full_h3_runtime_before_provisioning(self):
         _package, nodes, _catalog, _graph_h3 = self._modules()
@@ -348,7 +388,7 @@ class H3NodePackTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "MiniMaxH3ImageToVideo"):
                 nodes.ComfyColabMiniMaxH3BundleLoader.execute(
                     "FL2VA — Text / First / Last Frame",
-                    accept_h3_license_and_territory=True,
+                    accept_h3_license=True,
                 )
         ensure.assert_not_called()
 
@@ -356,10 +396,18 @@ class H3NodePackTests(unittest.TestCase):
         _package, nodes, _catalog, _graph_h3 = self._modules()
         calls = []
 
+        class ModelPatcher:
+            def __init__(self, *, cloned=False):
+                self.cloned = cloned
+                self.model_options = {"transformer_options": {}}
+
+            def clone(self):
+                return ModelPatcher(cloned=True)
+
         class Unet:
             def load_unet(self, filename, weight_dtype="default"):
                 calls.append(("unet", filename, weight_dtype))
-                return ("MODEL_OBJECT",)
+                return (ModelPatcher(),)
 
         class Clip:
             def load_clip(self, filename, type):
@@ -381,17 +429,40 @@ class H3NodePackTests(unittest.TestCase):
             "video_vae": "minimax_h3_video_vae_fp16.safetensors",
             "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
         }
-        with mock.patch.object(nodes, "ensure_h3_model_assets", return_value=filenames):
+        sage_calls = []
+
+        def sage_impl(*args, **kwargs):
+            sage_calls.append((args, kwargs))
+            return "SAGE_RESULT"
+
+        def sage_wrapper(*args, **kwargs):
+            return sage_impl(*args, **kwargs)
+
+        sage_wrapper.__wrapped__ = sage_impl
+        with mock.patch.object(
+            nodes,
+            "_h3_sage_attention",
+            return_value=sage_wrapper,
+        ), mock.patch.object(nodes, "ensure_h3_model_assets", return_value=filenames):
             outputs = nodes.ComfyColabMiniMaxH3BundleLoader.execute(
                 "Ref2VA — Reference Images / Video / Audio",
-                accept_h3_license_and_territory=True,
+                accept_h3_license=True,
                 force_redownload=True,
             )
         bundle, model, clip, video_vae, audio_vae = outputs
         self.assertEqual(bundle["family"], "minimax_h3")
         self.assertEqual(bundle["variant"], "Ref2VA")
-        self.assertEqual(bundle["model"], "MODEL_OBJECT")
-        self.assertEqual(model, "MODEL_OBJECT")
+        self.assertIs(bundle["model"], model)
+        self.assertTrue(model.cloned)
+        self.assertEqual(bundle["attention_backend"], "sage")
+        attention_override = model.model_options["transformer_options"][
+            "optimized_attention_override"
+        ]
+        self.assertEqual(
+            attention_override("PYTORCH_ATTENTION", "Q", "K", "V", heads=8),
+            "SAGE_RESULT",
+        )
+        self.assertEqual(sage_calls, [(("Q", "K", "V"), {"heads": 8})])
         self.assertEqual(clip, "CLIP_OBJECT")
         self.assertEqual(video_vae, "VAE_OBJECT:minimax_h3_video_vae_fp16.safetensors")
         self.assertEqual(audio_vae, "VAE_OBJECT:minimax_h3_audio_vae_fp32.safetensors")

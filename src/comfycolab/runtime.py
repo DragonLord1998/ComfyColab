@@ -36,6 +36,7 @@ PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
 HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<2"
+SAGE_ATTENTION_REQUIREMENT = "sageattention==2.2.0"
 LEGACY_FULL_PACK_IDS = frozenset({"3d", "3dgs", "image", "video"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1455,6 +1456,16 @@ def install_core_requirements() -> None:
             "pip",
             "install",
             HUGGINGFACE_HUB_REQUIREMENT,
+        ]
+    )
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            SAGE_ATTENTION_REQUIREMENT,
         ]
     )
 

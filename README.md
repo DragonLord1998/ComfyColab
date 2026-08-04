@@ -285,6 +285,18 @@ There are no screening or watermark toggles, and no Base Mage-Flow nodes are
 registered. Example graphs are in
 [`docs/mageflow.md`](docs/mageflow.md).
 
+## MiniMax H3 video
+
+The MiniMax H3 bundle loader supports the official optimized FL2VA and Ref2VA
+weights. Its diffusion model is automatically patched to use SageAttention
+2.2.0 for faster sampling; the patch is model-scoped and does not change the
+attention backend used by unrelated ComfyUI workflows. The Colab bootstrap
+installs the pinned SageAttention package before ComfyUI starts.
+
+The loader requires acknowledgement of the MiniMax H3 Community License. It
+does not perform country, IP, geolocation, or regional-availability checks;
+users remain responsible for verifying regional availability themselves.
+
 ## LTX-2.3 video
 
 After updating an existing runtime, run:
