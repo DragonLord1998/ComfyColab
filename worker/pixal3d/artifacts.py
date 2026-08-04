@@ -40,7 +40,7 @@ VGGT_OMEGA_CHECKPOINT_BYTES = 4_576_706_117
 VGGT_OMEGA_CHECKPOINT_SHA256 = (
     "c02da418b18bb01d0392598d3f6147366bcde1bb70fd08a5e3bf7925b0667934"
 )
-PIXAL3D_ENVIRONMENT_REF = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-v3"
+PIXAL3D_ENVIRONMENT_REF = "g4-linux64-py31213-torch2110-cu130-sm120-pixal3d-v5"
 ARTIFACT_SCHEMA = "comfycolab-pixal3d-artifacts-v1"
 MIN_FREE_BYTES = 35 * 1024**3
 _VALIDATED_SNAPSHOT_STATS: dict[tuple[str, str, str], tuple[tuple[str, int, int], ...]] = {}

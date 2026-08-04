@@ -19,7 +19,7 @@ SKINTOKENS_MODEL_REF = "79736cad0fd84de384d5eede659b4ebd24effe33"
 SKINTOKENS_QWEN_REPO = "Qwen/Qwen3-0.6B"
 SKINTOKENS_QWEN_REF = "c1899de289a04d12100db370d81485cdf75e47ca"
 SKINTOKENS_ENVIRONMENT_REF = (
-    "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2"
+    "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v3"
 )
 SKINTOKENS_PYTHON_VERSION = "3.11.15"
 SKINTOKENS_TORCH_PACKAGES = (
@@ -34,7 +34,15 @@ SKINTOKENS_RUNTIME_PINS = (
     "diffusers==0.37.1",
     "huggingface_hub[hf_xet]>=0.36.0,<2",
 )
-SKINTOKENS_FLASH_ATTN_PACKAGE = "flash-attn==2.8.3.post1"
+SKINTOKENS_FLASH_ATTN_WHEEL_SHA256 = (
+    "cd1a45ebfc1731a13e55ad68e0c9ad92390ddfffba306f9222be67c6d5a805af"
+)
+SKINTOKENS_FLASH_ATTN_PACKAGE = (
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/"
+    "flash_attn-2.8.3%2Bcu12torch2.7cxx11abiTRUE-cp311-cp311-"
+    "linux_x86_64.whl"
+    f"#sha256={SKINTOKENS_FLASH_ATTN_WHEEL_SHA256}"
+)
 SKINTOKENS_LICENSE = {
     "name": "MIT",
     "copyright": "Copyright (c) 2025 VAST-AI-Research",
@@ -275,7 +283,7 @@ def _probe_environment(python: Path) -> dict[str, str]:
         "python": SKINTOKENS_PYTHON_VERSION,
         "bpy": "4.2.22",
         "diffusers": "0.37.1",
-        "flash_attn": "2.8.3.post1",
+        "flash_attn": "2.8.3+cu12torch2.7cxx11abiTRUE",
         "numpy": "1.26.4",
         "torch": "2.7.0+cu128",
         "transformers": "4.57.3",
@@ -410,10 +418,9 @@ def _ensure_environment(source_dir: Path, env_dir: Path, progress: Callable[[dic
                 "-m",
                 "pip",
                 "install",
+                "--no-deps",
                 SKINTOKENS_FLASH_ATTN_PACKAGE,
-                "--no-build-isolation",
-            ],
-            env={**os.environ, "MAX_JOBS": "8"},
+            ]
         )
         versions = _probe_environment(staging_python)
         _atomic_write_json(
@@ -494,6 +501,7 @@ __all__ = [
     "DEFAULT_SOURCE_DIR",
     "SKINTOKENS_ENVIRONMENT_REF",
     "SKINTOKENS_FLASH_ATTN_PACKAGE",
+    "SKINTOKENS_FLASH_ATTN_WHEEL_SHA256",
     "SKINTOKENS_LICENSE",
     "SKINTOKENS_MODEL_REF",
     "SKINTOKENS_MODEL_REPO",

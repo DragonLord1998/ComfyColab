@@ -114,7 +114,7 @@ class SkinTokensArtifactTests(unittest.TestCase):
             "python": "3.11.15",
             "bpy": "4.2.22",
             "diffusers": "0.37.1",
-            "flash_attn": "2.8.3.post1",
+            "flash_attn": "2.8.3+cu12torch2.7cxx11abiTRUE",
             "numpy": "1.26.4",
             "torch": "2.7.0+cu128",
             "transformers": "4.57.3",
@@ -175,9 +175,11 @@ class SkinTokensArtifactTests(unittest.TestCase):
         flash_call = next(
             (argv, kwargs)
             for argv, kwargs in calls
-            if "flash-attn==2.8.3.post1" in argv
+            if artifacts.SKINTOKENS_FLASH_ATTN_PACKAGE in argv
         )
-        self.assertEqual(flash_call[1]["env"]["MAX_JOBS"], "8")
+        self.assertIn("--no-deps", flash_call[0])
+        self.assertNotIn("--no-build-isolation", flash_call[0])
+        self.assertNotIn("env", flash_call[1])
 
     def test_constants_pin_license_and_revisions(self) -> None:
         artifacts = load_artifacts()
@@ -193,12 +195,13 @@ class SkinTokensArtifactTests(unittest.TestCase):
         self.assertEqual(artifacts.SKINTOKENS_PYTHON_VERSION, "3.11.15")
         self.assertEqual(
             artifacts.SKINTOKENS_ENVIRONMENT_REF,
-            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2",
+            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v3",
         )
         self.assertIn("bpy==4.2.22", artifacts.SKINTOKENS_RUNTIME_PINS)
-        self.assertEqual(
-            artifacts.SKINTOKENS_FLASH_ATTN_PACKAGE,
-            "flash-attn==2.8.3.post1",
+        self.assertTrue(
+            artifacts.SKINTOKENS_FLASH_ATTN_PACKAGE.endswith(
+                f"#sha256={artifacts.SKINTOKENS_FLASH_ATTN_WHEEL_SHA256}"
+            )
         )
         self.assertEqual(artifacts.SKINTOKENS_LICENSE["name"], "MIT")
 

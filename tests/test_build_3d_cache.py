@@ -275,7 +275,7 @@ class Build3DCacheTests(unittest.TestCase):
 
         self.assertEqual(
             sources["skinTokensEnvironment"],
-            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v2",
+            "g4-linux64-py31115-torch270-cu128-bpy4222-skintokens-v3",
         )
         self.assertEqual(
             patches["skinTokens"],
@@ -306,7 +306,7 @@ class Build3DCacheTests(unittest.TestCase):
         skintokens_keys = {key for key in expected if key.startswith("skinTokens")}
         self.assertTrue(pixal_keys)
         self.assertTrue(skintokens_keys)
-        stable_pixal_keys = pixal_keys - {"pixal3dEnvironment"}
+        stable_pixal_keys = pixal_keys - {"pixal3dEnvironment", "pixal3dNatten"}
         self.assertEqual(
             {key: record["sources"][key] for key in stable_pixal_keys},
             {key: expected[key] for key in stable_pixal_keys},
@@ -317,9 +317,25 @@ class Build3DCacheTests(unittest.TestCase):
             expected["pixal3dEnvironment"],
             "the MeshFlow worker profile must remain a live-G4 validation gate",
         )
+        self.assertNotEqual(
+            record["sources"]["pixal3dNatten"],
+            expected["pixal3dNatten"],
+            "the CUDA 13 NATTEN wheel must remain a live-G4 validation gate",
+        )
         self.assertEqual(
-            {key: record["sources"][key] for key in skintokens_keys},
-            {key: expected[key] for key in skintokens_keys},
+            {
+                key: record["sources"][key]
+                for key in skintokens_keys - {"skinTokensEnvironment"}
+            },
+            {
+                key: expected[key]
+                for key in skintokens_keys - {"skinTokensEnvironment"}
+            },
+        )
+        self.assertNotEqual(
+            record["sources"]["skinTokensEnvironment"],
+            expected["skinTokensEnvironment"],
+            "the prebuilt FlashAttention worker profile must remain a live-G4 validation gate",
         )
         self.assertEqual(record["patches"]["pixal3d"], expected_patches["pixal3d"])
         self.assertEqual(record["patches"]["skinTokens"], expected_patches["skinTokens"])

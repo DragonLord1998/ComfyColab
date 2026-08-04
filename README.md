@@ -710,6 +710,13 @@ tensor probe. A combined-cache mismatch falls back to the existing TRELLIS.2
 cache plus the minimal UltraShape inference overlay; a base-cache mismatch
 falls back to the normal upstream installer.
 
+Current G4 sessions use PyTorch 2.11.0 + CUDA 13.0. SageAttention, cubvh,
+nvdiffrast, and NATTEN are installed from checksum-pinned prebuilt wheels, while
+comfy-env resolves the remaining CUDA extensions from its matching binary cache.
+The isolated SkinTokens runtime also installs FlashAttention from a pinned
+prebuilt wheel. The CUDA 12.8 archives above remain immutable rollback artifacts
+and are skipped when their runtime fingerprint does not match.
+
 No archive or model weights are committed to Git. Release parts are created on
 the matching G4 with `scripts/build_3d_cache.py` only after the live validation
 gates pass. Third-party licensing and territory notices are summarized in

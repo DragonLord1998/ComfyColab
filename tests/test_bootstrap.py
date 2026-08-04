@@ -333,7 +333,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("torch.cuda.is_available()", source)
         self.assertIn("export_glb", source)
 
-    def test_pixal3d_nvdiffrast_wheel_is_pinned_and_manifested(self) -> None:
+    def test_pixal3d_native_wheels_are_pinned_and_manifested(self) -> None:
         root = Path(__file__).resolve().parents[1]
         environment = (
             root / "worker" / "pixal3d" / "environment.toml"
@@ -346,9 +346,15 @@ class BootstrapRenderingTests(unittest.TestCase):
                 f"#sha256={remote_bootstrap.PIXAL3D_NVDIFFRAST_WHEEL_SHA256}"
             )
         )
+        self.assertIn(remote_bootstrap.PIXAL3D_NATTEN_PACKAGE, environment)
+        self.assertTrue(
+            remote_bootstrap.PIXAL3D_NATTEN_PACKAGE.endswith(
+                f"#sha256={remote_bootstrap.PIXAL3D_NATTEN_WHEEL_SHA256}"
+            )
+        )
         self.assertIn('"nvdiffrast.torch"', environment)
         self.assertTrue(
-            remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-meshflow-v4")
+            remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-meshflow-v5")
         )
         self.assertIn(
             remote_bootstrap.PIXAL3D_VGGT_OMEGA_SOURCE_REF,
@@ -642,7 +648,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         restore.assert_called_once_with()
         source_install.assert_called_once_with()
 
-    def test_pixal3d_source_install_uses_pinned_nvdiffrast_wheel(self) -> None:
+    def test_pixal3d_source_install_uses_pinned_native_wheels(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / "repo"
@@ -686,6 +692,17 @@ class BootstrapRenderingTests(unittest.TestCase):
             remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE,
         ]
         self.assertIn(nvdiffrast_command, commands)
+        self.assertIn(
+            [
+                nvdiffrast_command[0],
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                remote_bootstrap.PIXAL3D_NATTEN_PACKAGE,
+            ],
+            commands,
+        )
         self.assertLess(
             commands.index(nvdiffrast_command),
             commands.index(

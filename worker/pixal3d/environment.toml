@@ -1,10 +1,10 @@
 schema = 1
 name = "pixal3d-worker"
-profile = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-meshflow-v4"
+profile = "g4-linux64-py31213-torch2110-cu130-sm120-pixal3d-meshflow-v5"
 python = "3.12.13"
 platform = "linux-64"
-cuda = "12.8"
-torch = "2.11.0+cu128"
+cuda = "13.0"
+torch = "2.11.0+cu130"
 compute_capability = "sm120"
 
 [sources]
@@ -33,7 +33,7 @@ meshflow = "55f56f60e1bbf98d1c1991670ac998094d5f59ae"
 meshflow_model_repo = "facebook/meshflow"
 meshflow_model = "9249a90e4997e105e533d6f502453fa3b344676f"
 utils3d = "https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl"
-natten = "natten==0.21.6+torch2110cu128"
+natten = "https://github.com/SHI-Labs/NATTEN/releases/download/v0.21.6/natten-0.21.6%2Btorch2110cu130-cp312-cp312-linux_x86_64.whl#sha256=c7b006c2425dd79935abc89c749f9529bd77acc543d4305592bfa5925bc56e98"
 comfy_env = "0.3.89"
 
 [pip]
@@ -69,7 +69,7 @@ native_packages = [
   "https://github.com/PozzettiAndrea/cuda-wheels/releases/download/nvdiffrast-latest/nvdiffrast-0.4.0%2Bcu130torch2.11-cp312-cp312-manylinux_2_34_x86_64.manylinux_2_35_x86_64.whl#sha256=cdeb2560dd8431a3bec64faa55ab4dd1b662bfe4fab340549109bcc4c979f362",
   "flash-attn",
   "drtk",
-  "natten==0.21.6+torch2110cu128",
+  "https://github.com/SHI-Labs/NATTEN/releases/download/v0.21.6/natten-0.21.6%2Btorch2110cu130-cp312-cp312-linux_x86_64.whl#sha256=c7b006c2425dd79935abc89c749f9529bd77acc543d4305592bfa5925bc56e98",
 ]
 
 [runtime_probe]

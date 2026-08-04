@@ -138,7 +138,7 @@ PIXAL3D_UTILS3D_WHEEL = (
     "20260430/utils3d-0.0.2-py3-none-any.whl"
 )
 PIXAL3D_WORKER_ENVIRONMENT = "pixal3d-worker"
-PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-meshflow-v4"
+PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu130-sm120-pixal3d-meshflow-v5"
 PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
 PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
 PIXAL3D_NVDIFFRAST_PACKAGE = (
@@ -148,8 +148,14 @@ PIXAL3D_NVDIFFRAST_PACKAGE = (
     "manylinux_2_34_x86_64.manylinux_2_35_x86_64.whl"
     f"#sha256={PIXAL3D_NVDIFFRAST_WHEEL_SHA256}"
 )
-PIXAL3D_NATTEN_PACKAGE = "natten==0.21.6+torch2110cu128"
-PIXAL3D_NATTEN_WHEEL_INDEX = "https://whl.natten.org"
+PIXAL3D_NATTEN_WHEEL_SHA256 = (
+    "c7b006c2425dd79935abc89c749f9529bd77acc543d4305592bfa5925bc56e98"
+)
+PIXAL3D_NATTEN_PACKAGE = (
+    "https://github.com/SHI-Labs/NATTEN/releases/download/v0.21.6/"
+    "natten-0.21.6%2Btorch2110cu130-cp312-cp312-linux_x86_64.whl"
+    f"#sha256={PIXAL3D_NATTEN_WHEEL_SHA256}"
+)
 PIXAL3D_INFERENCE_REQUIREMENTS = (
     f"git+https://github.com/microsoft/MoGe.git@{PIXAL3D_MOGE_SOURCE_REF}",
     f"git+https://github.com/PramaLLC/BEN2.git@{PIXAL3D_BEN2_SOURCE_REF}",
@@ -1168,8 +1174,8 @@ def validate_pixal3d_runtime(python: Path | None = None) -> None:
     probe = (
         "import importlib, importlib.util, json, sys, torch; "
         "assert torch.cuda.is_available(); "
-        "assert torch.__version__ == '2.11.0+cu128'; "
-        "assert torch.version.cuda == '12.8'; "
+        "assert torch.__version__ == '2.11.0+cu130'; "
+        "assert torch.version.cuda == '13.0'; "
         "assert torch.cuda.get_device_capability() == (12, 0); "
         "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
         "assert x.sum().item() == 4.0; "
@@ -1355,9 +1361,6 @@ def install_pixal3d_source() -> str:
         ]
     )
     run([str(python), "-m", "pip", "install", PIXAL3D_UTILS3D_WHEEL])
-    natten_env = os.environ.copy()
-    natten_env.setdefault("NATTEN_CUDA_ARCH", "120")
-    natten_env.setdefault("NATTEN_N_WORKERS", str(max(1, os.cpu_count() or 1)))
     run(
         [
             str(python),
@@ -1365,11 +1368,8 @@ def install_pixal3d_source() -> str:
             "pip",
             "install",
             "--no-deps",
-            "-f",
-            PIXAL3D_NATTEN_WHEEL_INDEX,
             PIXAL3D_NATTEN_PACKAGE,
-        ],
-        env=natten_env,
+        ]
     )
     shutil.copy2(environment_toml, workspace / "environment.toml")
     (workspace / "install.hash").write_text(install_hash + "\n", encoding="utf-8")
@@ -1415,6 +1415,8 @@ def restore_trellis_cache(
                 workspace,
                 validate_ultrashape=validate_ultrashape,
                 require_sm120=True,
+                expected_torch="2.11.0+cu128",
+                expected_cuda="12.8",
             )
         except Exception:
             pass
@@ -1495,6 +1497,8 @@ def restore_trellis_cache(
                 workspace,
                 validate_ultrashape=validate_ultrashape,
                 require_sm120=True,
+                expected_torch="2.11.0+cu128",
+                expected_cuda="12.8",
             )
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -1516,6 +1520,8 @@ def validate_trellis_cache(
     *,
     validate_ultrashape: bool = False,
     require_sm120: bool = False,
+    expected_torch: str = "2.11.0+cu130",
+    expected_cuda: str = "13.0",
 ) -> None:
     envs = workspace / ".pixi" / "envs"
     capability_probe = (
@@ -1527,16 +1533,16 @@ def validate_trellis_cache(
         "trellis2-nodes": (
             "import torch, cumesh_vb, drtk, flash_attn, flex_gemm_ap, "
             "o_voxel_vb_ap, sageattention; "
-            "assert torch.__version__ == '2.11.0+cu128'; "
-            "assert torch.version.cuda == '12.8'; "
+            f"assert torch.__version__ == {expected_torch!r}; "
+            f"assert torch.version.cuda == {expected_cuda!r}; "
             f"{capability_probe}"
             "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
             "assert x.sum().item() == 4.0"
         ),
         "geometrypack-nodes": (
             "import torch, cumesh; "
-            "assert torch.__version__ == '2.11.0+cu128'; "
-            "assert torch.version.cuda == '12.8'; "
+            f"assert torch.__version__ == {expected_torch!r}; "
+            f"assert torch.version.cuda == {expected_cuda!r}; "
             f"{capability_probe}"
             "x = torch.ones(4, device='cuda'); torch.cuda.synchronize(); "
             "assert x.sum().item() == 4.0"
