@@ -13,15 +13,15 @@
       "schema": 1,
       "id": "3dgs",
       "repository": "https://github.com/DragonLord1998/ComfyColab-3DGS.git",
-      "ref": "a8c76c88d88a1754c059b4d4e322468014d124ce",
-      "manifest_sha256": "c5c2419d09fd88fefa30d3413620d98c3cbdb3a33829f542f8336a2a9be75e4c"
+      "ref": "f9112b54531a6fe25eb87600b80c5bc2cb7f84cb",
+      "manifest_sha256": "5ae4f89009eafb8b94bd93d2ce5b07579d05d3ce047c79337f0e48a49210a466"
     },
     {
       "schema": 1,
       "id": "image",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Image.git",
-      "ref": "06f871f622501f5dc79fcbe40e4eb534c68f10c2",
-      "manifest_sha256": "212c3fa5cea57da339c9d59808d2f67762e6b3d879a7efcf628284081e2ced0b"
+      "ref": "05de18c024acb59c5ac5ad866da48a6a4af22268",
+      "manifest_sha256": "3e71b03fddd5d85ed7b6b731f818091b92419427ea669bf5c75c150b8613e6c9"
     },
     {
       "schema": 1,
