@@ -23,7 +23,8 @@ those removed features.
 - Optimized H3 weights: <https://huggingface.co/Comfy-Org/MiniMax-H3>
 - H3 license: MiniMax H3 Community License distributed with the model
 - SageAttention source: <https://github.com/thu-ml/SageAttention>
-- Runtime package: `sageattention==2.2.0`
+- Runtime package: SageAttention 2.2.0, built from the immutable official
+  source commit `eb615cf6cf4d221338033340ee2de1c37fbdba4a`
 - SageAttention license: Apache-2.0
 
 ComfyColab uses SageAttention only for the loaded MiniMax H3 diffusion model;

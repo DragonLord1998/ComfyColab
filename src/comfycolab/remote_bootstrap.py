@@ -159,7 +159,17 @@ PIXAL3D_INFERENCE_REQUIREMENTS = (
 COMFY_ENV_VERSION = "0.3.89"
 COMFY_ENV_CALL_TIMEOUT_SECONDS = 7200
 COMFY_ENV_TIMEOUT_PATCH_ID = "comfy-env-call-timeout-v1"
-SAGE_ATTENTION_REQUIREMENT = "sageattention==2.2.0"
+SAGE_ATTENTION_VERSION = "2.2.0"
+SAGE_ATTENTION_SOURCE_REF = "eb615cf6cf4d221338033340ee2de1c37fbdba4a"
+SAGE_ATTENTION_REQUIREMENT = (
+    "git+https://github.com/thu-ml/SageAttention.git@"
+    f"{SAGE_ATTENTION_SOURCE_REF}"
+)
+SAGE_ATTENTION_BUILD_ENV = {
+    "EXT_PARALLEL": "4",
+    "NVCC_APPEND_FLAGS": "--threads 8",
+    "MAX_JOBS": "32",
+}
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_ASSETS = {
     "amd64": (
@@ -1617,6 +1627,8 @@ def install_ultrashape_overlay() -> None:
 
 def install_dependencies() -> str:
     run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], cwd=COMFY_DIR)
+    sage_attention_environment = dict(os.environ)
+    sage_attention_environment.update(SAGE_ATTENTION_BUILD_ENV)
     run(
         [
             sys.executable,
@@ -1634,7 +1646,8 @@ def install_dependencies() -> str:
             "install",
             "--no-build-isolation",
             SAGE_ATTENTION_REQUIREMENT,
-        ]
+        ],
+        env=sage_attention_environment,
     )
     gguf_requirements = GGUF_DIR / "requirements.txt"
     if gguf_requirements.exists():

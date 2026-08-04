@@ -1002,9 +1002,20 @@ class RuntimeContractTests(unittest.TestCase):
                             "install",
                             "--no-build-isolation",
                             runtime.SAGE_ATTENTION_REQUIREMENT,
-                        ]
+                        ],
+                        env=mock.ANY,
                     ),
                 ],
+            )
+            sage_environment = run.call_args_list[2].kwargs["env"]
+            self.assertEqual(
+                {key: sage_environment[key] for key in runtime.SAGE_ATTENTION_BUILD_ENV},
+                runtime.SAGE_ATTENTION_BUILD_ENV,
+            )
+            self.assertTrue(
+                runtime.SAGE_ATTENTION_REQUIREMENT.endswith(
+                    f"@{runtime.SAGE_ATTENTION_SOURCE_REF}"
+                )
             )
 
     def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:

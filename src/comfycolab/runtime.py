@@ -36,7 +36,17 @@ PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
 HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<2"
-SAGE_ATTENTION_REQUIREMENT = "sageattention==2.2.0"
+SAGE_ATTENTION_VERSION = "2.2.0"
+SAGE_ATTENTION_SOURCE_REF = "eb615cf6cf4d221338033340ee2de1c37fbdba4a"
+SAGE_ATTENTION_REQUIREMENT = (
+    "git+https://github.com/thu-ml/SageAttention.git@"
+    f"{SAGE_ATTENTION_SOURCE_REF}"
+)
+SAGE_ATTENTION_BUILD_ENV = {
+    "EXT_PARALLEL": "4",
+    "NVCC_APPEND_FLAGS": "--threads 8",
+    "MAX_JOBS": "32",
+}
 LEGACY_FULL_PACK_IDS = frozenset({"3d", "3dgs", "image", "video"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1449,6 +1459,8 @@ def install_core_requirements() -> None:
     if not requirements.is_file():
         raise RuntimeContractError("ComfyUI requirements.txt is missing")
     run([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+    sage_attention_environment = dict(os.environ)
+    sage_attention_environment.update(SAGE_ATTENTION_BUILD_ENV)
     run(
         [
             sys.executable,
@@ -1466,7 +1478,8 @@ def install_core_requirements() -> None:
             "install",
             "--no-build-isolation",
             SAGE_ATTENTION_REQUIREMENT,
-        ]
+        ],
+        env=sage_attention_environment,
     )
 
 

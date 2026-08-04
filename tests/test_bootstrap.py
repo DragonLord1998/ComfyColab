@@ -1304,7 +1304,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             (trellis_dir / "requirements.txt").write_text(
                 "comfy-env==0.3.89\n", encoding="utf-8"
             )
-            commands: list[tuple[list[str], Path | None]] = []
+            commands: list[tuple[list[str], Path | None, dict[str, str] | None]] = []
             with mock.patch.multiple(
                 remote_bootstrap,
                 COMFY_DIR=comfy_dir,
@@ -1314,7 +1314,9 @@ class BootstrapRenderingTests(unittest.TestCase):
             ), mock.patch.object(
                 remote_bootstrap,
                 "run",
-                side_effect=lambda command, cwd=None: commands.append((command, cwd)),
+                side_effect=lambda command, cwd=None, env=None: commands.append(
+                    (command, cwd, env)
+                ),
             ), mock.patch.object(remote_bootstrap, "install_ultrashape_overlay"), mock.patch.object(
                 remote_bootstrap, "patch_comfyenv_call_timeout"
             ) as timeout_patch:
@@ -1336,6 +1338,20 @@ class BootstrapRenderingTests(unittest.TestCase):
                     remote_bootstrap.SAGE_ATTENTION_REQUIREMENT,
                 ],
             )
+            sage_environment = commands[2][2]
+            self.assertIsNotNone(sage_environment)
+            self.assertEqual(
+                {
+                    key: sage_environment[key]
+                    for key in remote_bootstrap.SAGE_ATTENTION_BUILD_ENV
+                },
+                remote_bootstrap.SAGE_ATTENTION_BUILD_ENV,
+            )
+            self.assertTrue(
+                remote_bootstrap.SAGE_ATTENTION_REQUIREMENT.endswith(
+                    f"@{remote_bootstrap.SAGE_ATTENTION_SOURCE_REF}"
+                )
+            )
             self.assertEqual(commands[3][0][-1], str(gguf_dir / "requirements.txt"))
             self.assertEqual(
                 commands[4][0][-1],
@@ -1347,7 +1363,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             )
             self.assertEqual(
                 commands[6],
-                ([remote_bootstrap.sys.executable, "install.py"], trellis_dir),
+                ([remote_bootstrap.sys.executable, "install.py"], trellis_dir, None),
             )
             self.assertEqual(
                 commands[7][0][-1],
