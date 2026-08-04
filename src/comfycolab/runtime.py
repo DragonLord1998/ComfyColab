@@ -60,7 +60,7 @@ MINIMAX_H3_CORE_REQUIREMENTS = {
         "MiniMaxH3ImageToVideo",
         "MiniMaxH3ReferenceToVideo",
     ),
-    "nodes.py": ("VAEDecodeAudio",),
+    "comfy_extras/nodes_audio.py": ("VAEDecodeAudio",),
     "comfy/sd.py": ("minimax",),
 }
 

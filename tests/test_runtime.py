@@ -1122,6 +1122,11 @@ class RuntimeContractTests(unittest.TestCase):
                 )
 
     def test_minimax_h3_core_support_requires_native_nodes_and_clip_type(self) -> None:
+        self.assertIn(
+            "comfy_extras/nodes_audio.py",
+            runtime.MINIMAX_H3_CORE_REQUIREMENTS,
+        )
+        self.assertNotIn("nodes.py", runtime.MINIMAX_H3_CORE_REQUIREMENTS)
         with tempfile.TemporaryDirectory() as directory:
             comfy = Path(directory)
             for (
