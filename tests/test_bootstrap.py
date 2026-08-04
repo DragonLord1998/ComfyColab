@@ -333,7 +333,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         self.assertIn("torch.cuda.is_available()", source)
         self.assertIn("export_glb", source)
 
-    def test_pixal3d_nvdiffrast_source_is_pinned_and_manifested(self) -> None:
+    def test_pixal3d_nvdiffrast_wheel_is_pinned_and_manifested(self) -> None:
         root = Path(__file__).resolve().parents[1]
         environment = (
             root / "worker" / "pixal3d" / "environment.toml"
@@ -341,6 +341,11 @@ class BootstrapRenderingTests(unittest.TestCase):
 
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_REF, environment)
         self.assertIn(remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE, environment)
+        self.assertTrue(
+            remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE.endswith(
+                f"#sha256={remote_bootstrap.PIXAL3D_NVDIFFRAST_WHEEL_SHA256}"
+            )
+        )
         self.assertIn('"nvdiffrast.torch"', environment)
         self.assertTrue(
             remote_bootstrap.PIXAL3D_WORKER_PROFILE.endswith("-meshflow-v4")
@@ -583,8 +588,26 @@ class BootstrapRenderingTests(unittest.TestCase):
             python.write_text("", encoding="utf-8")
             with mock.patch.object(remote_bootstrap.Path, "home", return_value=home), mock.patch.object(
                 remote_bootstrap, "run"
-            ), mock.patch.object(remote_bootstrap, "validate_trellis_cache") as validate:
+            ) as run, mock.patch.object(remote_bootstrap, "validate_trellis_cache") as validate:
                 remote_bootstrap.install_ultrashape_overlay()
+        self.assertEqual(
+            run.call_args_list[1],
+            mock.call(
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-deps",
+                    remote_bootstrap.ULTRASHAPE_CUBVH_PACKAGE,
+                ]
+            ),
+        )
+        self.assertTrue(
+            remote_bootstrap.ULTRASHAPE_CUBVH_PACKAGE.endswith(
+                f"#sha256={remote_bootstrap.ULTRASHAPE_CUBVH_WHEEL_SHA256}"
+            )
+        )
         validate.assert_called_once_with(home / ".ce", validate_ultrashape=True)
 
     def test_pixal3d_skips_sm120_worker_on_other_gpus(self) -> None:
@@ -619,7 +642,7 @@ class BootstrapRenderingTests(unittest.TestCase):
         restore.assert_called_once_with()
         source_install.assert_called_once_with()
 
-    def test_pixal3d_source_install_builds_pinned_nvdiffrast(self) -> None:
+    def test_pixal3d_source_install_uses_pinned_nvdiffrast_wheel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / "repo"
@@ -659,7 +682,7 @@ class BootstrapRenderingTests(unittest.TestCase):
             "-m",
             "pip",
             "install",
-            "--no-build-isolation",
+            "--no-deps",
             remote_bootstrap.PIXAL3D_NVDIFFRAST_PACKAGE,
         ]
         self.assertIn(nvdiffrast_command, commands)

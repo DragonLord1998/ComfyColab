@@ -66,7 +66,7 @@ native_packages = [
   "flex_gemm_ap",
   "cumesh_vb",
   "o_voxel_vb_ap",
-  "git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae",
+  "https://github.com/PozzettiAndrea/cuda-wheels/releases/download/nvdiffrast-latest/nvdiffrast-0.4.0%2Bcu130torch2.11-cp312-cp312-manylinux_2_34_x86_64.manylinux_2_35_x86_64.whl#sha256=cdeb2560dd8431a3bec64faa55ab4dd1b662bfe4fab340549109bcc4c979f362",
   "flash-attn",
   "drtk",
   "natten==0.21.6+torch2110cu128",

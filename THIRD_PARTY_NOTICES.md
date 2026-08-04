@@ -241,8 +241,9 @@ needed by UltraShape inference are downloaded.
 - Pinned revision: `757b913bfbf19ed65e3a379d159391a8e29efa0f`
 - License: MIT, with an additional upstream NVIDIA notice for bundled code
 
-The CUDA extension is compiled for the G4 runtime's SM120 architecture and is
-stored only in the checksum-pinned environment cache release.
+The CUDA extension is installed from the checksum-pinned CUDA 13 / PyTorch
+2.11 / Python 3.12 wheel published by PozzettiAndrea's `cuda-wheels` release;
+notebook sessions do not compile it again.
 
 ## TRELLIS.2 and ComfyUI integrations
 

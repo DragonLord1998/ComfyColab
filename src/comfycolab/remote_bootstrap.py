@@ -81,6 +81,16 @@ COMFY_PID_PATCH_ID = "comfyui-pid15-compat-917faef-v1"
 COMBINED_CACHE_MANIFEST = "3d-g4-v2.json"
 PIXAL3D_CACHE_MANIFEST = "pixal3d-g4-v1.json"
 ULTRASHAPE_CUBVH_REF = "757b913bfbf19ed65e3a379d159391a8e29efa0f"
+ULTRASHAPE_CUBVH_WHEEL_SHA256 = (
+    "24e4fcc3e80202f6d9f46983dc9c0da30f22383a72efa1a077e1683a1f947fbb"
+)
+ULTRASHAPE_CUBVH_PACKAGE = (
+    "https://github.com/PozzettiAndrea/cuda-wheels/releases/download/"
+    "cubvh-latest/"
+    "cubvh-0.1.2%2Bcu130torch2.11-cp312-cp312-"
+    "manylinux_2_34_x86_64.manylinux_2_35_x86_64.whl"
+    f"#sha256={ULTRASHAPE_CUBVH_WHEEL_SHA256}"
+)
 BIREFNET_MODEL_REF = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
 PIXAL3D_REF = "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af"
 MESHFLOW_REF = "55f56f60e1bbf98d1c1991670ac998094d5f59ae"
@@ -109,6 +119,9 @@ PIXAL3D_NAF_CHECKPOINT_SHA256 = (
     "c096c1ab2217a5c3ac136365f721685e2201379cb69d509cfb0261183847c98f"
 )
 PIXAL3D_NVDIFFRAST_REF = "253ac4fcea7de5f396371124af597e6cc957bfae"
+PIXAL3D_NVDIFFRAST_WHEEL_SHA256 = (
+    "cdeb2560dd8431a3bec64faa55ab4dd1b662bfe4fab340549109bcc4c979f362"
+)
 PIXAL3D_VGGT_OMEGA_SOURCE_REF = "39a0cb8af88554f15ddcb5354cd52bde588fa014"
 PIXAL3D_VGGT_OMEGA_MODEL_REF = "05654241adc2f218dfb089c373a011f8a7040576"
 PIXAL3D_VGGT_OMEGA_FALLBACK_MODEL_REF = "a8c3a718e0cf78e9e4c6847229efea793d37f060"
@@ -129,8 +142,11 @@ PIXAL3D_WORKER_PROFILE = "g4-linux64-py31213-torch2110-cu128-sm120-pixal3d-meshf
 PIXAL3D_ENVIRONMENT_REF = PIXAL3D_WORKER_PROFILE
 PIXAL3D_PATCH_ID = "pixal3d-persistent-worker-v1"
 PIXAL3D_NVDIFFRAST_PACKAGE = (
-    "git+https://github.com/NVlabs/nvdiffrast.git@"
-    f"{PIXAL3D_NVDIFFRAST_REF}"
+    "https://github.com/PozzettiAndrea/cuda-wheels/releases/download/"
+    "nvdiffrast-latest/"
+    "nvdiffrast-0.4.0%2Bcu130torch2.11-cp312-cp312-"
+    "manylinux_2_34_x86_64.manylinux_2_35_x86_64.whl"
+    f"#sha256={PIXAL3D_NVDIFFRAST_WHEEL_SHA256}"
 )
 PIXAL3D_NATTEN_PACKAGE = "natten==0.21.6+torch2110cu128"
 PIXAL3D_NATTEN_WHEEL_INDEX = "https://whl.natten.org"
@@ -1334,7 +1350,7 @@ def install_pixal3d_source() -> str:
             "-m",
             "pip",
             "install",
-            "--no-build-isolation",
+            "--no-deps",
             PIXAL3D_NVDIFFRAST_PACKAGE,
         ]
     )
@@ -1623,8 +1639,8 @@ def install_ultrashape_overlay() -> None:
             "-m",
             "pip",
             "install",
-            "--no-build-isolation",
-            f"git+https://github.com/ashawkey/cubvh.git@{ULTRASHAPE_CUBVH_REF}",
+            "--no-deps",
+            ULTRASHAPE_CUBVH_PACKAGE,
         ]
     )
     validate_trellis_cache(Path.home() / ".ce", validate_ultrashape=True)
