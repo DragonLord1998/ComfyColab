@@ -345,7 +345,7 @@
     {
       "path": "comfy/model_detection.py",
       "before_sha256": "8dbe3a22bf6e0202b5aecb796ae4b1fabe206663202b4f2c977c1d4612af4a3f",
-      "after_sha256": "92c689b0ac2c8a50cbca26f23e507c8543f6435c1c95a19c2ffe430e31333d37",
+      "after_sha256": "3475b30e2c3995902b3cfefb82f4b9bfa1529022a33c7b8707791595bd3ef733",
       "replacements": [
         {
           "before_lines": [
