@@ -1317,7 +1317,13 @@ class BootstrapRenderingTests(unittest.TestCase):
                 side_effect=lambda command, cwd=None, env=None: commands.append(
                     (command, cwd, env)
                 ),
-            ), mock.patch.object(remote_bootstrap, "install_ultrashape_overlay"), mock.patch.object(
+            ), mock.patch.object(
+                remote_bootstrap, "install_minimax_h3_cuda_runtime"
+            ) as install_cuda, mock.patch.object(
+                remote_bootstrap, "validate_minimax_h3_cuda_runtime"
+            ) as validate_cuda, mock.patch.object(
+                remote_bootstrap, "install_ultrashape_overlay"
+            ), mock.patch.object(
                 remote_bootstrap, "patch_comfyenv_call_timeout"
             ) as timeout_patch:
                 remote_bootstrap.install_dependencies()
@@ -1347,6 +1353,10 @@ class BootstrapRenderingTests(unittest.TestCase):
                 },
                 remote_bootstrap.SAGE_ATTENTION_BUILD_ENV,
             )
+            self.assertEqual(
+                sage_environment["CUDA_HOME"],
+                str(remote_bootstrap.MINIMAX_H3_CUDA_HOME),
+            )
             self.assertTrue(
                 remote_bootstrap.SAGE_ATTENTION_REQUIREMENT.endswith(
                     f"@{remote_bootstrap.SAGE_ATTENTION_SOURCE_REF}"
@@ -1369,6 +1379,8 @@ class BootstrapRenderingTests(unittest.TestCase):
                 commands[7][0][-1],
                 remote_bootstrap.LTX_VIDEO_KORNIA_REQUIREMENT,
             )
+            install_cuda.assert_called_once_with()
+            validate_cuda.assert_called_once_with()
             timeout_patch.assert_called_once_with()
 
     def test_comfyenv_timeout_patch_is_exact_idempotent_and_cache_preserving(self) -> None:
@@ -1865,6 +1877,10 @@ class BootstrapRenderingTests(unittest.TestCase):
                 "restore_trellis_cache",
                 side_effect=RuntimeError("bad cache"),
             ), mock.patch.object(remote_bootstrap, "run") as run, mock.patch.object(
+                remote_bootstrap, "install_minimax_h3_cuda_runtime"
+            ), mock.patch.object(
+                remote_bootstrap, "validate_minimax_h3_cuda_runtime"
+            ), mock.patch.object(
                 remote_bootstrap, "install_ultrashape_overlay"
             ), mock.patch.object(
                 remote_bootstrap, "patch_comfyenv_call_timeout"

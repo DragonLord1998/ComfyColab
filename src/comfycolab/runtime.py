@@ -36,6 +36,14 @@ PIP_BASELINE_FILE = STATE_DIR / "pip-baseline.json"
 READY_PREFIX = "COMFYCOLAB_READY="
 DEFAULT_COLAB_CORS_ORIGIN = "https://colab.research.google.com"
 HUGGINGFACE_HUB_REQUIREMENT = "huggingface_hub[hf_xet]>=0.36.0,<2"
+MINIMAX_H3_CUDA_COMPILER_PACKAGE = "cuda-compiler-13-0=13.0.3-1"
+MINIMAX_H3_CUDA_HOME = Path("/usr/local/cuda-13.0")
+MINIMAX_H3_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu130"
+MINIMAX_H3_TORCH_REQUIREMENTS = (
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "torchaudio==2.11.0",
+)
 SAGE_ATTENTION_VERSION = "2.2.0"
 SAGE_ATTENTION_SOURCE_REF = "eb615cf6cf4d221338033340ee2de1c37fbdba4a"
 SAGE_ATTENTION_REQUIREMENT = (
@@ -1454,13 +1462,72 @@ def run_prestart_hooks(
     return runtime_environment, readiness
 
 
+def install_minimax_h3_cuda_runtime() -> None:
+    nvcc = MINIMAX_H3_CUDA_HOME / "bin" / "nvcc"
+    if not nvcc.is_file():
+        run(["apt-get", "update", "-qq"])
+        run(
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "-qq",
+                MINIMAX_H3_CUDA_COMPILER_PACKAGE,
+            ]
+        )
+    if not nvcc.is_file():
+        raise RuntimeContractError(
+            f"MiniMax H3 requires the CUDA 13 compiler at {nvcc}"
+        )
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            *MINIMAX_H3_TORCH_REQUIREMENTS,
+            "--index-url",
+            MINIMAX_H3_TORCH_INDEX_URL,
+        ]
+    )
+
+
+def sage_attention_build_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.update(SAGE_ATTENTION_BUILD_ENV)
+    environment["CUDA_HOME"] = str(MINIMAX_H3_CUDA_HOME)
+    environment["PATH"] = (
+        f"{MINIMAX_H3_CUDA_HOME / 'bin'}:{environment.get('PATH', '')}"
+    )
+    environment["LD_LIBRARY_PATH"] = (
+        f"{MINIMAX_H3_CUDA_HOME / 'lib64'}:"
+        f"{environment.get('LD_LIBRARY_PATH', '')}"
+    )
+    return environment
+
+
+def validate_minimax_h3_cuda_runtime() -> None:
+    run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import torch; from sageattention import sageattn; "
+                "assert torch.__version__ == '2.11.0+cu130'; "
+                "assert torch.version.cuda == '13.0'; "
+                "assert torch.cuda.get_device_capability() == (12, 0); "
+                "x = torch.ones(1, device='cuda'); torch.cuda.synchronize(); "
+                "assert x.item() == 1.0; assert callable(sageattn)"
+            ),
+        ]
+    )
+
+
 def install_core_requirements() -> None:
     requirements = COMFY_DIR / "requirements.txt"
     if not requirements.is_file():
         raise RuntimeContractError("ComfyUI requirements.txt is missing")
     run([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
-    sage_attention_environment = dict(os.environ)
-    sage_attention_environment.update(SAGE_ATTENTION_BUILD_ENV)
     run(
         [
             sys.executable,
@@ -1470,6 +1537,7 @@ def install_core_requirements() -> None:
             HUGGINGFACE_HUB_REQUIREMENT,
         ]
     )
+    install_minimax_h3_cuda_runtime()
     run(
         [
             sys.executable,
@@ -1479,8 +1547,9 @@ def install_core_requirements() -> None:
             "--no-build-isolation",
             SAGE_ATTENTION_REQUIREMENT,
         ],
-        env=sage_attention_environment,
+        env=sage_attention_build_environment(),
     )
+    validate_minimax_h3_cuda_runtime()
 
 
 def git_commit(directory: Path) -> str:

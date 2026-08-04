@@ -25,6 +25,8 @@ those removed features.
 - SageAttention source: <https://github.com/thu-ml/SageAttention>
 - Runtime package: SageAttention 2.2.0, built from the immutable official
   source commit `eb615cf6cf4d221338033340ee2de1c37fbdba4a`
+- CUDA runtime: PyTorch 2.11.0 wheels from the official CUDA 13.0 index, with
+  SageAttention compiled by NVIDIA CUDA compiler 13.0.3
 - SageAttention license: Apache-2.0
 
 ComfyColab uses SageAttention only for the loaded MiniMax H3 diffusion model;

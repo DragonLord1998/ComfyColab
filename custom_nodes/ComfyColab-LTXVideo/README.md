@@ -5,8 +5,8 @@
 `MiniMax H3 Bundle Loader` downloads the selected FL2VA or Ref2VA model and
 the shared text encoder and VAEs. The loaded H3 diffusion model is cloned and
 patched with ComfyUI's registered SageAttention backend, so the optimization
-applies only to H3 sampling. The runtime builds SageAttention 2.2.0 from an
-immutable commit in the official repository.
+applies only to H3 sampling. The runtime uses CUDA 13 with PyTorch 2.11 and
+builds SageAttention 2.2.0 from an immutable commit in the official repository.
 
 The loader asks only for MiniMax H3 Community License acknowledgement. Regional
 availability is verified by the user; the node performs no region, country,

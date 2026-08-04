@@ -289,7 +289,8 @@ registered. Example graphs are in
 
 The MiniMax H3 bundle loader supports the official optimized FL2VA and Ref2VA
 weights. Its diffusion model is automatically patched to use SageAttention
-2.2.0 for faster sampling; the patch is model-scoped and does not change the
+2.2.0 for faster sampling on the CUDA 13 / PyTorch 2.11 runtime; the patch is
+model-scoped and does not change the
 attention backend used by unrelated ComfyUI workflows. The Colab bootstrap
 installs the pinned SageAttention package before ComfyUI starts.
 
