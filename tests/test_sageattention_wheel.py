@@ -7,6 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "sageattention-wheel.yml"
 SPEC = importlib.util.spec_from_file_location(
     "build_sageattention_wheel",
     ROOT / "scripts" / "build_sageattention_wheel.py",
@@ -17,6 +18,11 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SageAttentionWheelTests(unittest.TestCase):
+    def test_workflow_installs_cuda13_development_headers(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("cuda-compiler-13-0=13.0.3-1", workflow)
+        self.assertIn("cuda-libraries-dev-13-0=13.0.3-1", workflow)
+
     def test_sm120_patch_removes_debug_symbols_and_unused_sm80_extension(self) -> None:
         source = f"{MODULE._DEBUG_FLAGS}\n{MODULE._SM80_CONDITION}\n"
         with tempfile.TemporaryDirectory() as directory:

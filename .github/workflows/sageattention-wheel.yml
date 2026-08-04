@@ -16,13 +16,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install CUDA 13 compiler
+      - name: Install CUDA 13 build toolchain
         run: |
           curl --fail --location --retry 3 --output /tmp/cuda-keyring.deb \
             https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i /tmp/cuda-keyring.deb
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cuda-compiler-13-0=13.0.3-1
+          sudo apt-get install -y -qq \
+            cuda-compiler-13-0=13.0.3-1 \
+            cuda-libraries-dev-13-0=13.0.3-1
       - name: Install pinned CUDA 13 PyTorch
         run: >-
           python -m pip install
