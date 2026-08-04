@@ -163,9 +163,9 @@ MINIMAX_H3_CUDA_COMPILER_PACKAGE = "cuda-compiler-13-0=13.0.3-1"
 MINIMAX_H3_CUDA_HOME = Path("/usr/local/cuda-13.0")
 MINIMAX_H3_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu130"
 MINIMAX_H3_TORCH_REQUIREMENTS = (
-    "torch==2.11.0",
-    "torchvision==0.26.0",
-    "torchaudio==2.11.0",
+    "torch==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "torchaudio==2.11.0+cu130",
 )
 SAGE_ATTENTION_VERSION = "2.2.0"
 SAGE_ATTENTION_SOURCE_REF = "eb615cf6cf4d221338033340ee2de1c37fbdba4a"

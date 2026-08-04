@@ -1070,6 +1070,12 @@ class RuntimeContractTests(unittest.TestCase):
                     runtime.MINIMAX_H3_TORCH_INDEX_URL,
                 ],
             )
+            self.assertTrue(
+                all(
+                    requirement.endswith("+cu130")
+                    for requirement in runtime.MINIMAX_H3_TORCH_REQUIREMENTS
+                )
+            )
 
     def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
