@@ -1652,11 +1652,32 @@ def install_ultrashape_overlay() -> None:
     validate_trellis_cache(Path.home() / ".ce", validate_ultrashape=True)
 
 
+def validate_minimax_h3_hardware() -> None:
+    run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import torch\n"
+                "if not torch.cuda.is_available():\n"
+                "    raise RuntimeError('MiniMax H3 SageAttention requires a CUDA GPU; no CUDA device is available')\n"
+                "name = torch.cuda.get_device_name()\n"
+                "capability = torch.cuda.get_device_capability()\n"
+                "if capability != (12, 0):\n"
+                "    detected = f'{name} (SM{capability[0]}{capability[1]})'\n"
+                "    raise RuntimeError('MiniMax H3 SageAttention requires G4/SM120 hardware before installing the CUDA 13 runtime; detected ' + detected + '. Select a G4 runtime and restart the notebook.')\n"
+                "print(f'[comfycolab] MiniMax H3 hardware preflight passed: {name} (SM{capability[0]}{capability[1]})')\n"
+            ),
+        ]
+    )
+
+
 def install_minimax_h3_cuda_runtime() -> None:
     if sys.version_info[:2] != (3, 12):
         raise RuntimeError(
             "The cached MiniMax H3 SageAttention wheel requires Python 3.12"
         )
+    validate_minimax_h3_hardware()
     run(
         [
             sys.executable,
@@ -1676,14 +1697,34 @@ def validate_minimax_h3_cuda_runtime() -> None:
             sys.executable,
             "-c",
             (
-                "import torch; from importlib.metadata import version; "
-                "from sageattention import sageattn; "
-                f"assert version('sageattention') == {SAGE_ATTENTION_VERSION!r}; "
-                "assert torch.__version__ == '2.11.0+cu130'; "
-                "assert torch.version.cuda == '13.0'; "
-                "assert torch.cuda.get_device_capability() == (12, 0); "
-                "x = torch.ones(1, device='cuda'); torch.cuda.synchronize(); "
-                "assert x.item() == 1.0; assert callable(sageattn)"
+                "import torch\n"
+                "from importlib.metadata import version\n"
+                "from sageattention import sageattn\n"
+                "actual = {\n"
+                "    'sageattention': version('sageattention'),\n"
+                "    'torch': str(torch.__version__),\n"
+                "    'cuda': str(torch.version.cuda),\n"
+                "    'device': torch.cuda.get_device_name() if torch.cuda.is_available() else 'unavailable',\n"
+                "    'capability': torch.cuda.get_device_capability() if torch.cuda.is_available() else None,\n"
+                "}\n"
+                "mismatches = []\n"
+                f"if actual['sageattention'] != {SAGE_ATTENTION_VERSION!r}:\n"
+                f"    mismatches.append(\"sageattention expected {SAGE_ATTENTION_VERSION}, found \" + actual['sageattention'])\n"
+                "if actual['torch'] != '2.11.0+cu130':\n"
+                "    mismatches.append('torch expected 2.11.0+cu130, found ' + actual['torch'])\n"
+                "if actual['cuda'] != '13.0':\n"
+                "    mismatches.append('CUDA expected 13.0, found ' + actual['cuda'])\n"
+                "if actual['capability'] != (12, 0):\n"
+                "    mismatches.append('GPU expected G4/SM120, found ' + actual['device'] + ' ' + str(actual['capability']))\n"
+                "if not callable(sageattn):\n"
+                "    mismatches.append('sageattention.sageattn is not callable')\n"
+                "if mismatches:\n"
+                "    raise RuntimeError('MiniMax H3 CUDA runtime validation failed: ' + '; '.join(mismatches))\n"
+                "x = torch.ones(1, device='cuda')\n"
+                "torch.cuda.synchronize()\n"
+                "if x.item() != 1.0:\n"
+                "    raise RuntimeError('MiniMax H3 CUDA runtime validation failed: CUDA tensor smoke test returned ' + str(x.item()))\n"
+                "print('[comfycolab] MiniMax H3 CUDA runtime validation passed: ' + str(actual))\n"
             ),
         ]
     )

@@ -1415,6 +1415,60 @@ class BootstrapRenderingTests(unittest.TestCase):
             validate_cuda.assert_called_once_with()
             timeout_patch.assert_called_once_with()
 
+    def test_minimax_h3_cuda_install_preflights_hardware_before_download(self) -> None:
+        events: list[str] = []
+        with mock.patch.object(
+            remote_bootstrap,
+            "validate_minimax_h3_hardware",
+            side_effect=lambda: events.append("hardware"),
+        ), mock.patch.object(
+            remote_bootstrap.sys,
+            "version_info",
+            (3, 12),
+        ), mock.patch.object(
+            remote_bootstrap,
+            "run",
+            side_effect=lambda *_args, **_kwargs: events.append("install"),
+        ):
+            remote_bootstrap.install_minimax_h3_cuda_runtime()
+
+        self.assertEqual(events, ["hardware", "install"])
+
+    def test_minimax_h3_hardware_preflight_reports_detected_gpu(self) -> None:
+        commands: list[list[str]] = []
+        with mock.patch.object(
+            remote_bootstrap,
+            "run",
+            side_effect=lambda command, **_kwargs: commands.append(command),
+        ):
+            remote_bootstrap.validate_minimax_h3_hardware()
+
+        self.assertEqual(len(commands), 1)
+        source = commands[0][-1]
+        compile(source, "<minimax-h3-hardware-preflight>", "exec")
+        self.assertIn("requires G4/SM120 hardware", source)
+        self.assertIn("torch.cuda.get_device_name()", source)
+        self.assertIn("Select a G4 runtime and restart the notebook", source)
+
+    def test_minimax_h3_cuda_validation_names_every_mismatch(self) -> None:
+        commands: list[list[str]] = []
+        with mock.patch.object(
+            remote_bootstrap,
+            "run",
+            side_effect=lambda command, **_kwargs: commands.append(command),
+        ):
+            remote_bootstrap.validate_minimax_h3_cuda_runtime()
+
+        self.assertEqual(len(commands), 1)
+        source = commands[0][-1]
+        compile(source, "<minimax-h3-cuda-validation>", "exec")
+        self.assertNotIn("assert ", source)
+        self.assertIn("sageattention expected 2.2.0", source)
+        self.assertIn("torch expected 2.11.0+cu130", source)
+        self.assertIn("CUDA expected 13.0", source)
+        self.assertIn("GPU expected G4/SM120", source)
+        self.assertIn("CUDA tensor smoke test returned", source)
+
     def test_comfyenv_timeout_patch_is_exact_idempotent_and_cache_preserving(self) -> None:
         source = (
             "import os\n"
