@@ -18,7 +18,7 @@ PUBLIC_NODE_ID = "ComfyColabPiDUpscale"
 DISPLAY_NAME = "ComfyColab PiD — Image Upscaler"
 MAGE_VAE = "Mage-VAE (experimental)"
 BACKBONES = ["FLUX.1", "FLUX.2", "Qwen Image", MAGE_VAE]
-SCALES = ["4x", "Experimental 16x (tiled)"]
+SCALES = ["2x", "4x", "8x", "16x"]
 PID_FILENAMES = {
     "FLUX.1": "pid_1.5_flux1_1024_to_4096_4step_bf16.safetensors",
     "FLUX.2": "pid_1.5_flux2_1024_to_4096_4step_bf16.safetensors",
@@ -155,8 +155,13 @@ REQUIRED_NATIVE_NODES = {
     "ManualSigmas",
     "SamplerCustom",
     "VAEDecode",
-    "ContextWindowsManual",
     "ImageScale",
+    "SplitImageToTileList",
+    "ImageMergeTileList",
+    "VAEDecodeTiled",
+    "ModelSamplingAuraFlow",
+    "KSampler",
+    "ComfyColabZImageTurboBundleLoader",
     "ComfyColabMageVAEEncode",
 }
 
@@ -238,7 +243,7 @@ class PiDNodePackTests(unittest.TestCase):
 
     @staticmethod
     def _execute(node, *, backbone="FLUX.1", scale="4x", image=None, **kwargs):
-        return node.execute(
+        parameters = dict(
             image=image or FakeImage(),
             vae_family=backbone,
             prompt="restore clean fine photographic detail",
@@ -248,8 +253,9 @@ class PiDNodePackTests(unittest.TestCase):
             tile_size=1536,
             tile_overlap=384,
             accept_nvidia_noncommercial_license=True,
-            **kwargs,
         )
+        parameters.update(kwargs)
+        return node.execute(**parameters)
 
     def test_import_is_lazy_and_exposes_one_public_facade_with_exact_schema(self):
         before = set(sys.modules)
@@ -277,7 +283,7 @@ class PiDNodePackTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in schema.outputs], ["image"])
         self.assertEqual([item["io_type"] for item in schema.outputs], ["IMAGE"])
         self.assertEqual(inputs["vae_family"]["options"], BACKBONES)
-        self.assertEqual(inputs["vae_family"]["default"], "FLUX.1")
+        self.assertEqual(inputs["vae_family"]["default"], "FLUX.2")
         self.assertEqual(inputs["scale"]["options"], SCALES)
         self.assertEqual(inputs["scale"]["default"], "4x")
         self.assertEqual(inputs["seed"]["default"], 0)
@@ -330,18 +336,24 @@ class PiDNodePackTests(unittest.TestCase):
                         node_types.count("VAELoader"),
                         1 if backbone == MAGE_VAE else 2,
                     )
+                    pid_passes = node_types.count("PiDConditioning")
+                    self.assertEqual(pid_passes, 1)
                     self.assertEqual(
                         node_types.count("VAEEncode"),
-                        0 if backbone == MAGE_VAE else 1,
+                        0 if backbone == MAGE_VAE else pid_passes,
                     )
                     self.assertEqual(
                         node_types.count("ComfyColabMageVAEEncode"),
-                        1 if backbone == MAGE_VAE else 0,
+                        pid_passes if backbone == MAGE_VAE else 0,
                     )
-                    self.assertEqual(node_types.count("VAEEncodeTiled"), 0)
-                    self.assertEqual(node_types.count("PiDConditioning"), 1)
-                    self.assertEqual(node_types.count("SamplerCustom"), 1)
+                    self.assertEqual(node_types.count("VAEEncodeTiled"), 1)
+                    self.assertEqual(node_types.count("SamplerCustom"), pid_passes)
                     self.assertEqual(node_types.count("ContextWindowsManual"), 0)
+                    self.assertEqual(
+                        node_types.count("ComfyColabZImageTurboBundleLoader"), 1
+                    )
+                    self.assertEqual(node_types.count("ModelSamplingAuraFlow"), 1)
+                    self.assertGreater(node_types.count("KSampler"), 0)
 
                     unet = next(item for item in expanded if item["class_type"] == "UNETLoader")
                     clip = next(item for item in expanded if item["class_type"] == "CLIPLoader")
@@ -370,8 +382,8 @@ class PiDNodePackTests(unittest.TestCase):
                         {item["inputs"]["vae_name"] for item in vaes},
                         expected_vaes,
                     )
-                    self.assertEqual(latent["inputs"]["width"], 2048)
-                    self.assertEqual(latent["inputs"]["height"], 2048)
+                    self.assertLessEqual(latent["inputs"]["width"], 1536)
+                    self.assertLessEqual(latent["inputs"]["height"], 1536)
                     self.assertEqual(sampler["inputs"]["sampler_name"], "lcm")
                     self.assertEqual(sigmas["inputs"]["sigmas"], "0.999,0.866,0.634,0.342,0")
                     self.assertEqual(custom["inputs"]["cfg"], 1.0)
@@ -413,31 +425,25 @@ class PiDNodePackTests(unittest.TestCase):
                         self.assertEqual(mage_encode["inputs"]["tile_size"], 1536)
                         self.assertEqual(mage_encode["inputs"]["tile_overlap"], 384)
 
-    def test_experimental_16x_is_two_4x_passes_and_tiles_second_pass(self):
+    def test_16x_is_two_fully_tiled_4x_pid_stages_then_tiled_cleanup(self):
         _, nodes, graph, models = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
         with self._mock_model_downloads((nodes, graph, models)):
             result = self._execute(
                 facade,
                 backbone="FLUX.2",
-                scale="Experimental 16x (tiled)",
-                image=FakeImage(width=256, height=384),
+                scale="16x",
+                image=FakeImage(width=128, height=128),
             )
         expanded = result.expand
         node_types = [item["class_type"] for item in expanded]
         self.assertEqual(node_types.count("PiDConditioning"), 2)
         self.assertEqual(node_types.count("SamplerCustom"), 2)
-        self.assertEqual(node_types.count("VAEEncode"), 1)
+        self.assertEqual(node_types.count("VAEEncode"), 2)
+        self.assertEqual(node_types.count("ContextWindowsManual"), 0)
+        self.assertEqual(node_types.count("KSampler"), 1)
         self.assertEqual(node_types.count("VAEEncodeTiled"), 1)
-        context = next(
-            item for item in expanded if item["class_type"] == "ContextWindowsManual"
-        )
-        self.assertEqual(context["inputs"]["dim"], 2)
-        self.assertEqual(context["inputs"]["context_length"], 1536)
-        self.assertEqual(context["inputs"]["context_overlap"], 384)
-        self.assertEqual(context["inputs"]["context_schedule"], "standard_static")
-        self.assertEqual(context["inputs"]["fuse_method"], "pyramid")
-        self.assertFalse(context["inputs"]["freenoise"])
+        self.assertEqual(node_types.count("VAEDecodeTiled"), 1)
         latents = [
             item
             for item in expanded
@@ -445,29 +451,64 @@ class PiDNodePackTests(unittest.TestCase):
         ]
         self.assertEqual(
             [(item["inputs"]["width"], item["inputs"]["height"]) for item in latents],
-            [(1024, 1536), (4096, 6144)],
+            [(512, 512), (1536, 1536)],
         )
-        second_encode = next(
-            item for item in expanded if item["class_type"] == "VAEEncodeTiled"
-        )
-        self.assertEqual(second_encode["inputs"]["tile_size"], 1536)
-        self.assertEqual(second_encode["inputs"]["overlap"], 384)
+        self.assertEqual(node_types.count("SplitImageToTileList"), 3)
+        self.assertEqual(node_types.count("ImageMergeTileList"), 3)
 
-    def test_mage_vae_16x_uses_isolated_tiled_encoder_for_both_passes(self):
+    def test_zimage_cleanup_uses_pinned_light_tiled_recipe(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                backbone="FLUX.2",
+                image=FakeImage(width=512, height=512),
+            )
+        expanded = result.expand
+        node_types = [item["class_type"] for item in expanded]
+        self.assertNotIn("UpscaleModelLoader", node_types)
+        self.assertNotIn("ImageUpscaleWithModel", node_types)
+        loader = next(
+            item
+            for item in expanded
+            if item["class_type"] == "ComfyColabZImageTurboBundleLoader"
+        )
+        self.assertEqual(loader["inputs"]["quantization"], "Q4_K_M")
+        sampling = next(
+            item for item in expanded if item["class_type"] == "ModelSamplingAuraFlow"
+        )
+        self.assertEqual(sampling["inputs"]["shift"], 3.0)
+        cleanup = next(item for item in expanded if item["class_type"] == "KSampler")
+        self.assertEqual(cleanup["inputs"]["steps"], 5)
+        self.assertEqual(cleanup["inputs"]["cfg"], 1.0)
+        self.assertEqual(cleanup["inputs"]["sampler_name"], "dpmpp_2m_sde")
+        self.assertEqual(cleanup["inputs"]["scheduler"], "beta")
+        self.assertEqual(cleanup["inputs"]["denoise"], 0.33)
+        cleanup_split = [
+            item
+            for item in expanded
+            if item["class_type"] == "SplitImageToTileList"
+        ][-1]
+        self.assertEqual(cleanup_split["inputs"]["tile_width"], 1536)
+        self.assertEqual(cleanup_split["inputs"]["tile_height"], 1536)
+        self.assertEqual(cleanup_split["inputs"]["overlap"], 384)
+
+    def test_mage_vae_16x_uses_isolated_encoder_for_every_pid_tile(self):
         _, nodes, graph, models = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
         with self._mock_model_downloads((nodes, graph, models)):
             result = self._execute(
                 facade,
                 backbone=MAGE_VAE,
-                scale="Experimental 16x (tiled)",
-                image=FakeImage(width=256, height=384),
+                scale="16x",
+                image=FakeImage(width=128, height=128),
             )
         expanded = result.expand
         node_types = [item["class_type"] for item in expanded]
         self.assertEqual(node_types.count("ComfyColabMageVAEEncode"), 2)
         self.assertEqual(node_types.count("VAEEncode"), 0)
-        self.assertEqual(node_types.count("VAEEncodeTiled"), 0)
+        self.assertEqual(node_types.count("VAEEncodeTiled"), 1)
         encoders = [
             item
             for item in expanded
@@ -480,19 +521,59 @@ class PiDNodePackTests(unittest.TestCase):
             all(item["inputs"]["tile_overlap"] == 384 for item in encoders)
         )
 
-    def test_arbitrary_image_dimensions_are_exactly_resized_after_pid(self):
+    def test_2x_downsamples_tiled_native_4x_pid_before_cleanup(self):
         _, nodes, graph, models = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
         with self._mock_model_downloads((nodes, graph, models)):
             result = self._execute(
                 facade,
-                image=FakeImage(width=513, height=511),
+                scale="2x",
+                image=FakeImage(width=257, height=259),
             )
-        resize = next(
+        resizes = [
             item for item in result.expand if item["class_type"] == "ImageScale"
+        ]
+        self.assertTrue(
+            any(
+                item["inputs"]["width"] == 514
+                and item["inputs"]["height"] == 518
+                for item in resizes
+            )
         )
-        self.assertEqual(resize["inputs"]["width"], 2052)
-        self.assertEqual(resize["inputs"]["height"], 2044)
+        merges = [
+            item
+            for item in result.expand
+            if item["class_type"] == "ImageMergeTileList"
+        ]
+        self.assertEqual(
+            [
+                (item["inputs"]["final_width"], item["inputs"]["final_height"])
+                for item in merges
+            ],
+            [(514, 518), (514, 518)],
+        )
+
+    def test_8x_downsamples_second_stage_tiles_before_merge(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                scale="8x",
+                image=FakeImage(width=128, height=128),
+            )
+        merges = [
+            item
+            for item in result.expand
+            if item["class_type"] == "ImageMergeTileList"
+        ]
+        self.assertEqual(
+            [
+                (item["inputs"]["final_width"], item["inputs"]["final_height"])
+                for item in merges
+            ],
+            [(512, 512), (1024, 1024), (1024, 1024)],
+        )
 
     def test_mage_vae_alignment_drives_pid_target_then_resizes_exactly(self):
         _, nodes, graph, models = self._modules()
@@ -508,13 +589,18 @@ class PiDNodePackTests(unittest.TestCase):
             for item in result.expand
             if item["class_type"] == "EmptyChromaRadianceLatentImage"
         )
-        self.assertEqual(latent["inputs"]["width"], 1088)
-        self.assertEqual(latent["inputs"]["height"], 1088)
-        resize = next(
+        self.assertEqual(latent["inputs"]["width"], 1040)
+        self.assertEqual(latent["inputs"]["height"], 1040)
+        resizes = [
             item for item in result.expand if item["class_type"] == "ImageScale"
+        ]
+        self.assertTrue(
+            any(
+                item["inputs"]["width"] == 1028
+                and item["inputs"]["height"] == 1036
+                for item in resizes
+            )
         )
-        self.assertEqual(resize["inputs"]["width"], 1028)
-        self.assertEqual(resize["inputs"]["height"], 1036)
 
     def test_mage_vae_accepts_small_images_after_16_pixel_alignment(self):
         _, nodes, graph, models = self._modules()
@@ -532,15 +618,32 @@ class PiDNodePackTests(unittest.TestCase):
         )
         self.assertEqual(encoder["inputs"]["vae_name"], "mage-vae.safetensors")
 
-    def test_output_caps_are_validated_before_downloads(self):
+    def test_previous_8k_cap_is_removed_for_tiled_16x(self):
+        _, nodes, graph, models = self._modules()
+        facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
+        with self._mock_model_downloads((nodes, graph, models)):
+            result = self._execute(
+                facade,
+                scale="16x",
+                image=FakeImage(width=1024, height=512),
+                tile_size=4096,
+                tile_overlap=512,
+            )
+        self.assertTrue(result.expand)
+        self.assertGreater(
+            sum(item["class_type"] == "PiDConditioning" for item in result.expand),
+            1,
+        )
+
+    def test_pinned_32k_merge_limit_is_checked_before_downloads(self):
         _, nodes, _, _ = self._modules()
         facade = nodes.NODE_CLASS_MAPPINGS[PUBLIC_NODE_ID]
         with mock.patch.object(nodes, "ensure_pid_assets") as ensure:
-            with self.assertRaisesRegex(ValueError, "capped"):
+            with self.assertRaisesRegex(ValueError, "32768px per side"):
                 self._execute(
                     facade,
-                    scale="Experimental 16x (tiled)",
-                    image=FakeImage(width=1024, height=512),
+                    scale="16x",
+                    image=FakeImage(width=2049, height=512),
                 )
         ensure.assert_not_called()
 

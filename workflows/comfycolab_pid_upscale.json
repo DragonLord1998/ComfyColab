@@ -129,7 +129,7 @@
         "Node name for S&R": "ComfyColabPiDUpscale"
       },
       "widgets_values": [
-        "FLUX.1",
+        "FLUX.2",
         "high fidelity detailed product photo upscale with clean textures",
         "4x",
         12345,

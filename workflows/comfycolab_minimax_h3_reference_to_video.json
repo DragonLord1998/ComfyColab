@@ -1,8 +1,8 @@
 {
   "id": "34d18f34-9c94-4b71-9eaa-728a4a45904b",
   "revision": 0,
-  "last_node_id": 7,
-  "last_link_id": 7,
+  "last_node_id": 8,
+  "last_link_id": 8,
   "nodes": [
     {
       "id": 1,
@@ -10,7 +10,7 @@
       "pos": [-860, -120],
       "size": [430, 190],
       "flags": {},
-      "order": 0,
+      "order": 1,
       "mode": 0,
       "inputs": [
         {"name": "model_variant", "type": "COMBO", "widget": {"name": "model_variant"}, "link": null},
@@ -33,11 +33,11 @@
       "pos": [-300, -180],
       "size": [560, 850],
       "flags": {},
-      "order": 1,
+      "order": 2,
       "mode": 0,
       "inputs": [
         {"name": "bundle", "type": "MINIMAX_H3_BUNDLE", "link": 1},
-        {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}, "link": null},
+        {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}, "link": 8},
         {"name": "duration_seconds", "type": "FLOAT", "widget": {"name": "duration_seconds"}, "link": null},
         {"name": "width", "type": "INT", "widget": {"name": "width"}, "link": null},
         {"name": "height", "type": "INT", "widget": {"name": "height"}, "link": null},
@@ -71,7 +71,7 @@
       "pos": [380, -120],
       "size": [330, 110],
       "flags": {},
-      "order": 2,
+      "order": 3,
       "mode": 0,
       "inputs": [
         {"name": "video", "type": "VIDEO", "link": 2},
@@ -89,7 +89,7 @@
       "pos": [-860, 170],
       "size": [315, 314],
       "flags": {},
-      "order": 3,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": null},
@@ -108,7 +108,7 @@
       "pos": [-860, 520],
       "size": [315, 180],
       "flags": {},
-      "order": 4,
+      "order": 5,
       "mode": 0,
       "inputs": [
         {"name": "file", "type": "COMBO", "widget": {"name": "file"}, "link": null}
@@ -125,7 +125,7 @@
       "pos": [-510, 620],
       "size": [315, 120],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 0,
       "inputs": [
         {"name": "audio", "type": "COMBO", "widget": {"name": "audio"}, "link": null}
@@ -142,7 +142,7 @@
       "pos": [-510, 500],
       "size": [315, 150],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 0,
       "inputs": [
         {"name": "video", "type": "VIDEO", "link": 7}
@@ -155,6 +155,37 @@
       ],
       "properties": {"Node name for S&R": "GetVideoComponents"},
       "widgets_values": []
+    },
+    {
+      "id": 8,
+      "type": "ComfyColabMiniMaxH3PromptEnhancer",
+      "pos": [-860, -610],
+      "size": [540, 440],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}, "link": null},
+        {"name": "prompt_mode", "type": "COMBO", "widget": {"name": "prompt_mode"}, "link": null},
+        {"name": "duration_seconds", "type": "FLOAT", "widget": {"name": "duration_seconds"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "max_tokens", "type": "INT", "widget": {"name": "max_tokens"}, "link": null},
+        {"name": "temperature", "type": "FLOAT", "widget": {"name": "temperature"}, "link": null},
+        {"name": "force_redownload", "type": "BOOLEAN", "widget": {"name": "force_redownload"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "enhanced_prompt", "type": "STRING", "links": [8]}
+      ],
+      "properties": {"Node name for S&R": "ComfyColabMiniMaxH3PromptEnhancer"},
+      "widgets_values": [
+        "Use <Picture 1> as the lead character reference. Match the camera rhythm from <Video 1> and carry the voice texture from <Audio 1> into a new street interview scene.",
+        "Ref2VA — Full references",
+        5.0,
+        0,
+        8192,
+        1.0,
+        false
+      ]
     }
   ],
   "links": [
@@ -164,7 +195,8 @@
     [4, 7, 1, 2, 10, "AUDIO"],
     [5, 7, 0, 2, 9, "IMAGE"],
     [6, 6, 0, 2, 11, "AUDIO"],
-    [7, 5, 0, 7, 0, "VIDEO"]
+    [7, 5, 0, 7, 0, "VIDEO"],
+    [8, 8, 0, 2, 1, "STRING"]
   ],
   "groups": [],
   "config": {},

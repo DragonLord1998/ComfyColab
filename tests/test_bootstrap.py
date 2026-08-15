@@ -7,6 +7,7 @@ import io
 import json
 import re
 import socket
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -1362,6 +1363,10 @@ class BootstrapRenderingTests(unittest.TestCase):
             ) as install_cuda, mock.patch.object(
                 remote_bootstrap, "validate_minimax_h3_cuda_runtime"
             ) as validate_cuda, mock.patch.object(
+                remote_bootstrap,
+                "supports_minimax_h3_hardware",
+                return_value=True,
+            ), mock.patch.object(
                 remote_bootstrap, "install_ultrashape_overlay"
             ), mock.patch.object(
                 remote_bootstrap, "patch_comfyenv_call_timeout"
@@ -1415,6 +1420,73 @@ class BootstrapRenderingTests(unittest.TestCase):
             validate_cuda.assert_called_once_with()
             timeout_patch.assert_called_once_with()
 
+    def test_non_sm120_runtime_skips_h3_cuda_stack_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            comfy_dir = root / "ComfyUI"
+            gguf_dir = comfy_dir / "custom_nodes" / "ComfyUI-GGUF"
+            ltx_video_dir = comfy_dir / "custom_nodes" / "ComfyUI-LTXVideo"
+            trellis_dir = comfy_dir / "custom_nodes" / "ComfyUI-TRELLIS2"
+            for path in (comfy_dir, gguf_dir, ltx_video_dir, trellis_dir):
+                path.mkdir(parents=True, exist_ok=True)
+            (comfy_dir / "requirements.txt").write_text("torch\n", encoding="utf-8")
+            (gguf_dir / "requirements.txt").write_text("gguf\n", encoding="utf-8")
+            (ltx_video_dir / "requirements.txt").write_text(
+                "diffusers\n", encoding="utf-8"
+            )
+            (trellis_dir / "requirements.txt").write_text(
+                "comfy-env==0.3.89\n", encoding="utf-8"
+            )
+            commands: list[list[str]] = []
+            with mock.patch.multiple(
+                remote_bootstrap,
+                COMFY_DIR=comfy_dir,
+                GGUF_DIR=gguf_dir,
+                LTX_VIDEO_DIR=ltx_video_dir,
+                TRELLIS_DIR=trellis_dir,
+            ), mock.patch.object(
+                remote_bootstrap,
+                "supports_minimax_h3_hardware",
+                return_value=False,
+            ), mock.patch.object(
+                remote_bootstrap,
+                "run",
+                side_effect=lambda command, **_kwargs: commands.append(command),
+            ), mock.patch.object(
+                remote_bootstrap, "install_minimax_h3_cuda_runtime"
+            ) as install_cuda, mock.patch.object(
+                remote_bootstrap, "validate_minimax_h3_cuda_runtime"
+            ) as validate_cuda, mock.patch.object(
+                remote_bootstrap, "install_ultrashape_overlay"
+            ), mock.patch.object(
+                remote_bootstrap, "patch_comfyenv_call_timeout"
+            ):
+                remote_bootstrap.install_dependencies()
+
+            install_cuda.assert_not_called()
+            validate_cuda.assert_not_called()
+            self.assertFalse(
+                any(remote_bootstrap.SAGE_ATTENTION_REQUIREMENT in command for command in commands)
+            )
+            self.assertTrue(
+                any(str(ltx_video_dir / "requirements.txt") in command for command in commands)
+            )
+
+    def test_minimax_h3_hardware_probe_treats_t4_as_optional(self) -> None:
+        probe = subprocess.CompletedProcess(
+            args=["python"],
+            returncode=1,
+            stdout="Tesla T4 (SM75)\n",
+            stderr="",
+        )
+        with mock.patch.object(
+            remote_bootstrap.subprocess,
+            "run",
+            return_value=probe,
+        ), mock.patch("builtins.print") as output:
+            self.assertFalse(remote_bootstrap.supports_minimax_h3_hardware())
+        self.assertIn("Other ComfyColab workflows remain available", str(output.call_args))
+
     def test_minimax_h3_cuda_install_preflights_hardware_before_download(self) -> None:
         events: list[str] = []
         with mock.patch.object(
@@ -1433,6 +1505,33 @@ class BootstrapRenderingTests(unittest.TestCase):
             remote_bootstrap.install_minimax_h3_cuda_runtime()
 
         self.assertEqual(events, ["hardware", "install"])
+
+    def test_h3_cuda_runtime_removes_only_incompatible_colab_cuda12_packages(self) -> None:
+        distributions = [
+            mock.Mock(metadata={"Name": "libcuml-cu12"}),
+            mock.Mock(metadata={"Name": "cuda-python"}),
+            mock.Mock(metadata={"Name": "nvidia-cudnn-cu12"}),
+            mock.Mock(metadata={"Name": "unrelated-package"}),
+        ]
+        with mock.patch.object(
+            remote_bootstrap.importlib.metadata,
+            "distributions",
+            return_value=distributions,
+        ), mock.patch.object(remote_bootstrap, "run") as run:
+            removed = remote_bootstrap.remove_incompatible_colab_cuda12_packages()
+
+        self.assertEqual(removed, ["cuda-python", "libcuml-cu12"])
+        run.assert_called_once_with(
+            [
+                remote_bootstrap.sys.executable,
+                "-m",
+                "pip",
+                "uninstall",
+                "--yes",
+                "cuda-python",
+                "libcuml-cu12",
+            ]
+        )
 
     def test_minimax_h3_hardware_preflight_reports_detected_gpu(self) -> None:
         commands: list[list[str]] = []

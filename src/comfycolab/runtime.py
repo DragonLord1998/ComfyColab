@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -1459,11 +1460,39 @@ def run_prestart_hooks(
     return runtime_environment, readiness
 
 
+def remove_incompatible_colab_cuda12_packages() -> list[str]:
+    packages = sorted(
+        {
+            name
+            for distribution in importlib.metadata.distributions()
+            if (name := distribution.metadata.get("Name", ""))
+            and (
+                name.lower().replace("_", "-") == "cuda-python"
+                or (
+                    name.lower().replace("_", "-").endswith("-cu12")
+                    and not name.lower().replace("_", "-").startswith("nvidia-")
+                )
+            )
+        },
+        key=str.lower,
+    )
+    if packages:
+        print(
+            "[comfycolab] Removing preinstalled CUDA 12 RAPIDS packages before "
+            "the pinned CUDA 13 H3 runtime: "
+            + ", ".join(packages),
+            flush=True,
+        )
+        run([sys.executable, "-m", "pip", "uninstall", "--yes", *packages])
+    return packages
+
+
 def install_minimax_h3_cuda_runtime() -> None:
     if sys.version_info[:2] != (3, 12):
         raise RuntimeContractError(
             "The cached MiniMax H3 SageAttention wheel requires Python 3.12"
         )
+    remove_incompatible_colab_cuda12_packages()
     run(
         [
             sys.executable,
@@ -1475,6 +1504,52 @@ def install_minimax_h3_cuda_runtime() -> None:
             MINIMAX_H3_TORCH_INDEX_URL,
         ]
     )
+
+
+def supports_minimax_h3_hardware() -> bool:
+    try:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "try:\n"
+                    "    import torch\n"
+                    "except Exception as error:\n"
+                    "    print(f'PyTorch unavailable: {error}')\n"
+                    "    raise SystemExit(1)\n"
+                    "if not torch.cuda.is_available():\n"
+                    "    print('no CUDA GPU')\n"
+                    "    raise SystemExit(1)\n"
+                    "name = torch.cuda.get_device_name()\n"
+                    "capability = torch.cuda.get_device_capability()\n"
+                    "print(f'{name} (SM{capability[0]}{capability[1]})')\n"
+                    "raise SystemExit(0 if capability == (12, 0) else 1)\n"
+                ),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = f"hardware probe failed: {error}"
+    else:
+        detail = (probe.stdout or probe.stderr).strip() or "unknown GPU"
+        if probe.returncode == 0:
+            print(
+                f"[comfycolab] MiniMax H3 hardware detected: {detail}",
+                flush=True,
+            )
+            return True
+    print(
+        "[comfycolab] MiniMax H3 SageAttention is disabled on this runtime "
+        f"({detail}). Other ComfyColab workflows remain available. Select a "
+        "G4/SM120 runtime and restart before using MiniMax H3.",
+        flush=True,
+    )
+    return False
 
 
 def validate_minimax_h3_cuda_runtime() -> None:
@@ -1510,18 +1585,19 @@ def install_core_requirements() -> None:
             HUGGINGFACE_HUB_REQUIREMENT,
         ]
     )
-    install_minimax_h3_cuda_runtime()
-    run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--no-deps",
-            SAGE_ATTENTION_REQUIREMENT,
-        ]
-    )
-    validate_minimax_h3_cuda_runtime()
+    if supports_minimax_h3_hardware():
+        install_minimax_h3_cuda_runtime()
+        run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                SAGE_ATTENTION_REQUIREMENT,
+            ]
+        )
+        validate_minimax_h3_cuda_runtime()
 
 
 def git_commit(directory: Path) -> str:
