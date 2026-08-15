@@ -20,15 +20,15 @@
       "schema": 1,
       "id": "image",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Image.git",
-      "ref": "98bf8fb555bde3f58191df1a6415652524128029",
+      "ref": "17f07f3d5bf6782763c3233b2f57300a3bdd2712",
       "manifest_sha256": "3e71b03fddd5d85ed7b6b731f818091b92419427ea669bf5c75c150b8613e6c9"
     },
     {
       "schema": 1,
       "id": "video",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Video.git",
-      "ref": "c61a588e060dca0bdcf02aa0e92785779c3b8f58",
-      "manifest_sha256": "39aefd83944622b0afa7b126237f2c9694cef8a12e9936877ded50872405ba19"
+      "ref": "bcecb3acc122d83ef1e38300a851e5a13973b543",
+      "manifest_sha256": "0657367cc1640634e9cc185f86ac70eeae8ea8c86074de99ed9e5e1f54b52ce0"
     }
   ]
 }
