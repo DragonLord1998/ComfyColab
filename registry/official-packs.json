@@ -1,4 +1,19 @@
 {
   "schema": 1,
-  "packs": {}
+  "packs": {
+    "image": {
+      "schema": 1,
+      "id": "image",
+      "repository": "https://github.com/DragonLord1998/ComfyColab-Image.git",
+      "ref": "98bf8fb555bde3f58191df1a6415652524128029",
+      "manifest_sha256": "3e71b03fddd5d85ed7b6b731f818091b92419427ea669bf5c75c150b8613e6c9"
+    },
+    "video": {
+      "schema": 1,
+      "id": "video",
+      "repository": "https://github.com/DragonLord1998/ComfyColab-Video.git",
+      "ref": "5ec37e6bf0cb58bdd407972b6298f3ee3516b911",
+      "manifest_sha256": "39aefd83944622b0afa7b126237f2c9694cef8a12e9936877ded50872405ba19"
+    }
+  }
 }

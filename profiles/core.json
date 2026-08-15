@@ -1,5 +1,8 @@
 {
   "schema": 1,
   "id": "core",
-  "packs": []
+  "packs": [
+    "image",
+    "video"
+  ]
 }
