@@ -976,6 +976,11 @@ class RuntimeContractTests(unittest.TestCase):
                 mock.patch.object(
                     runtime, "validate_minimax_h3_cuda_runtime"
                 ) as validate_cuda,
+                mock.patch.object(
+                    runtime,
+                    "supports_minimax_h3_hardware",
+                    return_value=True,
+                ),
             ):
                 runtime.install_core_requirements()
             self.assertEqual(
@@ -1023,6 +1028,38 @@ class RuntimeContractTests(unittest.TestCase):
             install_cuda.assert_called_once_with()
             validate_cuda.assert_called_once_with()
 
+    def test_non_sm120_core_install_skips_h3_cuda_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            comfy_dir = Path(directory)
+            requirements = comfy_dir / "requirements.txt"
+            requirements.write_text("torch\n", encoding="utf-8")
+            with (
+                mock.patch.object(runtime, "COMFY_DIR", comfy_dir),
+                mock.patch.object(runtime, "run") as run,
+                mock.patch.object(
+                    runtime,
+                    "supports_minimax_h3_hardware",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    runtime, "install_minimax_h3_cuda_runtime"
+                ) as install_cuda,
+                mock.patch.object(
+                    runtime, "validate_minimax_h3_cuda_runtime"
+                ) as validate_cuda,
+            ):
+                runtime.install_core_requirements()
+
+            self.assertEqual(len(run.call_args_list), 2)
+            self.assertFalse(
+                any(
+                    runtime.SAGE_ATTENTION_REQUIREMENT in call.args[0]
+                    for call in run.call_args_list
+                )
+            )
+            install_cuda.assert_not_called()
+            validate_cuda.assert_not_called()
+
     def test_minimax_h3_cuda_runtime_installs_pinned_cuda13_stack(self) -> None:
         with (
             mock.patch.object(runtime.sys, "version_info", (3, 12)),
@@ -1045,6 +1082,33 @@ class RuntimeContractTests(unittest.TestCase):
                 requirement.endswith("+cu130")
                 for requirement in runtime.MINIMAX_H3_TORCH_REQUIREMENTS
             )
+        )
+
+    def test_h3_cuda_runtime_removes_only_incompatible_colab_cuda12_packages(self) -> None:
+        distributions = [
+            mock.Mock(metadata={"Name": "cudf-cu12"}),
+            mock.Mock(metadata={"Name": "cuda-python"}),
+            mock.Mock(metadata={"Name": "nvidia-cublas-cu12"}),
+            mock.Mock(metadata={"Name": "unrelated-package"}),
+        ]
+        with mock.patch.object(
+            runtime.importlib.metadata,
+            "distributions",
+            return_value=distributions,
+        ), mock.patch.object(runtime, "run") as run:
+            removed = runtime.remove_incompatible_colab_cuda12_packages()
+
+        self.assertEqual(removed, ["cuda-python", "cudf-cu12"])
+        run.assert_called_once_with(
+            [
+                runtime.sys.executable,
+                "-m",
+                "pip",
+                "uninstall",
+                "--yes",
+                "cuda-python",
+                "cudf-cu12",
+            ]
         )
 
     def test_huggingface_artifact_digest_mismatch_is_rejected(self) -> None:

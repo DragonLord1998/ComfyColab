@@ -14,6 +14,7 @@ PACKAGE_DIR = ROOT / "custom_nodes" / "ComfyColab-LTXVideo"
 
 H3_NODE_IDS = {
     "ComfyColabMiniMaxH3BundleLoader",
+    "ComfyColabMiniMaxH3PromptEnhancer",
     "ComfyColabMiniMaxH3Video",
     "ComfyColabMiniMaxH3ReferenceVideo",
 }
@@ -233,6 +234,10 @@ class H3NodePackTests(unittest.TestCase):
             "MiniMax H3 Bundle Loader",
         )
         self.assertEqual(
+            nodes.NODE_DISPLAY_NAME_MAPPINGS["ComfyColabMiniMaxH3PromptEnhancer"],
+            "ComfyColab MiniMax H3 — Prompt Enhancer",
+        )
+        self.assertEqual(
             nodes.NODE_DISPLAY_NAME_MAPPINGS["ComfyColabMiniMaxH3Video"],
             "ComfyColab MiniMax H3 — Text/Image to Video",
         )
@@ -258,6 +263,18 @@ class H3NodePackTests(unittest.TestCase):
         )
         self.assertNotIn("territory", loader_schema.description.lower())
         self.assertNotIn("region", loader_schema.description.lower())
+
+        enhancer_schema = nodes.ComfyColabMiniMaxH3PromptEnhancer.define_schema()
+        enhancer_inputs = {input_["name"]: input_ for input_ in enhancer_schema.inputs}
+        self.assertEqual(enhancer_schema.category, "ComfyColab/prompt")
+        self.assertEqual(
+            [output["io_type"] for output in enhancer_schema.outputs],
+            ["STRING"],
+        )
+        self.assertEqual(enhancer_inputs["prompt_mode"]["default"], "T2VA — Text only")
+        self.assertEqual(enhancer_inputs["max_tokens"]["default"], 8192)
+        self.assertEqual(enhancer_inputs["temperature"]["default"], 1.0)
+        self.assertFalse(enhancer_inputs["force_redownload"]["default"])
 
         fl2va_schema = nodes.ComfyColabMiniMaxH3Video.define_schema()
         self.assertTrue(fl2va_schema.enable_expand)
@@ -291,6 +308,41 @@ class H3NodePackTests(unittest.TestCase):
         self.assertEqual(ref_inputs["ref_audios"]["template"].max, 3)
         self.assertEqual(ref_inputs["ref_audios"]["template"].prefix, "ref_audio_")
         self.assertEqual(ref_inputs["ref_audios"]["template"].input["name"], "ref_audio")
+
+    def test_prompt_enhancer_releases_comfy_models_and_returns_worker_string(self):
+        _package, nodes, _catalog, _graph_h3 = self._modules()
+        with (
+            mock.patch.object(nodes, "_release_comfy_gpu_models") as release,
+            mock.patch.object(
+                nodes,
+                "enhance_h3_prompt",
+                return_value="integrated_multimodal_description: [Shot 1] rewritten",
+            ) as enhance,
+        ):
+            result = nodes.ComfyColabMiniMaxH3PromptEnhancer.execute(
+                "plain prompt",
+                "T2VA — Text only",
+                5.0,
+                seed=17,
+                max_tokens=4096,
+                temperature=1.0,
+                force_redownload=False,
+            )
+
+        release.assert_called_once_with()
+        enhance.assert_called_once_with(
+            "plain prompt",
+            "T2VA — Text only",
+            5.0,
+            seed=17,
+            max_tokens=4096,
+            temperature=1.0,
+            force_redownload=False,
+        )
+        self.assertEqual(
+            result,
+            ("integrated_multimodal_description: [Shot 1] rewritten",),
+        )
 
     def test_h3_catalog_pins_official_optimized_assets_and_totals(self):
         _package, _nodes, catalog, _graph_h3 = self._modules()
@@ -348,9 +400,11 @@ class H3NodePackTests(unittest.TestCase):
         with mock.patch.object(
             nodes,
             "_h3_sage_attention",
-            side_effect=RuntimeError("MiniMax H3 requires SageAttention 2.2.0"),
+            side_effect=RuntimeError(
+                "MiniMax H3 requires the G4/SM120 SageAttention 2.2.0 runtime"
+            ),
         ), mock.patch.object(nodes, "ensure_h3_model_assets") as ensure:
-            with self.assertRaisesRegex(RuntimeError, "SageAttention 2.2.0"):
+            with self.assertRaisesRegex(RuntimeError, "G4/SM120 SageAttention 2.2.0"):
                 nodes.ComfyColabMiniMaxH3BundleLoader.execute(
                     "FL2VA — Text / First / Last Frame",
                     accept_h3_license=True,

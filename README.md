@@ -186,19 +186,22 @@ option that deliberately discards resumable partial data.
 
 ### NVIDIA PiD image upscaler
 
-`ComfyColab PiD — Image Upscaler` performs a native 4x pixel-diffusion decode
-from any input image. Choose the matching VAE family inside the node:
-`FLUX.1`, `FLUX.2`, or `Qwen Image`. An additional
+`ComfyColab PiD — Image Upscaler` performs a tiled pixel-diffusion upscale at
+`2x`, `4x`, `8x`, or `16x` from any input image. Choose the matching VAE family
+inside the node: `FLUX.1`, `FLUX.2` (the default), or `Qwen Image`. An additional
 `Mage-VAE (experimental)` option bridges Mage's 128-channel latent into the
 FLUX.2 PiD checkpoint; it is not a natively trained VAE/PiD pair. The node
 downloads the selected VAE, PiD v1.5 decoder, and PixelDiT text encoder on first
 use.
 
-`Experimental 16x (tiled)` cascades two native 4x passes. The second pass uses
-overlapped ComfyUI context-window sampling and tiled VAE encoding to reduce peak
-VRAM. It is intentionally marked experimental because very large outputs may
-show seams or invented detail. PiD weights are noncommercially licensed and the
-node requires explicit license acceptance before download or inference. See
+PiD runs on overlapping tile lists instead of allocating a full target latent,
+so the former 4096/8192-pixel facade caps no longer apply. One native 4x pass
+drives 2x/4x; two tiled native 4x passes drive 8x/16x. A light tiled Z-Image
+Turbo image-to-image pass then cleans seams, ringing, and compression artifacts.
+The pinned ComfyUI tile merger currently supports a final canvas up to 32768 px
+per side; the node checks that limit before downloading models.
+PiD weights are noncommercially licensed and the node requires explicit license
+acceptance before download or inference. See
 [the PiD upscaler guide](docs/pid-upscaler.md).
 
 | Loader node | Default/typical bundle | Approximate download | Notes |
@@ -293,11 +296,29 @@ weights. Its diffusion model is automatically patched to use SageAttention
 model-scoped and does not change the
 attention backend used by unrelated ComfyUI workflows. The Colab bootstrap
 installs a checksum-pinned, precompiled SM120 wheel before ComfyUI starts, so
-later G4 sessions do not rebuild SageAttention.
+later G4 sessions do not rebuild SageAttention. On other GPU types, bootstrap
+skips the H3-only CUDA 13/SageAttention stack and continues starting the rest of
+ComfyColab; selecting the H3 loader then reports that a G4/SM120 runtime is
+required.
 
 The loader requires acknowledgement of the MiniMax H3 Community License. It
 does not perform country, IP, geolocation, or regional-availability checks;
 users remain responsible for verifying regional availability themselves.
+
+The `ComfyColab MiniMax H3 — Prompt Enhancer` node now sits immediately before
+the H3 prompt input in all included H3 workflows. It rewrites ordinary user text
+for T2VA, I2VA, FL2VA, L2VA, or Ref2VA using thinking-enabled
+`Qwen/Qwen3.8-27B` with the pinned 17.1 GB `Q4_K_M` GGUF from Unsloth. Its
+system policy is pinned to MiniMax's official
+[H3 prompt-writing guide](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills/h3-prompt-writing).
+The final answer is schema-constrained, checked for exact fields, field order,
+reference labels, shot numbering, and duration-safe timestamps, and repaired
+once if necessary. Qwen runs in an isolated pinned llama.cpp process that exits
+before H3 sampling, releasing its GPU memory. On G4/SM120, the server is restored
+from the checksum-pinned
+[llama.cpp CUDA cache release](https://github.com/DragonLord1998/ComfyColab/releases/tag/llama-cpp-b10437-cu128-sm120-v1)
+instead of compiling in each fresh Colab instance; unsupported or failed cache
+restores fall back to the immutable-source build.
 
 ## LTX-2.3 video
 

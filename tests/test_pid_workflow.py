@@ -76,7 +76,7 @@ class PiDWorkflowTests(unittest.TestCase):
 
         values = facade["widgets_values"]
         normalized = {str(value) for value in values}
-        self.assertIn("FLUX.1", normalized)
+        self.assertIn("FLUX.2", normalized)
         self.assertIn("4x", normalized)
         self.assertIn("12345", normalized)
         self.assertIn("1536", normalized)
@@ -87,7 +87,7 @@ class PiDWorkflowTests(unittest.TestCase):
             any(
                 isinstance(value, str)
                 and len(value.strip()) >= 20
-                and value not in {"FLUX.1", "4x"}
+                and value not in {"FLUX.2", "4x"}
                 for value in values
             ),
             "The bundled workflow should include a useful example prompt.",
