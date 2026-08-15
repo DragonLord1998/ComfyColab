@@ -12,7 +12,8 @@ independently versioned daughter repositories:
 
 Core owns Colab session transport, authenticated bootstrap, ComfyUI lifecycle,
 immutable pack resolution, runtime state, endpoints, and model-agnostic engine
-optimizations. It defaults to installing ComfyUI with no daughter pack.
+optimizations. It defaults to installing the official Image and Video daughter
+packs so their public nodes appear in a normal runtime.
 
 The five daughter repositories are public and their exact commits and manifest
 digests are recorded in `registry/published-packs.json`. This core branch remains
@@ -66,14 +67,14 @@ Open the `ComfyUI` link in Safari, Chrome, or another browser.
 
 ## Core and pack commands
 
-Core-only start becomes the public default with the 0.2 release. Pack aliases
-and the generic `legacy-full` start remain unavailable until the corresponding
-published commits pass their runtime gates and are promoted into the
-authenticated official registry. The explicit notebook-only `--legacy-full`
-compatibility path is available now.
+Image and Video are the public default pack set. Additional pack aliases and
+the generic `legacy-full` start remain unavailable until their corresponding
+published commits pass runtime gates and are promoted into the authenticated
+official registry. The explicit notebook-only `--legacy-full` compatibility path
+is available now.
 
 ```bash
-# Core-only
+# Default Image + Video node runtime
 comfycolab start
 
 # After runtime promotion, official pack aliases can be composed

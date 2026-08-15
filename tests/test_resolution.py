@@ -70,6 +70,18 @@ class ResolutionTests(unittest.TestCase):
             "57500fc5bc92566a63f2046824f522cd55c335ca",
         )
 
+    def test_default_core_profile_selects_official_image_and_video_packs(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        registry = load_registry(root / "registry" / "official-packs.json")
+        profile = load_profile(root / "profiles" / "core.json", registry=registry)
+        self.assertEqual(
+            {pack.id: pack for pack in profile.packs},
+            {
+                "image": registry.packs["image"],
+                "video": registry.packs["video"],
+            },
+        )
+
     def test_unknown_pack_alias_fails_before_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.make_core(Path(directory) / "core")
