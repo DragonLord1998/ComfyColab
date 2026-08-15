@@ -33,8 +33,8 @@
       "schema": 1,
       "id": "world",
       "repository": "https://github.com/DragonLord1998/ComfyColab-WM.git",
-      "ref": "96329dd9bb46f2755fbfefbbef40648917911d05",
-      "manifest_sha256": "c03360670cecd452dbc346136d880caa73cf09e53dff3928d58f95f3381ec8bb"
+      "ref": "4bf69a2b439055e5ab6cb0bde4e1eb91eb9df224",
+      "manifest_sha256": "3cbed77b56504b7f2695c398cd65ac98d6b5ad7f4de10b7fa0b7b39e93600c0f"
     }
   }
 }
