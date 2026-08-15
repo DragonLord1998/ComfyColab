@@ -26,7 +26,7 @@
       "schema": 1,
       "id": "video",
       "repository": "https://github.com/DragonLord1998/ComfyColab-Video.git",
-      "ref": "5ec37e6bf0cb58bdd407972b6298f3ee3516b911",
+      "ref": "c61a588e060dca0bdcf02aa0e92785779c3b8f58",
       "manifest_sha256": "39aefd83944622b0afa7b126237f2c9694cef8a12e9936877ded50872405ba19"
     },
     "world": {
